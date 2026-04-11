@@ -39,9 +39,17 @@ import (
 	"debug/elf"
 	"fmt"
 	"log"
+	"os"
 )
 
 func gentext(ctxt *ld.Link, ldr *loader.Loader) {
+	// On Windows plugins with internal linking, create DllMain directly
+	// (PrepareAddmoduledata is skipped to avoid BL to SWINDOWS symbols).
+	if ctxt.BuildMode == ld.BuildModePlugin && ctxt.IsWindows() && ctxt.IsInternal() {
+		gentextPluginDllMain(ctxt, ldr)
+		return
+	}
+
 	initfunc, addmoduledata := ld.PrepareAddmoduledata(ctxt)
 	if initfunc == nil {
 		return
@@ -69,6 +77,64 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 	rel2.SetOff(8)
 	rel2.SetSiz(4)
 	rel2.SetSym(addmoduledata)
+
+}
+
+// gentextPluginDllMain generates a DllMain entry point for Windows plugin
+// DLLs with internal linking. It loads the plugin's moduledata, reads
+// runtime.addmoduledata from the IAT, and calls it.
+func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
+	dllmain := ldr.CreateSymForUpdate("go:link.plugindllmain", 0)
+	dllmain.SetType(sym.STEXT)
+	ctxt.Textp = append(ctxt.Textp, dllmain.Sym())
+	ldr.SetAttrReachable(dllmain.Sym(), true)
+
+	dm := func(op uint32) {
+		dllmain.AddUint32(ctxt.Arch, op)
+	}
+	// stp x29, x30, [sp, #-16]!
+	dm(0xa9bf7bfd)
+	// mov x29, sp
+	dm(0x910003fd)
+
+	// Load address of local.pluginmoduledata into x0
+	dm(0x90000000) // adrp x0, moduledata
+	dm(0x91000000) // add x0, x0, #offset
+	mdrel, _ := dllmain.AddRel(objabi.R_ADDRARM64)
+	mdrel.SetOff(int32(dllmain.Size() - 8))
+	mdrel.SetSiz(8)
+	mdrel.SetSym(ctxt.Moduledata)
+
+	// Load runtime.addmoduledata from IAT and call it.
+	// Use two R_ARM64_PCREL relocations (same as windynrelocsym thunks).
+	amd := ldr.Lookup("runtime.addmoduledata", 0)
+	if amd != 0 {
+		// adrp x16, addmoduledata_IAT
+		dm(0x90000010)
+		r1, _ := dllmain.AddRel(objabi.R_ARM64_PCREL)
+		r1.SetOff(int32(dllmain.Size() - 4))
+		r1.SetSiz(4)
+		r1.SetSym(amd)
+		// add x16, x16, #pageoff
+		dm(0x91000210)
+		r2, _ := dllmain.AddRel(objabi.R_ARM64_PCREL)
+		r2.SetOff(int32(dllmain.Size() - 4))
+		r2.SetSiz(4)
+		r2.SetSym(amd)
+		// ldr x16, [x16] — load func ptr from IAT
+		dm(0xf9400210)
+		// blr x16 — call host's addmoduledata
+		dm(0xd63f0200)
+	}
+
+	// mov x0, #1 (return TRUE)
+	dm(0xd2800020)
+	// ldp x29, x30, [sp], #16
+	dm(0xa8c17bfd)
+	// ret
+	dm(0xd65f03c0)
+
+	dllRelocs := ldr.Relocs(dllmain.Sym())
 }
 
 func adddynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loader.Sym, r loader.Reloc, rIdx int) bool {
@@ -482,6 +548,7 @@ func adddynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loade
 			// External linker will do this relocation.
 			return true
 		}
+
 		if targType != sym.SDYNIMPORT {
 			ldr.Errorf(s, "R_ARM64_GOTPCREL target is not SDYNIMPORT symbol: %v", ldr.SymName(targ))
 		}
@@ -886,11 +953,84 @@ func archreloc(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, r loade
 	}
 
 	switch rt := r.Type(); rt {
+	case objabi.R_ARM64_GOTPCREL:
+		// On Windows PE with internal linking, handle GOT-relative
+		// relocations. SWINDOWS targets (host-provided via IAT) use
+		// ADRP+LDR to load from IAT. Local targets get relaxed to ADRP+ADD.
+		if target.IsWindows() {
+			targType := ldr.SymType(rs)
+
+			var o0, o1 uint32
+			if target.IsBigEndian() {
+				o0 = uint32(val >> 32)
+				o1 = uint32(val)
+			} else {
+				o0 = uint32(val)
+				o1 = uint32(val >> 32)
+			}
+
+			if targType == sym.SWINDOWS {
+				// Imported symbol — ADRP+LDR loads pointer from IAT.
+				t := ldr.SymAddr(rs) + r.Add() - ((ldr.SymValue(s) + int64(r.Off())) &^ 0xfff)
+				o0 |= (uint32((t>>12)&3) << 29) | (uint32((t>>12>>2)&0x7ffff) << 5)
+				if t&7 != 0 {
+					ldr.Errorf(s, "invalid address for GOT LDR: %x (sym=%s)", t, ldr.SymName(rs))
+				}
+				o1 |= (uint32(t&0xfff) >> 3) << 10
+			} else {
+				// Local symbol — relax ADRP+LDR[GOT] to ADRP+ADD.
+				t := ldr.SymAddr(rs) + r.Add() - ((ldr.SymValue(s) + int64(r.Off())) &^ 0xfff)
+				o0 |= (uint32((t>>12)&3) << 29) | (uint32((t>>12>>2)&0x7ffff) << 5)
+				rd := o1 & 0x1f
+				rn := (o1 >> 5) & 0x1f
+				o1 = 0x91000000 | (rn << 5) | rd | uint32(t&0xfff)<<10
+			}
+
+			if target.IsBigEndian() {
+				return int64(o0)<<32 | int64(o1), noExtReloc, isOk
+			}
+			return int64(o0) | int64(o1)<<32, noExtReloc, isOk
+		}
+
 	case objabi.R_ADDRARM64,
 		objabi.R_ARM64_PCREL_LDST8,
 		objabi.R_ARM64_PCREL_LDST16,
 		objabi.R_ARM64_PCREL_LDST32,
 		objabi.R_ARM64_PCREL_LDST64:
+
+		// On Windows plugin builds, SWINDOWS targets are IAT entries.
+		// ADRP+ADD gives the IAT entry's ADDRESS, but code needs the
+		// VALUE stored in the IAT (the host's symbol address).
+		// Rewrite ADD→LDR to load from the IAT instead.
+		if rt == objabi.R_ADDRARM64 && target.IsWindows() &&
+			target.BuildMode == ld.BuildModePlugin &&
+			ldr.SymType(rs) == sym.SWINDOWS &&
+			ldr.SymName(s) != "go:link.plugindllmain" {
+			// Skip DllMain — it already has explicit LDR from IAT.
+			t := ldr.SymAddr(rs) + r.Add() - ((ldr.SymValue(s) + int64(r.Off())) &^ 0xfff)
+			var o0, o1 uint32
+			if target.IsBigEndian() {
+				o0 = uint32(val >> 32)
+				o1 = uint32(val)
+			} else {
+				o0 = uint32(val)
+				o1 = uint32(val >> 32)
+			}
+			// ADRP
+			o0 |= (uint32((t>>12)&3) << 29) | (uint32((t>>12>>2)&0x7ffff) << 5)
+			// Rewrite ADD to LDR (64-bit unsigned offset, scaled by 8)
+			rd := o1 & 0x1f
+			rn := (o1 >> 5) & 0x1f
+			if t&7 != 0 {
+				ldr.Errorf(s, "IAT entry not 8-byte aligned for %s: %x", ldr.SymName(rs), t)
+			}
+			o1 = 0xf9400000 | (rn << 5) | rd | (uint32(t&0xfff)>>3)<<10
+			if target.IsBigEndian() {
+				return int64(o0)<<32 | int64(o1), noExtReloc, isOk
+			}
+			return int64(o0) | int64(o1)<<32, noExtReloc, isOk
+		}
+
 		t := ldr.SymAddr(rs) + r.Add() - ((ldr.SymValue(s) + int64(r.Off())) &^ 0xfff)
 		if t >= 1<<32 || t < -1<<32 {
 			ldr.Errorf(s, "program too large, address relocation distance = %d", t)

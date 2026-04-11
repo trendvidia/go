@@ -1,0 +1,491 @@
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package ld
+
+import (
+	"bytes"
+	"debug/pe"
+	"encoding/binary"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"cmd/internal/objabi"
+	"cmd/internal/sys"
+	"cmd/link/internal/loader"
+	"cmd/link/internal/sym"
+)
+
+// impLibSymbol holds info about a symbol to include in the import library.
+type impLibSymbol struct {
+	name   string
+	isFunc bool
+}
+
+// peGenerateImportLibrary creates a MinGW-compatible import library (.a)
+// for the current executable. This allows plugin DLLs to link against the
+// host's exported symbols without requiring an external linker (cgo) for
+// the host build.
+//
+// The import library uses the "short import" object format as described in
+// the PE/COFF specification (Import Library Format).
+//
+// This function collects exportable symbols directly from the loader,
+// independent of the dexport slice used by the PE export table.
+func peGenerateImportLibrary(ctxt *Link) {
+	implib := *flagOutfile + ".a"
+	// Use the final executable name (not the temp build path) for the
+	// DLL name in the import library. This ensures the plugin DLL
+	// imports from "host.exe" instead of "a.out.exe".
+	dllName := filepath.Base(*flagOutfile)
+	if *flagPluginExeName != "" {
+		dllName = *flagPluginExeName
+	}
+
+	var machine uint16
+	switch ctxt.Arch.Family {
+	case sys.AMD64:
+		machine = pe.IMAGE_FILE_MACHINE_AMD64
+	case sys.I386:
+		machine = pe.IMAGE_FILE_MACHINE_I386
+	case sys.ARM64:
+		machine = pe.IMAGE_FILE_MACHINE_ARM64
+	default:
+		Errorf("unsupported architecture for import library generation")
+		return
+	}
+
+	ldr := ctxt.loader
+
+	// Collect exportable symbols from the loader. Only include reachable
+	// symbols — the host's PE export table only contains reachable symbols,
+	// so the import library must match. Critical symbols like
+	// runtime.addmoduledata are made reachable by peMarkPluginExports.
+	var symbols []impLibSymbol
+	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+		if !ldr.AttrReachable(s) {
+			continue
+		}
+		st := ldr.SymType(s)
+		if !st.IsText() && !st.IsRODATA() && !st.IsData() {
+			continue
+		}
+		name := ldr.SymExtname(s)
+		if name == "" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		// Skip internal linker symbols and PE artifacts.
+		if strings.HasPrefix(name, "_") || strings.HasPrefix(name, "__") {
+			continue
+		}
+		// Skip type descriptors — they may reference unexported methods.
+		if strings.HasPrefix(name, "type:") || strings.HasPrefix(name, "type..") {
+			continue
+		}
+		isFunc := st.IsText()
+		symbols = append(symbols, impLibSymbol{name: name, isFunc: isFunc})
+		// PE export ordinals are uint16; cap at 65535.
+		if len(symbols) >= 0xFFFF {
+			break
+		}
+	}
+
+
+	if len(symbols) == 0 {
+		return
+	}
+
+	// Sort alphabetically (required by PE import library convention).
+	sort.Slice(symbols, func(i, j int) bool {
+		return symbols[i].name < symbols[j].name
+	})
+
+	f, err := os.Create(implib)
+	if err != nil {
+		Errorf("cannot create import library %s: %v", implib, err)
+		return
+	}
+	defer f.Close()
+
+	// Write ar archive header.
+	f.WriteString("!<arch>\n")
+
+	// Write first linker member (symbol directory).
+	writeFirstLinkerMember(f, symbols, dllName, machine)
+
+	// Write individual short import objects.
+	for i, sym := range symbols {
+		writeShortImport(f, sym.name, dllName, machine, sym.isFunc, uint16(i))
+	}
+}
+
+// writeFirstLinkerMember writes the "/" archive member that serves as the
+// symbol directory for the import library.
+func writeFirstLinkerMember(f *os.File, symbols []impLibSymbol, dllName string, machine uint16) {
+	numSyms := len(symbols)
+
+	// Calculate the offset where each import object will start.
+	// Size of linker member data: 4 + numSyms*4 + sum(len(name)+1)
+	var namesSize int
+	for _, sym := range symbols {
+		namesSize += len(sym.name) + 1
+	}
+	linkerDataSize := 4 + numSyms*4 + namesSize
+
+	// Pad to even boundary if needed for ar header calculation.
+	linkerMemberSize := linkerDataSize
+	linkerPad := linkerMemberSize % 2
+
+	// The first import object starts after: ar_magic(8) + linkerMember_arHeader(60) + linkerData + pad
+	firstObjOffset := 8 + 60 + linkerMemberSize + linkerPad
+
+	// Calculate offset for each import object.
+	offsets := make([]uint32, numSyms)
+	currentOffset := firstObjOffset
+	for i, sym := range symbols {
+		offsets[i] = uint32(currentOffset)
+		objSize := shortImportSize(sym.name, dllName)
+		currentOffset += 60 + objSize // 60 = ar header size
+		if objSize%2 != 0 {
+			currentOffset++ // ar padding
+		}
+	}
+
+	// Write ar header for linker member.
+	writeArHeader(f, "/", linkerMemberSize)
+
+	// Write number of symbols (big-endian).
+	binary.Write(f, binary.BigEndian, uint32(numSyms))
+
+	// Write offsets (big-endian).
+	for _, off := range offsets {
+		binary.Write(f, binary.BigEndian, off)
+	}
+
+	// Write symbol names (null-terminated).
+	for _, sym := range symbols {
+		f.WriteString(sym.name)
+		f.Write([]byte{0})
+	}
+
+	// Pad to even boundary.
+	if linkerPad != 0 {
+		f.Write([]byte{'\n'})
+	}
+}
+
+// shortImportSize returns the data size of a short import object.
+func shortImportSize(symName, dllName string) int {
+	// Short import header (20 bytes) + symbol name + \0 + dll name + \0
+	return 20 + len(symName) + 1 + len(dllName) + 1
+}
+
+// writeShortImport writes one short import object as an ar member.
+// This uses the IMPORT_OBJECT_HEADER format from the PE/COFF spec.
+func writeShortImport(f *os.File, symName, dllName string, machine uint16, isFunc bool, hint uint16) {
+	dataSize := len(symName) + 1 + len(dllName) + 1
+	totalSize := 20 + dataSize // 20 = sizeof(IMPORT_OBJECT_HEADER)
+
+	// Use symbol name as ar member name, truncated to 15 chars.
+	arName := symName
+	if len(arName) > 15 {
+		arName = arName[:15]
+	}
+
+	writeArHeader(f, arName, totalSize)
+
+	// IMPORT_OBJECT_HEADER (20 bytes):
+	var hdr [20]byte
+	// Sig1 = 0x0000 (IMAGE_FILE_MACHINE_UNKNOWN)
+	binary.LittleEndian.PutUint16(hdr[0:2], 0x0000)
+	// Sig2 = 0xFFFF
+	binary.LittleEndian.PutUint16(hdr[2:4], 0xFFFF)
+	// Version = 0
+	binary.LittleEndian.PutUint16(hdr[4:6], 0)
+	// Machine
+	binary.LittleEndian.PutUint16(hdr[6:8], machine)
+	// TimeDateStamp = 0
+	binary.LittleEndian.PutUint32(hdr[8:12], 0)
+	// SizeOfData = size of strings after header
+	binary.LittleEndian.PutUint32(hdr[12:16], uint32(dataSize))
+	// OrdinalHint
+	binary.LittleEndian.PutUint16(hdr[16:18], hint)
+	// Type (2 bits) | NameType (3 bits) | Reserved (11 bits)
+	// Type: IMPORT_OBJECT_CODE=0, IMPORT_OBJECT_DATA=1
+	// NameType: IMPORT_OBJECT_NAME=1 (name matches symbol)
+	var typeField uint16
+	if isFunc {
+		typeField = 0 // IMPORT_OBJECT_CODE
+	} else {
+		typeField = 1 // IMPORT_OBJECT_DATA
+	}
+	typeField |= (1 << 2) // NameType = IMPORT_OBJECT_NAME (bits 2-4)
+	binary.LittleEndian.PutUint16(hdr[18:20], typeField)
+
+	f.Write(hdr[:])
+
+	// Symbol name (null-terminated)
+	f.WriteString(symName)
+	f.Write([]byte{0})
+
+	// DLL name (null-terminated)
+	f.WriteString(dllName)
+	f.Write([]byte{0})
+
+	// Pad to even boundary.
+	if totalSize%2 != 0 {
+		f.Write([]byte{'\n'})
+	}
+}
+
+// writeArHeader writes a 60-byte ar archive member header.
+func writeArHeader(f *os.File, name string, size int) {
+	// Format: name/16 + mtime/12 + uid/6 + gid/6 + mode/8 + size/10 + magic/2
+	var hdr [60]byte
+
+	// Name field (16 bytes, space-padded).
+	copy(hdr[0:16], fmt.Sprintf("%-16s", name+"/"))
+	// Timestamp (12 bytes).
+	copy(hdr[16:28], "0           ")
+	// UID (6 bytes).
+	copy(hdr[28:34], "0     ")
+	// GID (6 bytes).
+	copy(hdr[34:40], "0     ")
+	// Mode (8 bytes).
+	copy(hdr[40:48], "100666  ")
+	// Size (10 bytes).
+	copy(hdr[48:58], fmt.Sprintf("%-10d", size))
+	// Magic.
+	hdr[58] = '`'
+	hdr[59] = '\n'
+
+	f.Write(hdr[:])
+}
+
+// peLoadImportLibrary reads a MinGW-compatible import library (.a) and
+// registers all symbols in it as dynamic imports from the specified DLL/exe.
+// This allows the internal linker to produce a plugin DLL that imports
+// runtime symbols from the host executable, without needing an external linker.
+func peLoadImportLibrary(ctxt *Link, implib string) {
+	// Resolve relative paths since the linker may run from a different directory.
+	if !filepath.IsAbs(implib) {
+		if abs, err := filepath.Abs(implib); err == nil {
+			implib = abs
+		}
+	}
+
+	f, err := os.Open(implib)
+	if err != nil {
+		Exitf("cannot open import library %s: %v", implib, err)
+	}
+	defer f.Close()
+
+	// Read and verify ar magic.
+	var magic [8]byte
+	if _, err := f.Read(magic[:]); err != nil || string(magic[:]) != "!<arch>\n" {
+		Exitf("%s: not a valid ar archive", implib)
+	}
+
+	ldr := ctxt.loader
+	importCount := 0
+
+	// Parse ar members looking for short import objects.
+	for {
+		// Read ar header (60 bytes).
+		var arHdr [60]byte
+		if _, err := f.Read(arHdr[:]); err != nil {
+			break // EOF
+		}
+
+		// Parse size from ar header (bytes 48-57).
+		sizeStr := strings.TrimSpace(string(arHdr[48:58]))
+		var size int
+		fmt.Sscanf(sizeStr, "%d", &size)
+		if size <= 0 {
+			break
+		}
+
+		// Read member data.
+		data := make([]byte, size)
+		if _, err := f.Read(data); err != nil {
+			break
+		}
+
+		// Skip padding byte for odd-sized members.
+		if size%2 != 0 {
+			f.Read(make([]byte, 1))
+		}
+
+		// Check for short import object signature:
+		// Sig1 = 0x0000, Sig2 = 0xFFFF
+		if len(data) < 20 {
+			continue
+		}
+		sig1 := binary.LittleEndian.Uint16(data[0:2])
+		sig2 := binary.LittleEndian.Uint16(data[2:4])
+		if sig1 != 0x0000 || sig2 != 0xFFFF {
+			continue // Not a short import object (e.g., linker member)
+		}
+
+		// Parse the short import object.
+		// After the 20-byte header: null-terminated symbol name, then null-terminated DLL name.
+		strData := data[20:]
+		nullIdx := bytes.IndexByte(strData, 0)
+		if nullIdx < 0 {
+			continue
+		}
+		symName := string(strData[:nullIdx])
+		strData = strData[nullIdx+1:]
+		nullIdx = bytes.IndexByte(strData, 0)
+		if nullIdx < 0 {
+			continue
+		}
+		dllName := string(strData[:nullIdx])
+
+		if symName == "" || dllName == "" {
+			continue
+		}
+
+		// Skip internal linker symbols and PE artifacts.
+		if strings.HasPrefix(symName, "_") || strings.HasPrefix(symName, "__") {
+			continue
+		}
+		// Skip type descriptor symbols — they're plugin-local metadata.
+		if strings.HasPrefix(symName, "type:") || strings.HasPrefix(symName, "type..") {
+			continue
+		}
+		// Skip function value descriptors (·f symbols). These are DATA
+		// containing function pointers. They must stay local so type
+		// descriptors can read from them. Their R_ADDR to the actual
+		// function will resolve to the PLT stub address.
+		if strings.HasSuffix(symName, "\u00b7f") {
+			continue
+		}
+
+		// Convert to SDYNIMPORT. Try both ABI0 and ABIInternal.
+		s := ldr.Lookup(symName, 0)
+		if s == 0 {
+			s = ldr.Lookup(symName, 1) // ABIInternal
+		}
+		// Don't skip R_ADDR targets — skipping them leaves critical
+		// functions (morestack, memequal, etc.) as local copies with
+		// uninitialized runtime data. R_ADDR to SWINDOWS gives IAT
+		// addresses in itabs/type descriptors, but this is the lesser
+		// evil vs having broken local runtime functions.
+		if false && s != 0 && isRAddrTarget(ldr, s) &&
+			symName != "runtime.addmoduledata" &&
+			symName != "runtime.lastmoduledatap" {
+			continue
+		}
+		if s == 0 {
+			continue // Not referenced by plugin
+		}
+		if ldr.SymType(s) == sym.SDYNIMPORT {
+			continue // Already an import (e.g., Windows API)
+		}
+		sb := ldr.MakeSymbolUpdater(s)
+		sb.SetType(sym.SDYNIMPORT)
+		sb.SetSize(0)
+		sb.SetData(nil)
+		sb.ResetRelocs()
+		ldr.FreeData(s)
+		ldr.SetSymDynimplib(s, dllName)
+		ldr.SetSymExtname(s, symName)
+		// Mark reachable so initdynimport creates IAT entries.
+		ldr.SetAttrReachable(s, true)
+		importCount++
+	}
+	if ctxt.Debugvlog > 0 {
+		ctxt.Logf("plugin: loaded %d import symbols from %s\n", importCount, implib)
+	}
+}
+
+// filterConvertedSyms removes SDYNIMPORT and SWINDOWS symbols from Textp.
+// These are host-provided symbols that were converted from archive defs.
+func filterConvertedSyms(ctxt *Link) []loader.Sym {
+	ldr := ctxt.loader
+	j := 0
+	for _, s := range ctxt.Textp {
+		st := ldr.SymType(s)
+		if st != sym.SDYNIMPORT && st != sym.SWINDOWS {
+			ctxt.Textp[j] = s
+			j++
+		}
+	}
+	return ctxt.Textp[:j]
+}
+
+// peMarkPluginExports marks symbols that plugins need as reachable in the
+// HOST build, so they survive deadcode and get exported. Called BEFORE deadcode.
+// Plugins may call any runtime function, so all runtime TEXT symbols must
+// be exported. Only TEXT is marked (not data/type descriptors which can
+// pull in dead methods and cause link errors).
+// peMarkPluginExports is now handled by deadcode directly —
+// Windows plugin hosts use the same "mark all defined" path as shared libraries.
+// This function is kept as a no-op for compatibility.
+func peMarkPluginExports(ctxt *Link) {
+}
+
+// isRAddrTarget checks if the symbol is targeted by any R_ADDR relocation.
+// Symbols targeted by R_ADDR have their addresses embedded in data structures
+// and cannot be SDYNIMPORT (IAT address ≠ function address).
+// This is called once per import library symbol, so we cache the result.
+var rAddrTargets map[loader.Sym]bool
+
+func isRAddrTarget(ldr *loader.Loader, s loader.Sym) bool {
+	if rAddrTargets == nil {
+		// Build the cache: scan all symbols for R_ADDR relocations.
+		rAddrTargets = make(map[loader.Sym]bool)
+		for i := loader.Sym(1); i < loader.Sym(ldr.NSym()); i++ {
+			relocs := ldr.Relocs(i)
+			for j := 0; j < relocs.Count(); j++ {
+				r := relocs.At(j)
+				if r.Type() == objabi.R_ADDR || r.Type() == objabi.R_ADDRARM64 {
+					if targ := r.Sym(); targ != 0 {
+						rAddrTargets[targ] = true
+					}
+				}
+			}
+		}
+	}
+	return rAddrTargets[s]
+}
+
+// peExportAllSymbols marks all reachable text/data symbols for export in
+// the PE export table. This is the internal-linker equivalent of MinGW's
+// --export-all-symbols flag.
+func peExportAllSymbols(ctxt *Link) {
+	ldr := ctxt.loader
+	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+		if !ldr.AttrReachable(s) {
+			continue
+		}
+		st := ldr.SymType(s)
+		if !st.IsText() && !st.IsRODATA() && !st.IsData() {
+			continue
+		}
+		name := ldr.SymExtname(s)
+		// Skip internal/unnamed symbols.
+		if name == "" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		// Skip internal linker symbols and PE artifacts.
+		if strings.HasPrefix(name, "_") || strings.HasPrefix(name, "__") {
+			continue
+		}
+		// Skip type descriptors.
+		if strings.HasPrefix(name, "type:") || strings.HasPrefix(name, "type..") {
+			continue
+		}
+		// Skip symbols that are already in the export list.
+		if ldr.AttrCgoExportDynamic(s) {
+			continue
+		}
+		ldr.SetAttrCgoExportDynamic(s, true)
+	}
+}
+

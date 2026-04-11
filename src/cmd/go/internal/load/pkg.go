@@ -2688,6 +2688,11 @@ func externalLinkingReason(s *modload.State, p *Package) (what string) {
 		}
 		fallthrough
 	case "plugin":
+		// On Windows, the internal linker can produce plugin DLLs
+		// using import thunks, so external linking is not required.
+		if cfg.Goos == "windows" {
+			break
+		}
 		return "-buildmode=" + cfg.BuildBuildmode
 	}
 

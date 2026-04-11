@@ -44,9 +44,11 @@ func (d *deadcodePass) init() {
 	}
 	d.dynlink = d.ctxt.DynlinkingGo()
 
-	if d.ctxt.BuildMode == BuildModeShared {
+	if d.ctxt.BuildMode == BuildModeShared ||
+		(d.ctxt.IsWindows() && d.ctxt.canUsePlugins) {
 		// Mark all symbols defined in this library as reachable when
-		// building a shared library.
+		// building a shared library, or a Windows plugin host (which
+		// must export all symbols for the plugin DLL to import).
 		n := d.ldr.NDef()
 		for i := 1; i < n; i++ {
 			s := loader.Sym(i)

@@ -155,6 +155,13 @@ func mustLinkExternal(ctxt *Link) (res bool, reason string) {
 			return true, "buildmode=pie"
 		}
 	case BuildModePlugin:
+		// On Windows, the internal linker can produce plugin DLLs
+		// when an import library is provided via -pluginimplib.
+		// The internal linker generates import thunks that redirect
+		// runtime calls to the host executable via the PE IAT.
+		if buildcfg.GOOS == "windows" && *flagPluginImplib != "" {
+			break
+		}
 		return true, "buildmode=plugin"
 	case BuildModeShared:
 		return true, "buildmode=shared"

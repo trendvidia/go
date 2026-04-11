@@ -363,7 +363,7 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 				rs, off := FoldSubSymbolOffset(ldr, rs)
 				xadd := r.Add() + off
 				rst := ldr.SymType(rs)
-				if rst != sym.SHOSTOBJ && rst != sym.SDYNIMPORT && rst != sym.SUNDEFEXT && ldr.SymSect(rs) == nil {
+				if rst != sym.SHOSTOBJ && rst != sym.SDYNIMPORT && rst != sym.SUNDEFEXT && rst != sym.SWINDOWS && ldr.SymSect(rs) == nil {
 					st.err.Errorf(s, "missing section for relocation target %s", ldr.SymName(rs))
 				}
 
@@ -410,6 +410,20 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 			}
 
 			o = ldr.SymValue(rs) + r.Add()
+			// For Windows plugins, R_ADDR to SWINDOWS must use the PLT
+			// stub address (in .rel) instead of the IAT entry address.
+			// The stub is executable and redirects to the host via IAT.
+			if target.IsWindows() && target.BuildMode == BuildModePlugin &&
+				ldr.SymType(rs) == sym.SWINDOWS {
+				stubOff := ldr.SymPlt(rs)
+				if stubOff >= 0 {
+					relSym := ldr.Lookup(".rel", 0)
+					o = ldr.SymValue(relSym) + int64(stubOff) + r.Add()
+						ldr.SymName(rs), ldr.SymName(s), stubOff, o)
+				} else {
+						ldr.SymName(rs), ldr.SymName(s), stubOff, o)
+				}
+			}
 			if rt == objabi.R_PEIMAGEOFF {
 				// The R_PEIMAGEOFF offset is a RVA, so subtract
 				// the base address for the executable.
@@ -486,27 +500,35 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 					st.err.Errorf(s, "cannot target DYNIMPORT sym in section-relative reloc: %s", ldr.SymName(rs))
 				} else if rst == sym.SUNDEFEXT {
 					st.err.Errorf(s, "undefined symbol in relocation: %s", ldr.SymName(rs))
+				} else if rst == sym.SWINDOWS && target.BuildMode == BuildModePlugin {
+					// SWINDOWS (PE import) — use PLT stub address for method tables.
+					stubOff := ldr.SymPlt(rs)
+					if stubOff >= 0 {
+						relSym := ldr.Lookup(".rel", 0)
+						o = ldr.SymValue(relSym) + int64(stubOff) - int64(Segtext.Sections[0].Vaddr) + r.Add()
+					} else {
+						o = -1 // no stub, use sentinel
+					}
+				} else if rst == sym.SWINDOWS {
+					continue
 				} else {
 					st.err.Errorf(s, "missing section for relocation target %s", ldr.SymName(rs))
-				}
-				continue
-			}
-
-			// The method offset tables using this relocation expect the offset to be relative
-			// to the start of the first text section, even if there are multiple.
-			if sect.Name == ".text" {
-				o = ldr.SymValue(rs) - int64(Segtext.Sections[0].Vaddr) + r.Add()
-				if target.IsWasm() {
-					// On Wasm, textoff (e.g. in the method table) is just the function index,
-					// whereas the "PC" (rs's Value) is function index << 16 + block index (see
-					// ../wasm/asm.go:assignAddress).
-					if o&(1<<16-1) != 0 {
-						st.err.Errorf(s, "textoff relocation %s does not target function entry: %s %#x", rt, ldr.SymName(rs), o)
-					}
-					o >>= 16
+					continue
 				}
 			} else {
-				o = ldr.SymValue(rs) - int64(ldr.SymSect(rs).Vaddr) + r.Add()
+				// The method offset tables using this relocation expect the offset to be relative
+				// to the start of the first text section, even if there are multiple.
+				if sect.Name == ".text" {
+					o = ldr.SymValue(rs) - int64(Segtext.Sections[0].Vaddr) + r.Add()
+					if target.IsWasm() {
+						if o&(1<<16-1) != 0 {
+							st.err.Errorf(s, "textoff relocation %s does not target function entry: %s %#x", rt, ldr.SymName(rs), o)
+						}
+						o >>= 16
+					}
+				} else {
+					o = ldr.SymValue(rs) - int64(ldr.SymSect(rs).Vaddr) + r.Add()
+				}
 			}
 
 		case objabi.R_ADDRCUOFF:
@@ -540,7 +562,7 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 				rs, off := FoldSubSymbolOffset(ldr, rs)
 				xadd := r.Add() + off - int64(siz) // relative to address after the relocated chunk
 				rst := ldr.SymType(rs)
-				if rst != sym.SHOSTOBJ && rst != sym.SDYNIMPORT && ldr.SymSect(rs) == nil {
+				if rst != sym.SHOSTOBJ && rst != sym.SDYNIMPORT && rst != sym.SWINDOWS && ldr.SymSect(rs) == nil {
 					st.err.Errorf(s, "missing section for relocation target %s", ldr.SymName(rs))
 				}
 
@@ -831,7 +853,20 @@ func (ctxt *Link) makeRelocSymState() *relocSymState {
 // Note that for a given symbol (as above) it is perfectly legal to
 // have both direct and indirect references.
 func windynrelocsym(ctxt *Link, rel *loader.SymbolBuilder, s loader.Sym) error {
+	// Skip symbols that were converted to dynamic imports (e.g., host-provided
+	// symbols in Windows plugin builds). They have no code/relocations.
+	st := ctxt.loader.SymType(s)
+	if st == sym.SDYNIMPORT || st == sym.SWINDOWS {
+		return nil
+	}
 	var su *loader.SymbolBuilder
+	// For plugin builds, clone the symbol to external upfront so
+	// relocation modifications persist. Without this, r.SetSym()
+	// modifies the old internal relocations which are discarded
+	// after cloning.
+	if ctxt.BuildMode == BuildModePlugin {
+		su = ctxt.loader.MakeSymbolUpdater(s)
+	}
 	relocs := ctxt.loader.Relocs(s)
 	for ri := 0; ri < relocs.Count(); ri++ {
 		r := relocs.At(ri)
@@ -844,6 +879,11 @@ func windynrelocsym(ctxt *Link, rel *loader.SymbolBuilder, s loader.Sym) error {
 		}
 		if !ctxt.loader.AttrReachable(targ) {
 			if r.Weak() {
+				continue
+			}
+			// On Windows plugin builds, some symbols reference targets
+			// that are now SDYNIMPORT (provided by host). Skip quietly.
+			if ctxt.BuildMode == BuildModePlugin && ctxt.IsWindows() {
 				continue
 			}
 			return fmt.Errorf("dynamic relocation to unreachable symbol %s",
@@ -875,8 +915,20 @@ func windynrelocsym(ctxt *Link, rel *loader.SymbolBuilder, s loader.Sym) error {
 		}
 
 		tplt := ctxt.loader.SymPlt(targ)
-		if tplt == loadpe.CreateImportStubPltToken {
-
+		// Create thunks for imported symbols: either explicitly marked
+		// with CreateImportStubPltToken, or converted to SWINDOWS by
+		// initdynimport (from plugin host import library).
+		// Only thunk CALL/BRANCH relocations — address-loading relocations
+		// (R_ADDRARM64, R_ARM64_GOTPCREL) should resolve directly to the
+		// IAT entry, not through a thunk.
+		isCallReloc := r.Type() == objabi.R_CALL || r.Type() == objabi.R_CALLARM64 ||
+			r.Type() == objabi.R_PCREL
+		// Debug: log SWINDOWS call targets
+		if ctxt.BuildMode == BuildModePlugin && ctxt.loader.SymType(targ) == sym.SWINDOWS && isCallReloc {
+				ctxt.loader.SymName(targ), ctxt.loader.SymName(s), tplt, tgot, r.Type())
+		}
+		if (tplt == loadpe.CreateImportStubPltToken ||
+			(tplt == -1 && ctxt.loader.SymType(targ) == sym.SWINDOWS)) && isCallReloc {
 			// Consistency check: don't want to see both PLT and GOT tokens.
 			if tgot != -1 {
 				return fmt.Errorf("internal error in windynrelocsym: invalid GOT setting %d for reloc to %s", tgot, ctxt.loader.SymName(targ))
@@ -903,11 +955,6 @@ func windynrelocsym(ctxt *Link, rel *loader.SymbolBuilder, s loader.Sym) error {
 				rel.AddUint8(0x90)
 				rel.AddUint8(0x90)
 			case sys.AMD64:
-				// The relocation symbol might be at an absolute offset
-				// higher than 32 bits, but the jump instruction can't
-				// encode more than 32 bit offsets. We use a jump
-				// relative to the instruction pointer to get around this
-				// limitation.
 				rel.AddUint8(0xff)
 				rel.AddUint8(0x25)
 				rel.AddPCRelPlus(ctxt.Arch, targ, 0)
@@ -921,12 +968,18 @@ func windynrelocsym(ctxt *Link, rel *loader.SymbolBuilder, s loader.Sym) error {
 				r.SetSiz(4)
 				r.SetSym(targ)
 
-				// ldr x17, [x16, <offset>]
-				rel.AddUint32(ctxt.Arch, 0xf9400211)
+				// add x16, x16, <page offset>
+				// Uses ADD (immediate) which has no alignment requirement,
+				// unlike LDR which requires the offset to be aligned to
+				// the access size.
+				rel.AddUint32(ctxt.Arch, 0x91000210)
 				r, _ = rel.AddRel(objabi.R_ARM64_PCREL)
 				r.SetOff(int32(rel.Size() - 4))
 				r.SetSiz(4)
 				r.SetSym(targ)
+
+				// ldr x17, [x16]
+				rel.AddUint32(ctxt.Arch, 0xf9400211)
 
 				// br x17
 				rel.AddUint32(ctxt.Arch, 0xd61f0220)
@@ -945,7 +998,11 @@ func windynrelocsym(ctxt *Link, rel *loader.SymbolBuilder, s loader.Sym) error {
 // windynrelocsyms generates jump table to C library functions that will be
 // added later. windynrelocsyms writes the table into .rel symbol.
 func (ctxt *Link) windynrelocsyms() {
-	if !(ctxt.IsWindows() && iscgo && ctxt.IsInternal()) {
+	if !ctxt.IsWindows() || !ctxt.IsInternal() {
+		return
+	}
+	// Run for cgo builds (existing behavior) and plugin builds.
+	if !iscgo && ctxt.BuildMode != BuildModePlugin {
 		return
 	}
 
@@ -958,12 +1015,60 @@ func (ctxt *Link) windynrelocsyms() {
 		}
 	}
 
+	// For Windows plugin builds, create PLT-like stubs for SWINDOWS
+	// functions that are R_ADDR targets. The stub address can be safely
+	// stored in data structures (itabs, ·f values, type descriptors).
+	// When called through the stub, it redirects to the host via IAT.
+	if ctxt.BuildMode == BuildModePlugin {
+		ldr := ctxt.loader
+		for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+			if ldr.SymType(s) != sym.SWINDOWS {
+				continue
+			}
+			// Record the stub offset for this SWINDOWS symbol.
+			// R_ADDR resolution (in relocsym) will use this.
+			stubOff := int32(rel.Size())
+			ldr.SetPlt(s, stubOff)
+
+			// Generate stub: same code as thunks.
+			switch ctxt.Arch.Family {
+			case sys.AMD64:
+				rel.AddUint8(0xff)
+				rel.AddUint8(0x25)
+				rel.AddPCRelPlus(ctxt.Arch, s, 0)
+				rel.AddUint8(0x90)
+				rel.AddUint8(0x90)
+			case sys.ARM64:
+				// adrp x16, IAT_entry
+				rel.AddUint32(ctxt.Arch, 0x90000010)
+				r, _ := rel.AddRel(objabi.R_ARM64_PCREL)
+				r.SetOff(int32(rel.Size() - 4))
+				r.SetSiz(4)
+				r.SetSym(s)
+				// add x16, x16, #offset
+				rel.AddUint32(ctxt.Arch, 0x91000210)
+				r, _ = rel.AddRel(objabi.R_ARM64_PCREL)
+				r.SetOff(int32(rel.Size() - 4))
+				r.SetSiz(4)
+				r.SetSym(s)
+				// ldr x17, [x16]
+				rel.AddUint32(ctxt.Arch, 0xf9400211)
+				// br x17
+				rel.AddUint32(ctxt.Arch, 0xd61f0220)
+			}
+		}
+	}
+
 	ctxt.Textp = append(ctxt.Textp, rel.Sym())
 }
 
 func dynrelocsym(ctxt *Link, s loader.Sym) {
 	target := &ctxt.Target
 	ldr := ctxt.loader
+	// Skip symbols converted to dynamic imports.
+	if ldr.SymType(s) == sym.SDYNIMPORT || ldr.SymType(s) == sym.SWINDOWS {
+		return
+	}
 	syms := &ctxt.ArchSyms
 	relocs := ldr.Relocs(s)
 	for ri := 0; ri < relocs.Count(); ri++ {
@@ -985,6 +1090,11 @@ func dynrelocsym(ctxt *Link, s loader.Sym) {
 
 		if rSym != 0 && ldr.SymType(rSym) == sym.SDYNIMPORT || r.Type() >= objabi.ElfRelocOffset {
 			if rSym != 0 && !ldr.AttrReachable(rSym) {
+				// On Windows plugin builds, skip unreachable targets —
+				// they may be host-provided SDYNIMPORT symbols.
+				if ctxt.BuildMode == BuildModePlugin && ctxt.IsWindows() {
+					continue
+				}
 				ctxt.Errorf(s, "dynamic relocation to unreachable symbol %s", ldr.SymName(rSym))
 			}
 			if !thearch.Adddynrel(target, ldr, syms, s, r, ri) {

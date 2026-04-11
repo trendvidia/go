@@ -1997,7 +1997,21 @@ func BuildInstallFunc(b *Builder, ctx context.Context, a *Action) (err error) {
 		defer b.cleanup(a1)
 	}
 
-	return sh.moveOrCopyFile(a.Target, a1.built, perm, false)
+	if err := sh.moveOrCopyFile(a.Target, a1.built, perm, false); err != nil {
+		return err
+	}
+
+	// On Windows, the linker generates an import library (.a) alongside
+	// the executable for plugin support. Copy it to the final location.
+	if cfg.Goos == "windows" {
+		implib := a1.built + ".a"
+		if _, err := os.Stat(implib); err == nil {
+			targetImplib := a.Target + ".a"
+			sh.moveOrCopyFile(targetImplib, implib, 0666, false)
+		}
+	}
+
+	return nil
 }
 
 // AllowInstall returns a non-nil error if this invocation of the go command is

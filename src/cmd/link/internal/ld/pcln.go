@@ -616,6 +616,14 @@ func (state *pclntab) generateFuncdata(ctxt *Link, funcs []loader.Sym, inlsyms m
 			if r.Weak() && !ldr.AttrReachable(rs) {
 				return
 			}
+			// SWINDOWS symbols (PE imports) are interior symbols of
+			// .windynamic and don't have their own section.
+			// Write 0 for funcdata entries that reference imported symbols.
+			// The runtime treats 0 as "no funcdata" for this index.
+			if ldr.SymType(rs) == sym.SWINDOWS || ldr.SymType(rs) == sym.SDYNIMPORT {
+				ctxt.Target.Arch.ByteOrder.PutUint32(data[r.Off():], 0)
+				return
+			}
 			sect := ldr.SymSect(rs)
 			if sect == nil {
 				ctxt.Errorf(fdSym, "missing section for relocation target %s for funcdata symbol", ldr.SymName(rs))

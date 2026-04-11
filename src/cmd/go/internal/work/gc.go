@@ -603,6 +603,16 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 	}
 	if cfg.BuildBuildmode == "plugin" {
 		ldflags = append(ldflags, "-pluginpath", pluginPath(root))
+		// On Windows, disable DWARF in plugin DLLs. Host-provided symbols
+		// are converted to SDYNIMPORT which invalidates their DWARF refs.
+		if cfg.Goos == "windows" {
+			ldflags = append(ldflags, "-w")
+		}
+	}
+	// On Windows, pass the final executable name to the linker so the
+	// import library references the correct DLL name (not the temp build path).
+	if cfg.Goos == "windows" && cfg.BuildO != "" {
+		ldflags = append(ldflags, "-pluginexename", filepath.Base(cfg.BuildO))
 	}
 	if fips140.Enabled() {
 		ldflags = append(ldflags, "-fipso", filepath.Join(root.Objdir, "fips.o"))
@@ -657,6 +667,19 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 	// export section, so do like on OS X.
 	// On Linux, for a shared object, at least with the Gold linker,
 	// the output file path is recorded in the .gnu.version_d section.
+	// Resolve -pluginimplib paths to absolute before changing directory,
+	// since plugin/c-shared builds run the linker from the output directory.
+	for i, f := range ldflags {
+		if strings.HasPrefix(f, "-pluginimplib=") {
+			val := f[len("-pluginimplib="):]
+			if !filepath.IsAbs(val) {
+				if abs, err := filepath.Abs(val); err == nil {
+					ldflags[i] = "-pluginimplib=" + abs
+				}
+			}
+		}
+	}
+
 	dir := "."
 	if cfg.BuildBuildmode == "c-shared" || cfg.BuildBuildmode == "plugin" {
 		dir, targetPath = filepath.Split(targetPath)

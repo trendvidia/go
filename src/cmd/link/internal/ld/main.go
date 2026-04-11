@@ -66,9 +66,11 @@ var (
 	flagBuildid = flag.String("buildid", "", "record `id` as Go toolchain build id")
 	flagBindNow = flag.Bool("bindnow", false, "mark a dynamically linked ELF object for immediate function binding")
 
-	flagOutfile    = flag.String("o", "", "write output to `file`")
-	flagPluginPath = flag.String("pluginpath", "", "full path name for plugin")
-	flagFipso      = flag.String("fipso", "", "write fips module to `file`")
+	flagOutfile        = flag.String("o", "", "write output to `file`")
+	flagPluginPath     = flag.String("pluginpath", "", "full path name for plugin")
+	flagPluginImplib   = flag.String("pluginimplib", "", "host import library for plugin linking on windows")
+	flagPluginExeName  = flag.String("pluginexename", "", "host executable name for import library on windows")
+	flagFipso          = flag.String("fipso", "", "write fips module to `file`")
 
 	flagInstallSuffix = flag.String("installsuffix", "", "set package directory `suffix`")
 	flagDumpDep       = flag.Bool("dumpdep", false, "dump symbol dependency graph")
@@ -368,6 +370,12 @@ func Main(arch *sys.Arch, theArch Arch) {
 	bench.Start("inittasks")
 	ctxt.inittasks()
 
+	// On Windows, mark symbols that plugins need as reachable before
+	// deadcode, so they survive and get exported by the host.
+	if ctxt.IsWindows() && ctxt.canUsePlugins {
+		peMarkPluginExports(ctxt)
+	}
+
 	bench.Start("deadcode")
 	deadcode(ctxt)
 
@@ -404,8 +412,6 @@ func Main(arch *sys.Arch, theArch Arch) {
 	if ctxt.IsWindows() {
 		bench.Start("dope")
 		ctxt.dope()
-		bench.Start("windynrelocsyms")
-		ctxt.windynrelocsyms()
 	}
 	if ctxt.IsAIX() {
 		bench.Start("doxcoff")
@@ -419,6 +425,18 @@ func Main(arch *sys.Arch, theArch Arch) {
 	ctxt.addexport()
 	bench.Start("Gentext")
 	thearch.Gentext(ctxt, ctxt.loader) // trampolines, call stubs, etc.
+
+	if ctxt.IsWindows() {
+		// For Windows plugin builds, filter Textp before windynrelocsyms —
+		// Gentext may have re-added SDYNIMPORT/SWINDOWS symbols
+		// (e.g., runtime.addmoduledata is added by PrepareAddmoduledata).
+		if ctxt.BuildMode == BuildModePlugin {
+			ctxt.Textp = filterConvertedSyms(ctxt)
+		}
+
+		bench.Start("windynrelocsyms")
+		ctxt.windynrelocsyms()
+	}
 
 	bench.Start("textaddress")
 	ctxt.textaddress()

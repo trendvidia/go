@@ -63,6 +63,37 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 	initfunc.AddSymRef(ctxt.Arch, addmoduledata, 0, objabi.R_CALL, 4)
 	//    c:	c3                   	retq
 	o(0xc3)
+
+	// On Windows plugins with internal linking, generate a DllMain wrapper.
+	if ctxt.BuildMode == ld.BuildModePlugin && ctxt.IsWindows() && ctxt.IsInternal() {
+		dllmain := ldr.CreateSymForUpdate("go:link.plugindllmain", 0)
+		dllmain.SetType(sym.STEXT)
+		ctxt.Textp = append(ctxt.Textp, dllmain.Sym())
+		ldr.SetAttrReachable(dllmain.Sym(), true)
+
+		dm := func(op ...uint8) {
+			for _, op1 := range op {
+				dllmain.AddUint8(op1)
+			}
+		}
+		// push rbp
+		dm(0x55)
+		// mov rbp, rsp
+		dm(0x48, 0x89, 0xe5)
+		// sub rsp, 0x20 (shadow space for Windows x64 calling convention)
+		dm(0x48, 0x83, 0xec, 0x20)
+		// call go:link.addmoduledata
+		dm(0xe8)
+		dllmain.AddSymRef(ctxt.Arch, initfunc.Sym(), 0, objabi.R_CALL, 4)
+		// mov eax, 1 (return TRUE)
+		dm(0xb8, 0x01, 0x00, 0x00, 0x00)
+		// add rsp, 0x20
+		dm(0x48, 0x83, 0xc4, 0x20)
+		// pop rbp
+		dm(0x5d)
+		// ret
+		dm(0xc3)
+	}
 }
 
 func adddynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loader.Sym, r loader.Reloc, rIdx int) bool {

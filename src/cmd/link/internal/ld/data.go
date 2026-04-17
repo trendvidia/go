@@ -419,9 +419,9 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 				if stubOff >= 0 {
 					relSym := ldr.Lookup(".rel", 0)
 					o = ldr.SymValue(relSym) + int64(stubOff) + r.Add()
-						ldr.SymName(rs), ldr.SymName(s), stubOff, o)
+					// ldr.SymName(rs), ldr.SymName(s), stubOff, o)
 				} else {
-						ldr.SymName(rs), ldr.SymName(s), stubOff, o)
+					// ldr.SymName(rs), ldr.SymName(s), stubOff, o)
 				}
 			}
 			if rt == objabi.R_PEIMAGEOFF {
@@ -925,7 +925,7 @@ func windynrelocsym(ctxt *Link, rel *loader.SymbolBuilder, s loader.Sym) error {
 			r.Type() == objabi.R_PCREL
 		// Debug: log SWINDOWS call targets
 		if ctxt.BuildMode == BuildModePlugin && ctxt.loader.SymType(targ) == sym.SWINDOWS && isCallReloc {
-				ctxt.loader.SymName(targ), ctxt.loader.SymName(s), tplt, tgot, r.Type())
+			// ctxt.loader.SymName(targ), ctxt.loader.SymName(s), tplt, tgot, r.Type())
 		}
 		if (tplt == loadpe.CreateImportStubPltToken ||
 			(tplt == -1 && ctxt.loader.SymType(targ) == sym.SWINDOWS)) && isCallReloc {

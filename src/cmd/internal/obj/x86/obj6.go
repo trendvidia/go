@@ -310,7 +310,7 @@ func progedit(ctxt *obj.Link, p *obj.Prog, newprog obj.ProgAlloc) {
 		}
 	}
 
-	if ctxt.Flag_dynlink {
+	if ctxt.Flag_dynlink && ctxt.Headtype != objabi.Hwindows {
 		rewriteToUseGot(ctxt, p, newprog)
 	}
 
@@ -1269,9 +1269,11 @@ func progWritesR15(p *obj.Prog) bool {
 }
 
 func errorCheck(ctxt *obj.Link, s *obj.LSym) {
-	// When dynamic linking, R15 is used to access globals. Reject code that
-	// uses R15 after a global variable access.
-	if !ctxt.Flag_dynlink {
+	// When dynamic linking, R15 is used to access globals on some platforms (ELF).
+	// Reject code that uses R15 after a global variable access.
+	// On Windows, R15 is NOT used for global access (we use rip-relative IAT),
+	// so we don't need this check.
+	if !ctxt.Flag_dynlink || ctxt.Headtype == objabi.Hwindows {
 		return
 	}
 

@@ -3111,8 +3111,6 @@ func (ctxt *Link) isMSVC() bool {
 	}
 	return false
 }
-<<<<<<< HEAD
-=======
 
 // isLLD reports whether the C toolchain is using LLD as the linker.
 func (ctxt *Link) isLLD() bool {
@@ -3128,5 +3126,3 @@ func (ctxt *Link) isLLD() bool {
 	}
 	return false
 }
-
->>>>>>> 911aa8203a (plugin: add Windows support via import library approach)

@@ -39,7 +39,6 @@ import (
 	"debug/elf"
 	"fmt"
 	"log"
-	"os"
 )
 
 func gentext(ctxt *ld.Link, ldr *loader.Loader) {
@@ -133,8 +132,6 @@ func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
 	dm(0xa8c17bfd)
 	// ret
 	dm(0xd65f03c0)
-
-	dllRelocs := ldr.Relocs(dllmain.Sym())
 }
 
 func adddynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loader.Sym, r loader.Reloc, rIdx int) bool {

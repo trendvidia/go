@@ -41,6 +41,13 @@ import (
 )
 
 func gentext(ctxt *ld.Link, ldr *loader.Loader) {
+	// On Windows plugins with internal linking, create DllMain directly
+	// (PrepareAddmoduledata is skipped to avoid BL to SWINDOWS symbols).
+	if ctxt.BuildMode == ld.BuildModePlugin && ctxt.IsWindows() && ctxt.IsInternal() {
+		gentextPluginDllMain(ctxt, ldr)
+		return
+	}
+
 	initfunc, addmoduledata := ld.PrepareAddmoduledata(ctxt)
 	if initfunc == nil {
 		return
@@ -63,37 +70,53 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 	initfunc.AddSymRef(ctxt.Arch, addmoduledata, 0, objabi.R_CALL, 4)
 	//    c:	c3                   	retq
 	o(0xc3)
+}
 
-	// On Windows plugins with internal linking, generate a DllMain wrapper.
-	if ctxt.BuildMode == ld.BuildModePlugin && ctxt.IsWindows() && ctxt.IsInternal() {
-		dllmain := ldr.CreateSymForUpdate("go:link.plugindllmain", 0)
-		dllmain.SetType(sym.STEXT)
-		ctxt.Textp = append(ctxt.Textp, dllmain.Sym())
-		ldr.SetAttrReachable(dllmain.Sym(), true)
+// gentextPluginDllMain generates a DllMain entry point for Windows plugin
+// DLLs with internal linking. It loads the plugin's moduledata, reads
+// runtime.addmoduledata from the IAT, and calls it.
+func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
+	dllmain := ldr.CreateSymForUpdate("go:link.plugindllmain", 0)
+	dllmain.SetType(sym.STEXT)
+	ctxt.Textp = append(ctxt.Textp, dllmain.Sym())
+	ldr.SetAttrReachable(dllmain.Sym(), true)
 
-		dm := func(op ...uint8) {
-			for _, op1 := range op {
-				dllmain.AddUint8(op1)
-			}
+	dm := func(op ...uint8) {
+		for _, op1 := range op {
+			dllmain.AddUint8(op1)
 		}
-		// push rbp
-		dm(0x55)
-		// mov rbp, rsp
-		dm(0x48, 0x89, 0xe5)
-		// sub rsp, 0x20 (shadow space for Windows x64 calling convention)
-		dm(0x48, 0x83, 0xec, 0x20)
-		// call go:link.addmoduledata
-		dm(0xe8)
-		dllmain.AddSymRef(ctxt.Arch, initfunc.Sym(), 0, objabi.R_CALL, 4)
-		// mov eax, 1 (return TRUE)
-		dm(0xb8, 0x01, 0x00, 0x00, 0x00)
-		// add rsp, 0x20
-		dm(0x48, 0x83, 0xc4, 0x20)
-		// pop rbp
-		dm(0x5d)
-		// ret
-		dm(0xc3)
 	}
+	// push rbp
+	dm(0x55)
+	// mov rbp, rsp
+	dm(0x48, 0x89, 0xe5)
+	// push rdi (save callee-save register)
+	dm(0x57)
+	// sub rsp, 0x28 (shadow space + alignment for Windows x64 calling convention)
+	dm(0x48, 0x83, 0xec, 0x28)
+
+	// lea rdi, [rip + local.pluginmoduledata]
+	dm(0x48, 0x8d, 0x3d)
+	dllmain.AddPCRelPlus(ctxt.Arch, ctxt.Moduledata, 0)
+
+	// Load runtime.addmoduledata from IAT and call it.
+	amd := ldr.Lookup("runtime.addmoduledata", 0)
+	if amd != 0 {
+		// call [rip + runtime.addmoduledata_IAT]
+		dm(0xff, 0x15)
+		dllmain.AddPCRelPlus(ctxt.Arch, amd, 0)
+	}
+
+	// mov eax, 1 (return TRUE)
+	dm(0xb8, 0x01, 0x00, 0x00, 0x00)
+	// add rsp, 0x28
+	dm(0x48, 0x83, 0xc4, 0x28)
+	// pop rdi
+	dm(0x5f)
+	// pop rbp
+	dm(0x5d)
+	// ret
+	dm(0xc3)
 }
 
 func adddynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loader.Sym, r loader.Reloc, rIdx int) bool {

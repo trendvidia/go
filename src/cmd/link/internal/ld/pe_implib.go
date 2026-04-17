@@ -1,24 +1,41 @@
-// Copyright 2024 The Go Authors. All rights reserved.
+// Copyright 2026 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package ld
 
 import (
+	"bufio"
 	"bytes"
 	"debug/pe"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"cmd/link/internal/loader"
 	"cmd/link/internal/sym"
 )
+
+// peSkipSymName reports whether the given symbol name should be excluded
+// from PE export tables and import libraries. It filters out internal
+// linker symbols, PE artifacts, and type descriptors.
+func peSkipSymName(name string) bool {
+	if name == "" || strings.HasPrefix(name, ".") {
+		return true
+	}
+	if strings.HasPrefix(name, "_") || strings.HasPrefix(name, "__") {
+		return true
+	}
+	if strings.HasPrefix(name, "type:") || strings.HasPrefix(name, "type..") {
+		return true
+	}
+	return false
+}
 
 // impLibSymbol holds info about a symbol to include in the import library.
 type impLibSymbol struct {
@@ -64,7 +81,8 @@ func peGenerateImportLibrary(ctxt *Link) {
 	// Collect exportable symbols from the loader. Only include reachable
 	// symbols — the host's PE export table only contains reachable symbols,
 	// so the import library must match. Critical symbols like
-	// runtime.addmoduledata are made reachable by peMarkPluginExports.
+	// runtime.addmoduledata are made reachable by the deadcode pass
+	// (which marks all defined symbols reachable for plugin hosts).
 	var symbols []impLibSymbol
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
 		if !ldr.AttrReachable(s) {
@@ -75,15 +93,7 @@ func peGenerateImportLibrary(ctxt *Link) {
 			continue
 		}
 		name := ldr.SymExtname(s)
-		if name == "" || strings.HasPrefix(name, ".") {
-			continue
-		}
-		// Skip internal linker symbols and PE artifacts.
-		if strings.HasPrefix(name, "_") || strings.HasPrefix(name, "__") {
-			continue
-		}
-		// Skip type descriptors — they may reference unexported methods.
-		if strings.HasPrefix(name, "type:") || strings.HasPrefix(name, "type..") {
+		if peSkipSymName(name) {
 			continue
 		}
 		isFunc := st.IsText()
@@ -93,7 +103,6 @@ func peGenerateImportLibrary(ctxt *Link) {
 			break
 		}
 	}
-
 
 	if len(symbols) == 0 {
 		return
@@ -106,26 +115,33 @@ func peGenerateImportLibrary(ctxt *Link) {
 
 	f, err := os.Create(implib)
 	if err != nil {
-		Errorf("cannot create import library %s: %v", implib, err)
-		return
+		Exitf("cannot create import library %s: %v", implib, err)
 	}
-	defer f.Close()
+
+	w := bufio.NewWriter(f)
 
 	// Write ar archive header.
-	f.WriteString("!<arch>\n")
+	w.WriteString("!<arch>\n")
 
 	// Write first linker member (symbol directory).
-	writeFirstLinkerMember(f, symbols, dllName, machine)
+	writeFirstLinkerMember(w, symbols, dllName, machine)
 
 	// Write individual short import objects.
 	for i, sym := range symbols {
-		writeShortImport(f, sym.name, dllName, machine, sym.isFunc, uint16(i))
+		writeShortImport(w, sym.name, dllName, machine, sym.isFunc, uint16(i))
+	}
+
+	if err := w.Flush(); err != nil {
+		Exitf("error writing import library %s: %v", implib, err)
+	}
+	if err := f.Close(); err != nil {
+		Exitf("error closing import library %s: %v", implib, err)
 	}
 }
 
 // writeFirstLinkerMember writes the "/" archive member that serves as the
 // symbol directory for the import library.
-func writeFirstLinkerMember(f *os.File, symbols []impLibSymbol, dllName string, machine uint16) {
+func writeFirstLinkerMember(f io.Writer, symbols []impLibSymbol, dllName string, machine uint16) {
 	numSyms := len(symbols)
 
 	// Calculate the offset where each import object will start.
@@ -168,7 +184,7 @@ func writeFirstLinkerMember(f *os.File, symbols []impLibSymbol, dllName string, 
 
 	// Write symbol names (null-terminated).
 	for _, sym := range symbols {
-		f.WriteString(sym.name)
+		io.WriteString(f, sym.name)
 		f.Write([]byte{0})
 	}
 
@@ -186,7 +202,7 @@ func shortImportSize(symName, dllName string) int {
 
 // writeShortImport writes one short import object as an ar member.
 // This uses the IMPORT_OBJECT_HEADER format from the PE/COFF spec.
-func writeShortImport(f *os.File, symName, dllName string, machine uint16, isFunc bool, hint uint16) {
+func writeShortImport(f io.Writer, symName, dllName string, machine uint16, isFunc bool, hint uint16) {
 	dataSize := len(symName) + 1 + len(dllName) + 1
 	totalSize := 20 + dataSize // 20 = sizeof(IMPORT_OBJECT_HEADER)
 
@@ -229,11 +245,11 @@ func writeShortImport(f *os.File, symName, dllName string, machine uint16, isFun
 	f.Write(hdr[:])
 
 	// Symbol name (null-terminated)
-	f.WriteString(symName)
+	io.WriteString(f, symName)
 	f.Write([]byte{0})
 
 	// DLL name (null-terminated)
-	f.WriteString(dllName)
+	io.WriteString(f, dllName)
 	f.Write([]byte{0})
 
 	// Pad to even boundary.
@@ -243,7 +259,7 @@ func writeShortImport(f *os.File, symName, dllName string, machine uint16, isFun
 }
 
 // writeArHeader writes a 60-byte ar archive member header.
-func writeArHeader(f *os.File, name string, size int) {
+func writeArHeader(f io.Writer, name string, size int) {
 	// Format: name/16 + mtime/12 + uid/6 + gid/6 + mode/8 + size/10 + magic/2
 	var hdr [60]byte
 
@@ -304,8 +320,7 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		// Parse size from ar header (bytes 48-57).
 		sizeStr := strings.TrimSpace(string(arHdr[48:58]))
 		var size int
-		fmt.Sscanf(sizeStr, "%d", &size)
-		if size <= 0 {
+		if _, err := fmt.Sscanf(sizeStr, "%d", &size); err != nil || size <= 0 {
 			break
 		}
 
@@ -350,12 +365,7 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			continue
 		}
 
-		// Skip internal linker symbols and PE artifacts.
-		if strings.HasPrefix(symName, "_") || strings.HasPrefix(symName, "__") {
-			continue
-		}
-		// Skip type descriptor symbols — they're plugin-local metadata.
-		if strings.HasPrefix(symName, "type:") || strings.HasPrefix(symName, "type..") {
+		if peSkipSymName(symName) {
 			continue
 		}
 		// Skip function value descriptors (·f symbols). These are DATA
@@ -370,16 +380,6 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		s := ldr.Lookup(symName, 0)
 		if s == 0 {
 			s = ldr.Lookup(symName, 1) // ABIInternal
-		}
-		// Don't skip R_ADDR targets — skipping them leaves critical
-		// functions (morestack, memequal, etc.) as local copies with
-		// uninitialized runtime data. R_ADDR to SWINDOWS gives IAT
-		// addresses in itabs/type descriptors, but this is the lesser
-		// evil vs having broken local runtime functions.
-		if false && s != 0 && isRAddrTarget(ldr, s) &&
-			symName != "runtime.addmoduledata" &&
-			symName != "runtime.lastmoduledatap" {
-			continue
 		}
 		if s == 0 {
 			continue // Not referenced by plugin
@@ -419,42 +419,6 @@ func filterConvertedSyms(ctxt *Link) []loader.Sym {
 	return ctxt.Textp[:j]
 }
 
-// peMarkPluginExports marks symbols that plugins need as reachable in the
-// HOST build, so they survive deadcode and get exported. Called BEFORE deadcode.
-// Plugins may call any runtime function, so all runtime TEXT symbols must
-// be exported. Only TEXT is marked (not data/type descriptors which can
-// pull in dead methods and cause link errors).
-// peMarkPluginExports is now handled by deadcode directly —
-// Windows plugin hosts use the same "mark all defined" path as shared libraries.
-// This function is kept as a no-op for compatibility.
-func peMarkPluginExports(ctxt *Link) {
-}
-
-// isRAddrTarget checks if the symbol is targeted by any R_ADDR relocation.
-// Symbols targeted by R_ADDR have their addresses embedded in data structures
-// and cannot be SDYNIMPORT (IAT address ≠ function address).
-// This is called once per import library symbol, so we cache the result.
-var rAddrTargets map[loader.Sym]bool
-
-func isRAddrTarget(ldr *loader.Loader, s loader.Sym) bool {
-	if rAddrTargets == nil {
-		// Build the cache: scan all symbols for R_ADDR relocations.
-		rAddrTargets = make(map[loader.Sym]bool)
-		for i := loader.Sym(1); i < loader.Sym(ldr.NSym()); i++ {
-			relocs := ldr.Relocs(i)
-			for j := 0; j < relocs.Count(); j++ {
-				r := relocs.At(j)
-				if r.Type() == objabi.R_ADDR || r.Type() == objabi.R_ADDRARM64 {
-					if targ := r.Sym(); targ != 0 {
-						rAddrTargets[targ] = true
-					}
-				}
-			}
-		}
-	}
-	return rAddrTargets[s]
-}
-
 // peExportAllSymbols marks all reachable text/data symbols for export in
 // the PE export table. This is the internal-linker equivalent of MinGW's
 // --export-all-symbols flag.
@@ -469,16 +433,7 @@ func peExportAllSymbols(ctxt *Link) {
 			continue
 		}
 		name := ldr.SymExtname(s)
-		// Skip internal/unnamed symbols.
-		if name == "" || strings.HasPrefix(name, ".") {
-			continue
-		}
-		// Skip internal linker symbols and PE artifacts.
-		if strings.HasPrefix(name, "_") || strings.HasPrefix(name, "__") {
-			continue
-		}
-		// Skip type descriptors.
-		if strings.HasPrefix(name, "type:") || strings.HasPrefix(name, "type..") {
+		if peSkipSymName(name) {
 			continue
 		}
 		// Skip symbols that are already in the export list.

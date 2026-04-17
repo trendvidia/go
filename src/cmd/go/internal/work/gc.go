@@ -605,15 +605,10 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 		ldflags = append(ldflags, "-pluginpath", pluginPath(root))
 		// On Windows, disable DWARF in plugin DLLs. Host-provided symbols
 		// are converted to SDYNIMPORT which invalidates their DWARF refs.
+		// The host's import library must be passed explicitly via
+		// -ldflags=-pluginimplib=<path> when building plugins.
 		if cfg.Goos == "windows" {
 			ldflags = append(ldflags, "-w")
-			// If we're building a plugin, we need the host's import library.
-			// By convention, if we're building "myplugin.dll", and "host.exe"
-			// is in the same directory, we look for "host.exe.a".
-			// For simplicity in the demo, we'll look for a .exe.a in the same dir.
-			if matches, err := filepath.Glob("*.exe.a"); err == nil && len(matches) > 0 {
-				ldflags = append(ldflags, "-pluginimplib="+matches[0])
-			}
 		}
 	}
 	// On Windows, pass the final executable name to the linker so the

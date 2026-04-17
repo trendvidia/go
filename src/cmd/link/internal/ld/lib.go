@@ -3111,18 +3111,3 @@ func (ctxt *Link) isMSVC() bool {
 	}
 	return false
 }
-
-// isLLD reports whether the C toolchain is using LLD as the linker.
-func (ctxt *Link) isLLD() bool {
-	extld := ctxt.extld()
-	name, args := extld[0], extld[1:]
-	args = append(args, trimLinkerArgv(flagExtldflags)...)
-	args = append(args, "-Wl,--version")
-	cmd := exec.Command(name, args...)
-	if out, err := cmd.CombinedOutput(); err == nil {
-		if bytes.Contains(out, []byte("LLD ")) {
-			return true
-		}
-	}
-	return false
-}

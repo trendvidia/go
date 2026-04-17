@@ -370,12 +370,6 @@ func Main(arch *sys.Arch, theArch Arch) {
 	bench.Start("inittasks")
 	ctxt.inittasks()
 
-	// On Windows, mark symbols that plugins need as reachable before
-	// deadcode, so they survive and get exported by the host.
-	if ctxt.IsWindows() && ctxt.canUsePlugins {
-		peMarkPluginExports(ctxt)
-	}
-
 	bench.Start("deadcode")
 	deadcode(ctxt)
 

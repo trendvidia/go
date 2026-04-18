@@ -22,6 +22,21 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	if md == nil {
 		throw("runtime: no plugin module data")
 	}
+
+	// Diagnostic: print plugin moduledata bounds for debugging.
+	println("plugin moduledata diagnostic:")
+	println("  text=", hex(md.text), "etext=", hex(md.etext))
+	println("  data=", hex(md.data), "edata=", hex(md.edata))
+	println("  bss=", hex(md.bss), "ebss=", hex(md.ebss))
+	println("  types=", hex(md.types), "etypes=", hex(md.etypes))
+	println("  noptrdata=", hex(md.noptrdata), "enoptrdata=", hex(md.enoptrdata))
+	println("  noptrbss=", hex(md.noptrbss), "enoptrbss=", hex(md.enoptrbss))
+	println("  minpc=", hex(md.minpc), "maxpc=", hex(md.maxpc))
+	println("  ftab entries=", len(md.ftab))
+	println("  pluginpath=", md.pluginpath)
+	println("  gcdata=", hex(md.gcdata))
+	println("  gcbss=", hex(md.gcbss))
+
 	if md.pluginpath == "" {
 		throw("runtime: plugin has empty pluginpath")
 	}

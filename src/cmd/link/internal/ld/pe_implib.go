@@ -416,17 +416,27 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			continue
 		}
 
-		// Convert to SDYNIMPORT. Must convert BOTH ABI versions (ABI0
-		// and ABIInternal) — Go code calls the ABIInternal version,
-		// while the ABI0 version is a wrapper.
+		// Convert to SDYNIMPORT. Only convert TEXT (function) symbols.
+		// On amd64, DATA symbols cannot be imported via IAT because the
+		// compiler generates direct memory access (LEA/MOV [rip+disp32])
+		// with no indirection. Unlike arm64 (which has ADRP+ADD→LDR
+		// rewriting for SWINDOWS data), amd64 has no equivalent.
+		// DATA symbols remain as local copies in the plugin DLL.
+		//
+		// Must convert BOTH ABI versions (ABI0 and ABIInternal) for
+		// functions.
 		found := false
 		for _, ver := range []int{0, 1} {
 			s := ldr.Lookup(symName, ver)
 			if s == 0 {
 				continue
 			}
-			if ldr.SymType(s) == sym.SDYNIMPORT {
+			st := ldr.SymType(s)
+			if st == sym.SDYNIMPORT {
 				continue // Already an import (e.g., Windows API)
+			}
+			if !st.IsText() {
+				continue // Skip DATA/RODATA — no IAT indirection on amd64
 			}
 			sb := ldr.MakeSymbolUpdater(s)
 			sb.SetType(sym.SDYNIMPORT)

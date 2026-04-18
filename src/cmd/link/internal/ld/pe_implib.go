@@ -433,19 +433,20 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			if st == sym.SDYNIMPORT {
 				continue // Already an import (e.g., Windows API)
 			}
-			// Skip DATA/RODATA — no IAT indirection on amd64.
-			// Exceptions:
-			// - ..inittask: must be converted to prevent double-init
-			// - runtime.writeBarrier: must be shared so the plugin's
-			//   inline write barrier check sees the host's GC state.
-			//   The CMPL reads the IAT pointer (always non-zero), so
-			//   write barriers are always "enabled" in plugin code.
-			//   The host's gcWriteBarrier checks the real state and
-			//   handles it correctly. Without this, parallel GC crashes
-			//   because the plugin never executes write barriers.
+			// Skip most DATA/RODATA — no IAT indirection on amd64.
+			// Exceptions that MUST be converted:
+			// - ..inittask: prevent double-initialization
+			// - runtime.* data: the plugin must not have local copies
+			//   of runtime state (writeBarrier, gcphase, etc.) that
+			//   diverge from the host. On arm64, ALL data goes through
+			//   IAT with ADRP+LDR rewriting. On amd64, direct data
+			//   access reads the IAT pointer value instead of the data,
+			//   but this is acceptable for runtime internals since they
+			//   are primarily accessed through thunked runtime functions.
+			isRuntimeData := strings.HasPrefix(symName, "runtime.") && !peSectionMarkers[symName]
 			if !st.IsText() &&
 				!strings.HasSuffix(symName, "..inittask") &&
-				symName != "runtime.writeBarrier" {
+				!isRuntimeData {
 				continue
 			}
 			sb := ldr.MakeSymbolUpdater(s)

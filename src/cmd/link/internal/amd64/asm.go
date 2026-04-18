@@ -95,25 +95,11 @@ func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
 	// sub rsp, 0x28 (shadow space + alignment for Windows x64 calling convention)
 	dm(0x48, 0x83, 0xec, 0x28)
 
-	// lea rdi, [rip + local.pluginmoduledata]
-	dm(0x48, 0x8d, 0x3d)
-	dllmain.AddPCRelPlus(ctxt.Arch, ctxt.Moduledata, 0)
-
-	// Call runtime.addmoduledata. Use a direct call (e8) with R_CALL
-	// relocation — windynrelocsym will create an IAT thunk for the
-	// SWINDOWS target automatically. We must NOT use ff 15 (indirect
-	// call via memory) with R_PCREL here because windynrelocsym would
-	// redirect the relocation to the thunk, causing ff 15 to read the
-	// thunk's machine code as a pointer instead of reading from the IAT.
-	amd := ldr.Lookup("runtime.addmoduledata", 0)
-	if amd != 0 {
-		dm(0xe8)
-		dllmain.AddUint32(ctxt.Arch, 0) // placeholder for R_CALL displacement
-		r, _ := dllmain.AddRel(objabi.R_CALL)
-		r.SetOff(int32(dllmain.Size() - 4))
-		r.SetSiz(4)
-		r.SetSym(amd)
-	}
+	// DIAGNOSTIC: Skip addmoduledata to test if DLL loading alone
+	// causes GC crash. DllMain just returns TRUE without registering
+	// the plugin moduledata.
+	// TODO: Restore addmoduledata call after diagnostic.
+	_ = ctxt.Moduledata // suppress unused warning
 
 	// mov eax, 1 (return TRUE)
 	dm(0xb8, 0x01, 0x00, 0x00, 0x00)

@@ -108,6 +108,8 @@ func peGenerateImportLibrary(ctxt *Link) {
 		return
 	}
 
+	ctxt.Logf("plugin: generating import library %s with %d symbols\n", implib, len(symbols))
+
 	// Sort alphabetically (required by PE import library convention).
 	sort.Slice(symbols, func(i, j int) bool {
 		return symbols[i].name < symbols[j].name
@@ -406,8 +408,19 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			continue // Not referenced by plugin
 		}
 	}
-	if ctxt.Debugvlog > 0 {
-		ctxt.Logf("plugin: loaded %d import symbols from %s\n", importCount, implib)
+	// Always print import library stats to aid debugging.
+	ctxt.Logf("plugin: loaded %d import symbols from %s\n", importCount, implib)
+
+	// Verify critical runtime symbols were converted.
+	for _, critical := range []string{"runtime.growslice", "runtime.mallocgc", "runtime.newobject"} {
+		for _, ver := range []int{0, 1} {
+			s := ldr.Lookup(critical, ver)
+			if s == 0 {
+				continue
+			}
+			ctxt.Logf("plugin: %s (ver=%d) type=%v reachable=%v\n",
+				critical, ver, ldr.SymType(s), ldr.AttrReachable(s))
+		}
 	}
 }
 

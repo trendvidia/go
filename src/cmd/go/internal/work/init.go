@@ -306,6 +306,12 @@ func buildModeInit() {
 			codegenArg = "-fPIC"
 		} else {
 			codegenArg = "-dynlink"
+			if cfg.Goos == "windows" {
+				// On Windows, use -shared instead of -dynlink to avoid
+				// GOT-based code generation (Windows uses IAT, not GOT).
+				// Plugin exports are enabled via Flag_shared in reader.go.
+				codegenArg = "-shared"
+			}
 		}
 		if cfg.Goos == "windows" {
 			cfg.ExeSuffix = ".dll"

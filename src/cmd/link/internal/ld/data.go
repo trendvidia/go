@@ -1494,9 +1494,13 @@ func (p *GCProg) AddSym(s loader.Sym) {
 
 	// Always print for Windows plugin builds to debug GC bitmap issues.
 	if debugGCProg || (p.ctxt.BuildMode == BuildModePlugin && p.ctxt.IsWindows()) {
-		fmt.Fprintf(os.Stderr, "gcprog sym: %s at off=%d (ptr=%d) size=%d type=%s\n",
+		sectName := "?"
+		if sect := ldr.SymSect(s); sect != nil {
+			sectName = sect.Name
+		}
+		fmt.Fprintf(os.Stderr, "gcprog sym: %s at off=%d (ptr=%d) size=%d type=%s sect=%s symtype=%v\n",
 			ldr.SymName(s), ldr.SymValue(s), ldr.SymValue(s)/int64(p.ctxt.Arch.PtrSize),
-			ldr.SymSize(s), ldr.SymName(typ))
+			ldr.SymSize(s), ldr.SymName(typ), sectName, ldr.SymType(s))
 	}
 
 	sval := ldr.SymValue(s)

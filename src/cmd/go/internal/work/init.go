@@ -306,9 +306,6 @@ func buildModeInit() {
 			codegenArg = "-fPIC"
 		} else {
 			codegenArg = "-dynlink"
-			if cfg.Goos == "windows" {
-				codegenArg = "-shared"
-			}
 		}
 		if cfg.Goos == "windows" {
 			cfg.ExeSuffix = ".dll"

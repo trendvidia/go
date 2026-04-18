@@ -37,6 +37,30 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	println("  gcdata=", hex(md.gcdata))
 	println("  gcbss=", hex(md.gcbss))
 
+	// Dump data section contents to find bad pointers.
+	dataSize := md.edata - md.data
+	println("  data contents (", dataSize, "bytes ):")
+	for i := uintptr(0); i < dataSize; i += 8 {
+		p := *(*uintptr)(unsafe.Pointer(md.data + i))
+		println("    data+", hex(i), "=", hex(p))
+	}
+	bssSize := md.ebss - md.bss
+	println("  bss contents (", bssSize, "bytes ):")
+	for i := uintptr(0); i < bssSize; i += 8 {
+		p := *(*uintptr)(unsafe.Pointer(md.bss + i))
+		println("    bss+", hex(i), "=", hex(p))
+	}
+	noptrbssSize := md.enoptrbss - md.noptrbss
+	println("  noptrbss size=", noptrbssSize)
+
+	// Validate gcdata bitmap can be read.
+	bitmapBytes := (dataSize/8 + 7) / 8
+	println("  gcdata bitmap bytes needed=", bitmapBytes)
+	for i := uintptr(0); i < bitmapBytes && i < 16; i++ {
+		b := *(*byte)(unsafe.Pointer(md.gcdata + i))
+		println("    gcdata[", i, "]=", b)
+	}
+
 	if md.pluginpath == "" {
 		throw("runtime: plugin has empty pluginpath")
 	}

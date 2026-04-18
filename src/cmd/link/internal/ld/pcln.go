@@ -614,15 +614,17 @@ func (state *pclntab) generateFuncdata(ctxt *Link, funcs []loader.Sym, inlsyms m
 			}
 			rs := r.Sym()
 			if r.Weak() && !ldr.AttrReachable(rs) {
-				return
+				continue // Skip this entry but process remaining ones.
 			}
 			// SWINDOWS symbols (PE imports) are interior symbols of
 			// .windynamic and don't have their own section.
-			// Write 0 for funcdata entries that reference imported symbols.
-			// The runtime treats 0 as "no funcdata" for this index.
+			// Write 0 for funcdata entries that reference imported symbols,
+			// but continue processing remaining entries — don't exit the
+			// loop, or critical entries like LocalsPointerMaps would be
+			// left unresolved, breaking GC stack scanning.
 			if ldr.SymType(rs) == sym.SWINDOWS || ldr.SymType(rs) == sym.SDYNIMPORT {
 				ctxt.Target.Arch.ByteOrder.PutUint32(data[r.Off():], 0)
-				return
+				continue
 			}
 			sect := ldr.SymSect(rs)
 			if sect == nil {

@@ -376,28 +376,35 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			continue
 		}
 
-		// Convert to SDYNIMPORT. Try both ABI0 and ABIInternal.
-		s := ldr.Lookup(symName, 0)
-		if s == 0 {
-			s = ldr.Lookup(symName, 1) // ABIInternal
+		// Convert to SDYNIMPORT. Must convert BOTH ABI versions (ABI0
+		// and ABIInternal) — Go code calls the ABIInternal version, while
+		// the ABI0 version is a wrapper. If we only convert one, the
+		// other remains as a local copy with uninitialized runtime globals.
+		found := false
+		for _, ver := range []int{0, 1} {
+			s := ldr.Lookup(symName, ver)
+			if s == 0 {
+				continue
+			}
+			if ldr.SymType(s) == sym.SDYNIMPORT {
+				continue // Already an import (e.g., Windows API)
+			}
+			sb := ldr.MakeSymbolUpdater(s)
+			sb.SetType(sym.SDYNIMPORT)
+			sb.SetSize(0)
+			sb.SetData(nil)
+			sb.ResetRelocs()
+			ldr.FreeData(s)
+			ldr.SetSymDynimplib(s, dllName)
+			ldr.SetSymExtname(s, symName)
+			// Mark reachable so initdynimport creates IAT entries.
+			ldr.SetAttrReachable(s, true)
+			importCount++
+			found = true
 		}
-		if s == 0 {
+		if !found {
 			continue // Not referenced by plugin
 		}
-		if ldr.SymType(s) == sym.SDYNIMPORT {
-			continue // Already an import (e.g., Windows API)
-		}
-		sb := ldr.MakeSymbolUpdater(s)
-		sb.SetType(sym.SDYNIMPORT)
-		sb.SetSize(0)
-		sb.SetData(nil)
-		sb.ResetRelocs()
-		ldr.FreeData(s)
-		ldr.SetSymDynimplib(s, dllName)
-		ldr.SetSymExtname(s, symName)
-		// Mark reachable so initdynimport creates IAT entries.
-		ldr.SetAttrReachable(s, true)
-		importCount++
 	}
 	if ctxt.Debugvlog > 0 {
 		ctxt.Logf("plugin: loaded %d import symbols from %s\n", importCount, implib)

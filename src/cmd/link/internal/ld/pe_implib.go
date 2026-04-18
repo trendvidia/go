@@ -383,18 +383,29 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			continue
 		}
 
-		// Convert to SDYNIMPORT. Must convert BOTH ABI versions (ABI0
-		// and ABIInternal) — Go code calls the ABIInternal version, while
-		// the ABI0 version is a wrapper. If we only convert one, the
-		// other remains as a local copy with uninitialized runtime globals.
+		// Only convert TEXT (function) symbols to SDYNIMPORT. DATA and
+		// RODATA symbols must remain as local copies because compiled
+		// code accesses them directly (no IAT indirection). Converting
+		// data symbols would cause the code to read IAT pointer values
+		// instead of actual data, corrupting runtime state (e.g.,
+		// writeBarrier, gcController) and crashing the GC.
+		//
+		// Must convert BOTH ABI versions (ABI0 and ABIInternal) for
+		// functions — Go code calls the ABIInternal version, while
+		// the ABI0 version is a wrapper.
 		found := false
 		for _, ver := range []int{0, 1} {
 			s := ldr.Lookup(symName, ver)
 			if s == 0 {
 				continue
 			}
-			if ldr.SymType(s) == sym.SDYNIMPORT {
+			st := ldr.SymType(s)
+			if st == sym.SDYNIMPORT {
 				continue // Already an import (e.g., Windows API)
+			}
+			// Only convert functions, not data.
+			if !st.IsText() {
+				continue
 			}
 			sb := ldr.MakeSymbolUpdater(s)
 			sb.SetType(sym.SDYNIMPORT)

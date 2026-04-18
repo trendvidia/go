@@ -1528,6 +1528,14 @@ func (p *GCProg) AddType(off int64, typ loader.Sym) {
 		// Copy pointers from mask into program.
 		ptrsize := int64(p.ctxt.Arch.PtrSize)
 		mask := decodetypeGcmask(p.ctxt, typ)
+		if p.ctxt.BuildMode == BuildModePlugin && p.ctxt.IsWindows() {
+			fmt.Fprintf(os.Stderr, "gcprog AddType: off=%d ptrdata=%d nptr=%d mask=[",
+				off, ptrdata, ptrdata/ptrsize)
+			for i := int64(0); i < (ptrdata/ptrsize+7)/8; i++ {
+				fmt.Fprintf(os.Stderr, " %02x", mask[i])
+			}
+			fmt.Fprintf(os.Stderr, " ]\n")
+		}
 		for i := int64(0); i < ptrdata/ptrsize; i++ {
 			if (mask[i/8]>>uint(i%8))&1 != 0 {
 				p.w.Ptr(off/ptrsize + i)

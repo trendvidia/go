@@ -403,8 +403,14 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			if st == sym.SDYNIMPORT {
 				continue // Already an import (e.g., Windows API)
 			}
-			// Only convert functions, not data.
-			if !st.IsText() {
+			// Only convert functions, not data. Data symbols accessed
+			// directly by compiled code can't go through IAT indirection.
+			// Exception: ..inittask symbols must be converted so the
+			// plugin doesn't re-run init functions the host already ran
+			// (e.g., runtime.init.7 starts forcegchelper — running it
+			// twice causes "forcegc: phase error").
+			isInitTask := strings.HasSuffix(symName, "..inittask")
+			if !st.IsText() && !isInitTask {
 				continue
 			}
 			sb := ldr.MakeSymbolUpdater(s)

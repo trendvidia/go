@@ -434,9 +434,18 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 				continue // Already an import (e.g., Windows API)
 			}
 			// Skip DATA/RODATA — no IAT indirection on amd64.
-			// Exception: ..inittask symbols must be converted to prevent
-			// double-initialization of host-provided packages.
-			if !st.IsText() && !strings.HasSuffix(symName, "..inittask") {
+			// Exceptions:
+			// - ..inittask: must be converted to prevent double-init
+			// - runtime.writeBarrier: must be shared so the plugin's
+			//   inline write barrier check sees the host's GC state.
+			//   The CMPL reads the IAT pointer (always non-zero), so
+			//   write barriers are always "enabled" in plugin code.
+			//   The host's gcWriteBarrier checks the real state and
+			//   handles it correctly. Without this, parallel GC crashes
+			//   because the plugin never executes write barriers.
+			if !st.IsText() &&
+				!strings.HasSuffix(symName, "..inittask") &&
+				symName != "runtime.writeBarrier" {
 				continue
 			}
 			sb := ldr.MakeSymbolUpdater(s)

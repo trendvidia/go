@@ -83,6 +83,10 @@ func peGenerateImportLibrary(ctxt *Link) {
 	// so the import library must match. Critical symbols like
 	// runtime.addmoduledata are made reachable by the deadcode pass
 	// (which marks all defined symbols reachable for plugin hosts).
+	// Collect unique symbols by ext name. When both ABI0 and ABIInternal
+	// versions exist for a function, we only need one import library entry
+	// (PE imports are by name, not ABI version).
+	seen := make(map[string]bool)
 	var symbols []impLibSymbol
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
 		if !ldr.AttrReachable(s) {
@@ -93,9 +97,10 @@ func peGenerateImportLibrary(ctxt *Link) {
 			continue
 		}
 		name := ldr.SymExtname(s)
-		if peSkipSymName(name) {
+		if peSkipSymName(name) || seen[name] {
 			continue
 		}
+		seen[name] = true
 		isFunc := st.IsText()
 		symbols = append(symbols, impLibSymbol{name: name, isFunc: isFunc})
 		// PE export ordinals are uint16; cap at 65535.

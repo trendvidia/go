@@ -1412,15 +1412,33 @@ func initdynexport(ctxt *Link) {
 	// The PE format's NumberOfFunctions field is uint32, but ordinals
 	// are uint16, so we cap at MaxUint16.
 	maxExports := math.MaxUint16
+
+	// For Windows plugin support, deduplicate exports by ext name.
+	// When a function has both ABI0 (ver=0) and ABIInternal (ver=1)
+	// versions, export only the ABIInternal version. Plugin code calls
+	// functions using ABIInternal (arguments in registers). Exporting
+	// the ABI0 wrapper (arguments on stack) would cause an ABI mismatch
+	// when the plugin calls through the IAT thunk.
+	seen := make(map[string]loader.Sym)
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
 		if !ldr.AttrReachable(s) || !ldr.AttrCgoExportDynamic(s) {
 			continue
 		}
+		name := ldr.SymExtname(s)
+		if prev, ok := seen[name]; ok {
+			// Prefer ABIInternal (higher version) over ABI0.
+			if ldr.SymVersion(s) > ldr.SymVersion(prev) {
+				seen[name] = s
+			}
+			continue
+		}
+		seen[name] = s
+	}
+
+	for _, s := range seen {
 		if len(dexport) >= maxExports {
-			// Silently stop collecting once we hit the PE limit.
 			break
 		}
-
 		dexport = append(dexport, s)
 	}
 

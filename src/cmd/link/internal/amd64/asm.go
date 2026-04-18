@@ -86,13 +86,43 @@ func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
 			dllmain.AddUint8(op1)
 		}
 	}
-	// push rbp
-	dm(0x55)
-	// mov rbp, rsp
-	dm(0x48, 0x89, 0xe5)
-	// push rdi (save callee-save register)
+	// DllMain is called for DLL_PROCESS_ATTACH (1), DLL_THREAD_ATTACH (2),
+	// DLL_THREAD_DETACH (3), and DLL_PROCESS_DETACH (0). We must only
+	// call addmoduledata on DLL_PROCESS_ATTACH. Without this check,
+	// each new OS thread triggers DLL_THREAD_ATTACH → addmoduledata
+	// corrupts the module list → GC crash.
+	//
+	// Layout:
+	//   cmp edx, 1           ; fdwReason == DLL_PROCESS_ATTACH?
+	//   jne skip              ; skip addmoduledata for other reasons
+	//   push rdi
+	//   sub rsp, 0x28
+	//   lea rdi, [rip+moduledata]
+	//   call addmoduledata
+	//   add rsp, 0x28
+	//   pop rdi
+	// skip:
+	//   mov eax, 1            ; return TRUE
+	//   ret
+
+	// cmp edx, 1 (fdwReason == DLL_PROCESS_ATTACH?)
+	dm(0x83, 0xfa, 0x01)
+
+	// Compute the body size so we can emit the correct JNE offset.
+	// The body is: push rdi(1) + sub rsp(4) + lea rdi(7+4=11) + call(5+4=9) + add rsp(4) + pop rdi(1) = 30 bytes
+	// But lea has a 4-byte reloc placeholder and call has a 4-byte reloc, accounted by AddPCRelPlus/AddUint32.
+
+	// jne skip — we'll use a two-byte JNE with a forward jump.
+	// The exact distance depends on the call instruction. We build
+	// the body first, then fix up.
+
+	// Save current size as the JNE instruction location.
+	jnePos := dllmain.Size()
+	dm(0x75, 0x00) // placeholder, will fix below
+
+	// push rdi
 	dm(0x57)
-	// sub rsp, 0x28 (shadow space + alignment for Windows x64 calling convention)
+	// sub rsp, 0x28
 	dm(0x48, 0x83, 0xec, 0x28)
 
 	// lea rdi, [rip + local.pluginmoduledata]
@@ -110,14 +140,19 @@ func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
 		r.SetSym(amd)
 	}
 
-	// mov eax, 1 (return TRUE)
-	dm(0xb8, 0x01, 0x00, 0x00, 0x00)
 	// add rsp, 0x28
 	dm(0x48, 0x83, 0xc4, 0x28)
 	// pop rdi
 	dm(0x5f)
-	// pop rbp
-	dm(0x5d)
+
+	// Patch the JNE displacement (offset from byte after JNE to skip target).
+	bodySize := dllmain.Size() - jnePos - 2 // 2 = size of JNE instruction
+	data := dllmain.Data()
+	data[jnePos+1] = byte(bodySize)
+
+	// skip:
+	// mov eax, 1 (return TRUE)
+	dm(0xb8, 0x01, 0x00, 0x00, 0x00)
 	// ret
 	dm(0xc3)
 }

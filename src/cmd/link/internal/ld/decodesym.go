@@ -10,10 +10,8 @@ import (
 	"cmd/link/internal/sym"
 	"debug/elf"
 	"encoding/binary"
-	"fmt"
 	"internal/abi"
 	"log"
-	"os"
 )
 
 // Decoding the type.* symbols.	 This has to be in sync with
@@ -243,15 +241,6 @@ func decodetypeGcmask(ctxt *Link, s loader.Sym) []byte {
 	}
 	relocs := ctxt.loader.Relocs(s)
 	mask := decodeRelocSym(ctxt.loader, s, &relocs, 2*int32(ctxt.Arch.PtrSize)+8+1*int32(ctxt.Arch.PtrSize))
-	if ctxt.BuildMode == BuildModePlugin && ctxt.IsWindows() {
-		maskData := ctxt.loader.Data(mask)
-		fmt.Fprintf(os.Stderr, "gcmask: type=%s mask_sym=%s mask_type=%v mask_data=[",
-			ctxt.loader.SymName(s), ctxt.loader.SymName(mask), ctxt.loader.SymType(mask))
-		for _, b := range maskData {
-			fmt.Fprintf(os.Stderr, " %02x", b)
-		}
-		fmt.Fprintf(os.Stderr, " ] mask_size=%d\n", ctxt.loader.SymSize(mask))
-	}
 	return ctxt.loader.Data(mask)
 }
 

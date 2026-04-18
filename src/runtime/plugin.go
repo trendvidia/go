@@ -22,45 +22,6 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	if md == nil {
 		throw("runtime: no plugin module data")
 	}
-
-	// Diagnostic: print plugin moduledata bounds for debugging.
-	println("plugin moduledata diagnostic:")
-	println("  text=", hex(md.text), "etext=", hex(md.etext))
-	println("  data=", hex(md.data), "edata=", hex(md.edata))
-	println("  bss=", hex(md.bss), "ebss=", hex(md.ebss))
-	println("  types=", hex(md.types), "etypes=", hex(md.etypes))
-	println("  noptrdata=", hex(md.noptrdata), "enoptrdata=", hex(md.enoptrdata))
-	println("  noptrbss=", hex(md.noptrbss), "enoptrbss=", hex(md.enoptrbss))
-	println("  minpc=", hex(md.minpc), "maxpc=", hex(md.maxpc))
-	println("  ftab entries=", len(md.ftab))
-	println("  pluginpath=", md.pluginpath)
-	println("  gcdata=", hex(md.gcdata))
-	println("  gcbss=", hex(md.gcbss))
-
-	// Dump data section contents to find bad pointers.
-	dataSize := md.edata - md.data
-	println("  data contents (", dataSize, "bytes ):")
-	for i := uintptr(0); i < dataSize; i += 8 {
-		p := *(*uintptr)(unsafe.Pointer(md.data + i))
-		println("    data+", hex(i), "=", hex(p))
-	}
-	bssSize := md.ebss - md.bss
-	println("  bss contents (", bssSize, "bytes ):")
-	for i := uintptr(0); i < bssSize; i += 8 {
-		p := *(*uintptr)(unsafe.Pointer(md.bss + i))
-		println("    bss+", hex(i), "=", hex(p))
-	}
-	noptrbssSize := md.enoptrbss - md.noptrbss
-	println("  noptrbss size=", noptrbssSize)
-
-	// Validate gcdata bitmap can be read.
-	bitmapBytes := (dataSize/8 + 7) / 8
-	println("  gcdata bitmap bytes needed=", bitmapBytes)
-	for i := uintptr(0); i < bitmapBytes && i < 16; i++ {
-		b := *(*byte)(unsafe.Pointer(md.gcdata + i))
-		println("    gcdata[", i, "]=", b)
-	}
-
 	if md.pluginpath == "" {
 		throw("runtime: plugin has empty pluginpath")
 	}
@@ -100,21 +61,6 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	// Initialize the freshly loaded module.
 	modulesinit()
 	typelinksinit()
-
-	// Diagnostic: check the converted GC bitmaps after modulesinit.
-	println("  after modulesinit:")
-	println("  gcdatamask.n=", md.gcdatamask.n)
-	if md.gcdatamask.n > 0 && md.gcdatamask.bytedata != nil {
-		for i := int32(0); i < (md.gcdatamask.n+7)/8 && i < 4; i++ {
-			println("    gcdatamask byte", i, "=", *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(md.gcdatamask.bytedata)) + uintptr(i))))
-		}
-	}
-	println("  gcbssmask.n=", md.gcbssmask.n)
-	if md.gcbssmask.n > 0 && md.gcbssmask.bytedata != nil {
-		for i := int32(0); i < (md.gcbssmask.n+7)/8 && i < 4; i++ {
-			println("    gcbssmask byte", i, "=", *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(md.gcbssmask.bytedata)) + uintptr(i))))
-		}
-	}
 
 	pluginftabverify(md)
 	moduledataverify1(md)

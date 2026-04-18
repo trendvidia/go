@@ -1492,17 +1492,6 @@ func (p *GCProg) AddSym(s loader.Sym) {
 		return
 	}
 
-	// Always print for Windows plugin builds to debug GC bitmap issues.
-	if debugGCProg || (p.ctxt.BuildMode == BuildModePlugin && p.ctxt.IsWindows()) {
-		sectName := "?"
-		if sect := ldr.SymSect(s); sect != nil {
-			sectName = sect.Name
-		}
-		fmt.Fprintf(os.Stderr, "gcprog sym: %s at off=%d (ptr=%d) size=%d type=%s sect=%s symtype=%v\n",
-			ldr.SymName(s), ldr.SymValue(s), ldr.SymValue(s)/int64(p.ctxt.Arch.PtrSize),
-			ldr.SymSize(s), ldr.SymName(typ), sectName, ldr.SymType(s))
-	}
-
 	sval := ldr.SymValue(s)
 	p.AddType(sval, typ)
 }
@@ -1528,14 +1517,6 @@ func (p *GCProg) AddType(off int64, typ loader.Sym) {
 		// Copy pointers from mask into program.
 		ptrsize := int64(p.ctxt.Arch.PtrSize)
 		mask := decodetypeGcmask(p.ctxt, typ)
-		if p.ctxt.BuildMode == BuildModePlugin && p.ctxt.IsWindows() {
-			fmt.Fprintf(os.Stderr, "gcprog AddType: off=%d ptrdata=%d nptr=%d mask=[",
-				off, ptrdata, ptrdata/ptrsize)
-			for i := int64(0); i < (ptrdata/ptrsize+7)/8; i++ {
-				fmt.Fprintf(os.Stderr, " %02x", mask[i])
-			}
-			fmt.Fprintf(os.Stderr, " ]\n")
-		}
 		for i := int64(0); i < ptrdata/ptrsize; i++ {
 			if (mask[i/8]>>uint(i%8))&1 != 0 {
 				p.w.Ptr(off/ptrsize + i)

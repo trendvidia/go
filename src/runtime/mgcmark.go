@@ -226,31 +226,13 @@ func markroot(gcw *gcWork, i uint32, flushBgCredit bool) int64 {
 	case work.baseData <= i && i < work.baseBSS:
 		workCounter = &gcController.globalsScanWork
 		for _, datap := range activeModules() {
-			if datap.pluginpath != "" {
-				println("GC markroot data: plugin=", datap.pluginpath,
-					"data=", hex(datap.data), "size=", datap.edata-datap.data,
-					"mask=", hex(uintptr(unsafe.Pointer(datap.gcdatamask.bytedata))),
-					"mask.n=", datap.gcdatamask.n)
-			}
 			workDone += markrootBlock(datap.data, datap.edata-datap.data, datap.gcdatamask.bytedata, gcw, int(i-work.baseData))
-			if datap.pluginpath != "" {
-				println("GC markroot data: plugin done")
-			}
 		}
 
 	case work.baseBSS <= i && i < work.baseSpans:
 		workCounter = &gcController.globalsScanWork
 		for _, datap := range activeModules() {
-			if datap.pluginpath != "" {
-				println("GC markroot bss: plugin=", datap.pluginpath,
-					"bss=", hex(datap.bss), "size=", datap.ebss-datap.bss,
-					"mask=", hex(uintptr(unsafe.Pointer(datap.gcbssmask.bytedata))),
-					"mask.n=", datap.gcbssmask.n)
-			}
 			workDone += markrootBlock(datap.bss, datap.ebss-datap.bss, datap.gcbssmask.bytedata, gcw, int(i-work.baseBSS))
-			if datap.pluginpath != "" {
-				println("GC markroot bss: plugin done")
-			}
 		}
 
 	case i == fixedRootFinalizers:

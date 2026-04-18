@@ -435,8 +435,11 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			if st == sym.SDYNIMPORT {
 				continue // Already an import (e.g., Windows API)
 			}
-			if !st.IsText() {
-				continue // Skip DATA/RODATA — no IAT indirection on amd64
+			// Skip DATA/RODATA — no IAT indirection on amd64.
+			// Exception: ..inittask symbols must be converted to prevent
+			// double-initialization of host-provided packages.
+			if !st.IsText() && !strings.HasSuffix(symName, "..inittask") {
+				continue
 			}
 			sb := ldr.MakeSymbolUpdater(s)
 			sb.SetType(sym.SDYNIMPORT)

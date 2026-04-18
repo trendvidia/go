@@ -95,11 +95,20 @@ func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
 	// sub rsp, 0x28 (shadow space + alignment for Windows x64 calling convention)
 	dm(0x48, 0x83, 0xec, 0x28)
 
-	// DIAGNOSTIC: Skip addmoduledata to test if DLL loading alone
-	// causes GC crash. DllMain just returns TRUE without registering
-	// the plugin moduledata.
-	// TODO: Restore addmoduledata call after diagnostic.
-	_ = ctxt.Moduledata // suppress unused warning
+	// lea rdi, [rip + local.pluginmoduledata]
+	dm(0x48, 0x8d, 0x3d)
+	dllmain.AddPCRelPlus(ctxt.Arch, ctxt.Moduledata, 0)
+
+	// Call runtime.addmoduledata via direct call + thunk.
+	amd := ldr.Lookup("runtime.addmoduledata", 0)
+	if amd != 0 {
+		dm(0xe8)
+		dllmain.AddUint32(ctxt.Arch, 0)
+		r, _ := dllmain.AddRel(objabi.R_CALL)
+		r.SetOff(int32(dllmain.Size() - 4))
+		r.SetSiz(4)
+		r.SetSym(amd)
+	}
 
 	// mov eax, 1 (return TRUE)
 	dm(0xb8, 0x01, 0x00, 0x00, 0x00)

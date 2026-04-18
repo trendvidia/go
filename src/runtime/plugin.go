@@ -101,6 +101,21 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	modulesinit()
 	typelinksinit()
 
+	// Diagnostic: check the converted GC bitmaps after modulesinit.
+	println("  after modulesinit:")
+	println("  gcdatamask.n=", md.gcdatamask.n)
+	if md.gcdatamask.n > 0 && md.gcdatamask.bytedata != nil {
+		for i := int32(0); i < (md.gcdatamask.n+7)/8 && i < 4; i++ {
+			println("    gcdatamask byte", i, "=", *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(md.gcdatamask.bytedata)) + uintptr(i))))
+		}
+	}
+	println("  gcbssmask.n=", md.gcbssmask.n)
+	if md.gcbssmask.n > 0 && md.gcbssmask.bytedata != nil {
+		for i := int32(0); i < (md.gcbssmask.n+7)/8 && i < 4; i++ {
+			println("    gcbssmask byte", i, "=", *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(md.gcbssmask.bytedata)) + uintptr(i))))
+		}
+	}
+
 	pluginftabverify(md)
 	moduledataverify1(md)
 

@@ -37,6 +37,33 @@ func peSkipSymName(name string) bool {
 	return false
 }
 
+// peSectionMarkerSym reports whether name is a linker-defined section
+// boundary symbol. These mark the start/end of PE sections in the
+// moduledata and must never be imported from the host — doing so would
+// make the plugin's moduledata point to the HOST's section bounds
+// instead of the DLL's, causing the GC to crash.
+var peSectionMarkers = map[string]bool{
+	"runtime.text":       true,
+	"runtime.etext":      true,
+	"runtime.types":      true,
+	"runtime.etypes":     true,
+	"runtime.rodata":     true,
+	"runtime.erodata":    true,
+	"runtime.noptrdata":  true,
+	"runtime.enoptrdata": true,
+	"runtime.data":       true,
+	"runtime.edata":      true,
+	"runtime.bss":        true,
+	"runtime.ebss":       true,
+	"runtime.noptrbss":   true,
+	"runtime.enoptrbss":  true,
+	"runtime.end":        true,
+	"runtime.gcdata":     true,
+	"runtime.gcbss":      true,
+	"runtime.covctrs":    true,
+	"runtime.ecovctrs":   true,
+}
+
 // impLibSymbol holds info about a symbol to include in the import library.
 type impLibSymbol struct {
 	name   string
@@ -382,36 +409,24 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		if strings.HasSuffix(symName, "\u00b7f") {
 			continue
 		}
+		// Skip linker-defined section boundary markers. These must
+		// remain local so the plugin's moduledata points to the DLL's
+		// own sections, not the host's.
+		if peSectionMarkers[symName] {
+			continue
+		}
 
-		// Only convert TEXT (function) symbols to SDYNIMPORT. DATA and
-		// RODATA symbols must remain as local copies because compiled
-		// code accesses them directly (no IAT indirection). Converting
-		// data symbols would cause the code to read IAT pointer values
-		// instead of actual data, corrupting runtime state (e.g.,
-		// writeBarrier, gcController) and crashing the GC.
-		//
-		// Must convert BOTH ABI versions (ABI0 and ABIInternal) for
-		// functions — Go code calls the ABIInternal version, while
-		// the ABI0 version is a wrapper.
+		// Convert to SDYNIMPORT. Must convert BOTH ABI versions (ABI0
+		// and ABIInternal) — Go code calls the ABIInternal version,
+		// while the ABI0 version is a wrapper.
 		found := false
 		for _, ver := range []int{0, 1} {
 			s := ldr.Lookup(symName, ver)
 			if s == 0 {
 				continue
 			}
-			st := ldr.SymType(s)
-			if st == sym.SDYNIMPORT {
+			if ldr.SymType(s) == sym.SDYNIMPORT {
 				continue // Already an import (e.g., Windows API)
-			}
-			// Only convert functions, not data. Data symbols accessed
-			// directly by compiled code can't go through IAT indirection.
-			// Exception: ..inittask symbols must be converted so the
-			// plugin doesn't re-run init functions the host already ran
-			// (e.g., runtime.init.7 starts forcegchelper — running it
-			// twice causes "forcegc: phase error").
-			isInitTask := strings.HasSuffix(symName, "..inittask")
-			if !st.IsText() && !isInitTask {
-				continue
 			}
 			sb := ldr.MakeSymbolUpdater(s)
 			sb.SetType(sym.SDYNIMPORT)

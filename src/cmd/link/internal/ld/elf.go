@@ -36,6 +36,30 @@ func ldelf(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 	ctxt.Textp = append(ctxt.Textp, textp...)
 }
 
+// openbsdArgs appends OpenBSD-specific external-linker flags to argv
+// during hostlink. OpenBSD is ELF-family, so this lives in elf.go.
+//   - -pthread is always required.
+//   - -Wl,-nopie disables PIE for non-PIE buildmodes (OpenBSD ld
+//     defaults to PIE).
+//   - -Wl,-z,nobtcfi disables BTI/CFI when supported (OpenBSD 7.4+);
+//     remove the linkerFlagSupported guard once 7.5 ships and 7.3 is EOL.
+//   - -Wl,--no-execute-only is needed on arm64 because the Go arm64
+//     assembler emits constants in the text section rather than rodata
+//     (golang.org/issue/59615).
+func openbsdArgs(ctxt *Link, argv []string) []string {
+	argv = append(argv, "-pthread")
+	if ctxt.BuildMode != BuildModePIE {
+		argv = append(argv, "-Wl,-nopie")
+	}
+	if linkerFlagSupported(ctxt.Arch, argv[0], "", "-Wl,-z,nobtcfi") {
+		argv = append(argv, "-Wl,-z,nobtcfi")
+	}
+	if ctxt.Arch.InFamily(sys.ARM64) {
+		argv = append(argv, "-Wl,--no-execute-only")
+	}
+	return argv
+}
+
 /*
  * Derived from:
  * $FreeBSD: src/sys/sys/elf32.h,v 1.8.14.1 2005/12/30 22:13:58 marcel Exp $

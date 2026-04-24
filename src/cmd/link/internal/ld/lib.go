@@ -1750,35 +1750,7 @@ func (ctxt *Link) hostlink() {
 	argv = append(argv, godotopath)
 	argv = append(argv, hostObjCopyPaths...)
 	if ctxt.HeadType == objabi.Haix {
-		// We want to have C files after Go files to remove
-		// trampolines csects made by ld.
-		argv = append(argv, "-nostartfiles")
-		argv = append(argv, "/lib/crt0_64.o")
-
-		extld := ctxt.extld()
-		name, args := extld[0], extld[1:]
-		// Get starting files.
-		getPathFile := func(file string) string {
-			args := append(args, "-maix64", "--print-file-name="+file)
-			out, err := exec.Command(name, args...).CombinedOutput()
-			if err != nil {
-				log.Fatalf("running %s failed: %v\n%s", extld, err, out)
-			}
-			return strings.Trim(string(out), "\n")
-		}
-		// Since GCC version 11, the 64-bit version of GCC starting files
-		// are now suffixed by "_64". Even under "-maix64" multilib directory
-		// "crtcxa.o" is 32-bit.
-		crtcxa := getPathFile("crtcxa_64.o")
-		if !filepath.IsAbs(crtcxa) {
-			crtcxa = getPathFile("crtcxa.o")
-		}
-		crtdbase := getPathFile("crtdbase_64.o")
-		if !filepath.IsAbs(crtdbase) {
-			crtdbase = getPathFile("crtdbase.o")
-		}
-		argv = append(argv, crtcxa)
-		argv = append(argv, crtdbase)
+		argv = xcoffCrtArgs(ctxt, argv)
 	}
 
 	if ctxt.linkShared {

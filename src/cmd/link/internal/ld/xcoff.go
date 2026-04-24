@@ -8,8 +8,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math/bits"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -94,6 +96,48 @@ func xcoffArgs(ctxt *Link, argv []string) []string {
 	argv = append(argv, "-Wl,-bnoobjreorder")
 	argv = append(argv, "-mcmodel=large")
 	argv = append(argv, "-Wl,-bbigtoc")
+	return argv
+}
+
+// xcoffCrtArgs appends AIX-specific startup-file arguments (crt0_64.o,
+// crtcxa{,_64}.o, crtdbase{,_64}.o) to argv during hostlink. These come
+// AFTER all .o files so that ld removes the trampoline csects that
+// would otherwise survive an ld pass over Go-then-C input. -nostartfiles
+// tells gcc to omit its own startup files since we provide them
+// explicitly. Locating the per-arch suffixed startup files is done by
+// asking the configured external linker via --print-file-name; some
+// older gcc installations don't have the _64 variants, so we fall back
+// to the unsuffixed names.
+func xcoffCrtArgs(ctxt *Link, argv []string) []string {
+	// Place C startup files after Go files so ld can clean up
+	// trampoline csects.
+	argv = append(argv, "-nostartfiles")
+	argv = append(argv, "/lib/crt0_64.o")
+
+	extld := ctxt.extld()
+	name, args := extld[0], extld[1:]
+	getPathFile := func(file string) string {
+		args := append(args, "-maix64", "--print-file-name="+file)
+		out, err := exec.Command(name, args...).CombinedOutput()
+		if err != nil {
+			log.Fatalf("running %s failed: %v\n%s", extld, err, out)
+		}
+		return strings.Trim(string(out), "\n")
+	}
+	// Since GCC 11, the 64-bit variants of the startup files are
+	// suffixed with "_64". On older installs, "-maix64" still
+	// resolves to the 32-bit "crtcxa.o", so we have to try the
+	// suffixed name first and fall back.
+	crtcxa := getPathFile("crtcxa_64.o")
+	if !filepath.IsAbs(crtcxa) {
+		crtcxa = getPathFile("crtcxa.o")
+	}
+	crtdbase := getPathFile("crtdbase_64.o")
+	if !filepath.IsAbs(crtdbase) {
+		crtdbase = getPathFile("crtdbase.o")
+	}
+	argv = append(argv, crtcxa)
+	argv = append(argv, crtdbase)
 	return argv
 }
 

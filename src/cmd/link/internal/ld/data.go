@@ -1916,6 +1916,38 @@ func (state *dodataState) allocateNamedSectionAndAssignSyms(seg *sym.Segment, se
 	return sect
 }
 
+// chooseRodataSegment selects the segment used to host the .rodata
+// section and its relatives. ELF internal-link plugins and Windows
+// place rodata in its own Segrodata; everything else (Mach-O, AIX,
+// Plan9, and ELF external-link) folds rodata into the text segment.
+func chooseRodataSegment(ctxt *Link) *sym.Segment {
+	if ctxt.IsELF && ctxt.LinkMode == LinkInternal {
+		return &Segrodata
+	}
+	if ctxt.HeadType == objabi.Hwindows {
+		return &Segrodata
+	}
+	return &Segtext
+}
+
+// useSeparateRelroSegment reports whether relro data should occupy its
+// own Segrelrodata segment. Internal-link ELF, AIX, and Darwin all use
+// a separate segment; only external-link non-AIX non-Darwin (i.e. ELF
+// with the system linker) folds relro into the rodata segment, because
+// using a separate segment with the external linker triggered moduledata
+// corruption (https://golang.org/cl/...).
+func useSeparateRelroSegment(ctxt *Link) bool {
+	return ctxt.LinkMode != LinkExternal || ctxt.IsAIX() || ctxt.IsDarwin()
+}
+
+// useGNURelroSectionNames reports whether the linker should emit
+// GNU-style ".data.rel.ro.FOO" section names for relro data. Darwin
+// uses standard names; every other format that supports relro uses
+// the GNU naming convention.
+func useGNURelroSectionNames(ctxt *Link) bool {
+	return !ctxt.IsDarwin()
+}
+
 // allocateDataSections allocates sym.Section objects for data/rodata
 // (and related) symbols, and then assigns symbols to those sections.
 func (state *dodataState) allocateDataSections(ctxt *Link) {
@@ -2096,14 +2128,7 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 	 * since it's not our decision; that code expects the sections in
 	 * segtext.
 	 */
-	var segro *sym.Segment
-	if ctxt.IsELF && ctxt.LinkMode == LinkInternal {
-		segro = &Segrodata
-	} else if ctxt.HeadType == objabi.Hwindows {
-		segro = &Segrodata
-	} else {
-		segro = &Segtext
-	}
+	segro := chooseRodataSegment(ctxt)
 
 	state.datsize = 0
 
@@ -2176,7 +2201,7 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 
 	if ctxt.UseRelro() {
 		segrelro := &Segrelrodata
-		if ctxt.LinkMode == LinkExternal && !ctxt.IsAIX() && !ctxt.IsDarwin() {
+		if !useSeparateRelroSegment(ctxt) {
 			// Using a separate segment with an external
 			// linker results in some programs moving
 			// their data sections unexpectedly, which
@@ -2189,7 +2214,7 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 			state.datsize = 0
 		}
 
-		if !ctxt.IsDarwin() { // We don't need the special names on darwin.
+		if useGNURelroSectionNames(ctxt) { // Darwin doesn't need the special names.
 			genrelrosecname = func(suffix string) string {
 				return ".data.rel.ro" + suffix
 			}

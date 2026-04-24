@@ -706,6 +706,22 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 	nitablinks := uint64(ldr.SymSize(itablinkSym)) / uint64(ctxt.Arch.PtrSize)
 	slice(itablinkSym, nitablinks)
 
+	// The typeptrs slice (addresses of go.typeptr.X slots) and parallel
+	// typeptroffs slice (typeOff of each slot's target type). Populated
+	// when -typetab was passed to the compiler; empty otherwise.
+	typeptrsSym := ldr.Lookup("runtime.typeptrs", 0)
+	ntypeptrs := uint64(ldr.SymSize(typeptrsSym)) / uint64(ctxt.Arch.PtrSize)
+	slice(typeptrsSym, ntypeptrs)
+
+	typeptroffsSym := ldr.Lookup("runtime.typeptroffs", 0)
+	slice(typeptroffsSym, ntypeptrs)
+
+	// The itabptrs slice (addresses of go.itabptr.X slots). Populated
+	// when -typetab was passed to the compiler; empty otherwise.
+	itabptrsSym := ldr.Lookup("runtime.itabptrs", 0)
+	nitabptrs := uint64(ldr.SymSize(itabptrsSym)) / uint64(ctxt.Arch.PtrSize)
+	slice(itabptrsSym, nitabptrs)
+
 	// The ptab slice
 	if ptab := ldr.Lookup("go:plugin.tabs", 0); ptab != 0 && ldr.AttrReachable(ptab) {
 		ldr.SetAttrLocal(ptab, true)

@@ -35,6 +35,16 @@ func peSkipSymName(name string) bool {
 	if strings.HasPrefix(name, "type:") || strings.HasPrefix(name, "type..") {
 		return true
 	}
+	// Per-module indirection slots emitted by -typetab: go.typeptr.X and
+	// go.itabptr.X must stay local to each module so that (a) each
+	// module's code can load from its own slot to get its own canonical
+	// *_type / *itab (possibly rewritten at plugin load by typeptrsinit
+	// / itabptrsinit), and (b) pluginimplib doesn't route the load
+	// through a PE/IAT indirection that returns the slot's IAT-entry
+	// address instead of the slot's content.
+	if strings.HasPrefix(name, "go.typeptr.") || strings.HasPrefix(name, "go.itabptr.") {
+		return true
+	}
 	// Compiler-auto-generated per-package symbols use a `pkg..symname.N`
 	// pattern (double dot in the middle): interface-switch caches,
 	// type-assert caches, gcprog tables, etc. These are layout-specific

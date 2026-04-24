@@ -924,6 +924,12 @@ func (s *state) checkPtrAlignment(n *ir.ConvExpr, v *ssa.Value, count *ssa.Value
 func (s *state) reflectType(typ *types.Type) *ssa.Value {
 	// TODO(mdempsky): Make this Fatalf under Unified IR; frontend needs
 	// to supply RType expressions.
+	if base.Ctxt.Flag_typetab {
+		slot := reflectdata.TypeptrLsym(typ)
+		ptrT := types.NewPtr(types.Types[types.TUINT8])
+		loadExpr := ir.NewLinksymExpr(src.NoXPos, slot, ptrT)
+		return s.expr(loadExpr)
+	}
 	lsym := reflectdata.TypeLinksym(typ)
 	return s.entryNewValue1A(ssa.OpAddr, types.NewPtr(types.Types[types.TUINT8]), lsym, s.sb)
 }

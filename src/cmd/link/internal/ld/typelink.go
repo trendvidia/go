@@ -66,6 +66,123 @@ func (ctxt *Link) typelink() {
 		r.SetSiz(uint8(ptrsize))
 		r.SetType(objabi.R_ADDR)
 	}
+
+	// typeptrs / typeptroffs: per-module table of go.typeptr.<T> slot
+	// addresses and the typeOff of the <T> they resolve to. The runtime
+	// walks this at plugin load and rewrites each slot to the canonical
+	// *_type pointer via md.typemap (populated by typelinksinit) — so
+	// plugin code reading the slot sees the host's type descriptor
+	// whenever the type is shared across modules. Produced only when
+	// the compiler was invoked with -typetab (Windows plugin mode).
+	var typeptrs []loader.Sym
+	typeptrTypes := make(map[loader.Sym]loader.Sym) // slot -> underlying type:<T>
+	seenTypeptr := make(map[string]bool)
+	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+		if !ldr.AttrReachable(s) {
+			continue
+		}
+		name := ldr.SymName(s)
+		if !strings.HasPrefix(name, "go.typeptr.") {
+			continue
+		}
+		// DUPOK symbols can produce multiple loader.Sym IDs under the
+		// same name. Keep only the canonical one with the expected
+		// pointer-sized payload and its R_ADDR relocation to the type.
+		if seenTypeptr[name] {
+			continue
+		}
+		if ldr.SymSize(s) != int64(ptrsize) {
+			continue
+		}
+		srelocs := ldr.Relocs(s)
+		if srelocs.Count() < 1 {
+			continue
+		}
+		seenTypeptr[name] = true
+		typeptrs = append(typeptrs, s)
+		typeptrTypes[s] = srelocs.At(0).Sym()
+	}
+
+	tp := ldr.CreateSymForUpdate("runtime.typeptrs", 0)
+	tp.SetType(sym.SNOPTRDATA)
+	ldr.SetAttrLocal(tp.Sym(), true)
+	tp.SetSize(int64(ptrsize * len(typeptrs)))
+	tp.Grow(tp.Size())
+	if len(typeptrs) > 0 {
+		relocs = tp.AddRelocs(len(typeptrs))
+		for i, s := range typeptrs {
+			r := relocs.At(i)
+			r.SetSym(s)
+			r.SetOff(int32(i * ptrsize))
+			r.SetSiz(uint8(ptrsize))
+			r.SetType(objabi.R_ADDR)
+		}
+	}
+
+	tpo := ldr.CreateSymForUpdate("runtime.typeptroffs", 0)
+	tpo.SetType(sym.SNOPTRDATA)
+	ldr.SetAttrLocal(tpo.Sym(), true)
+	tpo.SetSize(int64(4 * len(typeptrs)))
+	tpo.Grow(tpo.Size())
+	if len(typeptrs) > 0 {
+		relocs = tpo.AddRelocs(len(typeptrs))
+		for i, s := range typeptrs {
+			r := relocs.At(i)
+			r.SetSym(typeptrTypes[s])
+			r.SetOff(int32(i * 4))
+			r.SetSiz(4)
+			r.SetType(objabi.R_ADDROFF)
+		}
+	}
+
+	// itabptrs: per-module table of go.itabptr.<X> slot addresses. Each
+	// slot references a go.itab.<X> symbol. At plugin load the runtime
+	// reads the itab's Inter and Type, canonicalizes each via md.typemap
+	// and getitab, then rewrites the slot with the canonical itab — so
+	// non-empty interface values built in the plugin carry the same itab
+	// as host / other modules. Produced only when -typetab was passed.
+	var itabptrs []loader.Sym
+	seenItabptr := make(map[string]bool)
+	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+		if !ldr.AttrReachable(s) {
+			continue
+		}
+		name := ldr.SymName(s)
+		if !strings.HasPrefix(name, "go.itabptr.") {
+			continue
+		}
+		// DUPOK symbols can produce multiple loader.Sym IDs under the
+		// same name. Keep only the canonical one with the expected
+		// pointer-sized payload and its R_ADDR relocation to the itab.
+		if seenItabptr[name] {
+			continue
+		}
+		if ldr.SymSize(s) != int64(ptrsize) {
+			continue
+		}
+		srelocs := ldr.Relocs(s)
+		if srelocs.Count() < 1 {
+			continue
+		}
+		seenItabptr[name] = true
+		itabptrs = append(itabptrs, s)
+	}
+
+	ip := ldr.CreateSymForUpdate("runtime.itabptrs", 0)
+	ip.SetType(sym.SNOPTRDATA)
+	ldr.SetAttrLocal(ip.Sym(), true)
+	ip.SetSize(int64(ptrsize * len(itabptrs)))
+	ip.Grow(ip.Size())
+	if len(itabptrs) > 0 {
+		relocs = ip.AddRelocs(len(itabptrs))
+		for i, s := range itabptrs {
+			r := relocs.At(i)
+			r.SetSym(s)
+			r.SetOff(int32(i * ptrsize))
+			r.SetSiz(uint8(ptrsize))
+			r.SetType(objabi.R_ADDR)
+		}
+	}
 }
 
 // globalptrlink gathers all per-module go.globalptr.* and go.funcptr.*

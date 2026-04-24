@@ -428,6 +428,22 @@ type moduledata struct {
 	typelinks   []int32 // offsets from types
 	itablinks   []*itab
 
+	// typeptrs / typeptroffs: per-module table emitted by the linker
+	// under -typetab (Windows plugin type dedup). Each typeptrs[i] is
+	// the address of a go.typeptr.X slot; typeptroffs[i] is the typeOff
+	// (in md.types) of the type that slot points to. At plugin load,
+	// the runtime rewrites slots whose type has a canonical host-side
+	// *_type via md.typemap (populated by typelinksinit). Empty for
+	// modules built without -typetab.
+	typeptrs    []uintptr
+	typeptroffs []int32
+
+	// itabptrs: per-module table of go.itabptr.X slot addresses. At
+	// plugin load each slot's local itab has Inter/Type canonicalized
+	// via md.typemap; getitab(cInter, cType) returns the canonical
+	// itab written back into the slot. Empty without -typetab.
+	itabptrs []uintptr
+
 	ptab []ptabEntry
 
 	pluginpath string

@@ -750,9 +750,12 @@ func walkDot(n *ir.SelectorExpr, init *ir.Nodes) ir.Node {
 // walkDotType walks an ODOTTYPE or ODOTTYPE2 node.
 func walkDotType(n *ir.TypeAssertExpr, init *ir.Nodes) ir.Node {
 	n.X = walkExpr(n.X, init)
-	// Set up interface type addresses for back end.
+	// Set up interface type addresses for back end. Route through
+	// ITabAddrForUseAt so the SSA comparison uses the canonical itab
+	// value after plugin load (matches what was written into the iface
+	// header by T2I construction that also went through this path).
 	if !n.Type().IsInterface() && !n.X.Type().IsEmptyInterface() {
-		n.ITab = reflectdata.ITabAddrAt(base.Pos, n.Type(), n.X.Type())
+		n.ITab = reflectdata.ITabAddrForUseAt(base.Pos, n.Type(), n.X.Type())
 	}
 	if n.X.Type().IsInterface() && n.Type().IsInterface() && !n.Type().IsEmptyInterface() {
 		// This kind of conversion needs a runtime call. Allocate
@@ -783,7 +786,14 @@ func walkDynamicDotType(n *ir.DynamicTypeAssertExpr, init *ir.Nodes) ir.Node {
 	n.X = walkExpr(n.X, init)
 	n.RType = walkExpr(n.RType, init)
 	n.ITab = walkExpr(n.ITab, init)
-	// Convert to non-dynamic if we can.
+	// Convert to non-dynamic if we can. Only OADDR(OLINKSYMOFFSET) — the
+	// direct address of a type symbol — is safe here: the baked static
+	// TypeAssert descriptor references the same pointer the runtime will
+	// compare against. Bare OLINKSYMOFFSET (a load from go.typeptr.<T>
+	// under -typetab) resolves to the canonical host *_type at plugin load
+	// time, which wouldn't match a plugin-local target in a static
+	// descriptor — must stay dynamic so the runtime uses the canonical
+	// value for both sides of the comparison.
 	if n.RType != nil && n.RType.Op() == ir.OADDR {
 		addr := n.RType.(*ir.AddrExpr)
 		if addr.X.Op() == ir.OLINKSYMOFFSET {

@@ -64,6 +64,7 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	globalptrsinit()
 	funcptrsinit()
 	typelinksinit()
+	typeptrsinit(md)
 
 	pluginftabverify(md)
 	moduledataverify1(md)
@@ -73,6 +74,11 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 		itabAdd(i)
 	}
 	unlock(&itabLock)
+
+	// Redirect go.itabptr.X slots to canonical itabs. Must run AFTER
+	// itabAdd above so getitab finds existing entries, and AFTER
+	// typeptrsinit so itab Inter/Type canonicalize through typemap.
+	itabptrsinit(md)
 
 	// Build a map of symbol names to symbols. Here in the runtime
 	// we fill out the first word of the interface, the type. We

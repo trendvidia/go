@@ -486,6 +486,81 @@ func typelinksinit() {
 	}
 }
 
+// typeptrsinit rewrites every go.typeptr.X slot in md to the canonical
+// *_type pointer when md.typemap has an entry for the slot's type. Each
+// typeptrs[i] is the linker-computed address of a slot; typeptroffs[i]
+// is the typeOff (in md.types) of the type that slot was emitted for.
+//
+// Must be called after typelinksinit has populated md.typemap. Slots
+// whose type has no host-side canonical (typemap entry missing or same
+// as the local type) retain their compile-time initializer — the
+// plugin's own type descriptor pointer — which is correct because the
+// comparison is self-referential in that case.
+func typeptrsinit(md *moduledata) {
+	if len(md.typeptrs) != len(md.typeptroffs) {
+		throw("runtime: typeptrs / typeptroffs length mismatch")
+	}
+	for i, slotAddr := range md.typeptrs {
+		off := typeOff(md.typeptroffs[i])
+		canonical, ok := md.typemap[off]
+		if !ok {
+			continue
+		}
+		slot := (*unsafe.Pointer)(unsafe.Pointer(slotAddr))
+		*slot = unsafe.Pointer(canonical)
+	}
+}
+
+// canonicalizeTypeInModule returns the canonical *_type for a pointer
+// produced by md's linker (lives in [md.types, md.etypes)). Consults
+// md.typemap (populated by typelinksinit) to find the canonical pointer
+// shared with prior modules. Returns p unchanged if outside md.types
+// (already canonical or imported).
+func canonicalizeTypeInModule(md *moduledata, p *_type) *_type {
+	if p == nil {
+		return nil
+	}
+	addr := uintptr(unsafe.Pointer(p))
+	if addr < md.types || addr >= md.etypes {
+		return p
+	}
+	off := typeOff(addr - md.types)
+	if canonical, ok := md.typemap[off]; ok {
+		return canonical
+	}
+	return p
+}
+
+// itabptrsinit rewrites every go.itabptr.X slot in md to the canonical
+// itab for (canonicalInter, canonicalType). Reads each slot's local
+// itab, canonicalizes Inter and Type via md.typemap, then calls
+// getitab — or creates — the canonical itab registered in the global
+// itabTable. Overwrites the slot with that canonical pointer so user
+// code loading through the slot sees the same itab as host / other
+// modules.
+//
+// Must run AFTER typeptrsinit (typemap populated) AND after the
+// plugin's own itabs have been added to the global itabTable in
+// plugin_lastmoduleinit — otherwise getitab may create a spurious
+// second canonical.
+func itabptrsinit(md *moduledata) {
+	for _, slotAddr := range md.itabptrs {
+		slot := (**itab)(unsafe.Pointer(slotAddr))
+		local := *slot
+		if local == nil {
+			continue
+		}
+		// abi.InterfaceType embeds abi.Type at offset 0, so an
+		// *interfacetype and *_type at the same address refer to the
+		// same underlying descriptor.
+		interAsType := (*_type)(unsafe.Pointer(local.Inter))
+		cInter := (*interfacetype)(unsafe.Pointer(canonicalizeTypeInModule(md, interAsType)))
+		cType := canonicalizeTypeInModule(md, local.Type)
+		*slot = getitab(cInter, cType, false)
+	}
+}
+
+
 type _typePair struct {
 	t1 *_type
 	t2 *_type

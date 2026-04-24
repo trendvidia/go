@@ -122,6 +122,7 @@ type CmdFlags struct {
 	Spectre            string       "help:\"enable spectre mitigations in `list` (all, index, ret)\""
 	Std                bool         "help:\"compiling standard library\""
 	SymABIs            string       "help:\"read symbol ABIs from `file`\""
+	Typetab            *bool        "help:\"emit per-module typeptr/itabptr slots for cross-module type dedup (Windows plugins)\"" // &Ctxt.Flag_typetab, set below
 	TraceProfile       string       "help:\"write an execution trace to `file`\""
 	TrimPath           string       "help:\"remove `prefix` from recorded source file paths\""
 	WB                 bool         "help:\"enable write barrier\"" // TODO: remove
@@ -167,6 +168,7 @@ func ParseFlags() {
 	Flag.DwarfLocationLists = &Ctxt.Flag_locationlists
 	*Flag.DwarfLocationLists = true
 	Flag.Dynlink = &Ctxt.Flag_dynlink
+	Flag.Typetab = &Ctxt.Flag_typetab
 	Flag.EmbedCfg = readEmbedCfg
 	Flag.Env = addEnv
 	Flag.GenDwarfInl = 2

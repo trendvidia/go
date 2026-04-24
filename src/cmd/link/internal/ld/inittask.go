@@ -190,3 +190,62 @@ func (ctxt *Link) inittaskSym(rootNames []string, symName string) loader.Sym {
 	}
 	return sched.Sym()
 }
+
+// rebuildPluginInittasksAfterImplib removes entries from the plugin's
+// go:plugin.inittasks schedule whose target ..inittask symbol was just
+// converted to SDYNIMPORT by peLoadFromHostExe / peLoadImportLibrary.
+//
+// The original inittask schedule runs earlier in the linker pipeline
+// (before pluginimplib conversion) and therefore cannot know which
+// imported packages will later be resolved against the host. After
+// conversion, any inittask whose SymType is SDYNIMPORT represents a
+// host-provided package whose init already ran in the host process —
+// running doInit on it from the plugin would (a) re-run side effects
+// and (b) fault, because the PE IAT thunk the R_ADDR reloc targets is
+// in the plugin's read-only text section.
+//
+// Mirrors the skip logic in inittaskSym but operates on the already-
+// built schedule.
+func rebuildPluginInittasksAfterImplib(ctxt *Link) {
+	ldr := ctxt.loader
+	sched := ctxt.mainInittasks
+	if sched == 0 {
+		sched = ldr.Lookup("go:plugin.inittasks", 0)
+	}
+	if sched == 0 {
+		return
+	}
+	relocs := ldr.Relocs(sched)
+	ptrsize := ctxt.Arch.PtrSize
+	// Collect surviving targets.
+	var survivors []loader.Sym
+	for i := 0; i < relocs.Count(); i++ {
+		target := relocs.At(i).Sym()
+		if target == 0 {
+			continue
+		}
+		if ldr.SymType(target) == sym.SDYNIMPORT {
+			continue
+		}
+		survivors = append(survivors, target)
+	}
+	if relocs.Count() == len(survivors) {
+		return // nothing to drop
+	}
+	// Rewrite the schedule with just the survivors.
+	sb := ldr.MakeSymbolUpdater(sched)
+	sb.SetType(sym.SNOPTRDATA)
+	sb.SetSize(int64(ptrsize * len(survivors)))
+	sb.SetData(make([]byte, ptrsize*len(survivors)))
+	sb.ResetRelocs()
+	if len(survivors) > 0 {
+		newRelocs := sb.AddRelocs(len(survivors))
+		for i, t := range survivors {
+			r := newRelocs.At(i)
+			r.SetSym(t)
+			r.SetOff(int32(i * ptrsize))
+			r.SetSiz(uint8(ptrsize))
+			r.SetType(objabi.R_ADDR)
+		}
+	}
+}

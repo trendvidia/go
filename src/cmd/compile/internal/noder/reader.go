@@ -2044,7 +2044,7 @@ func (r *reader) switchStmt(label *types.Sym) ir.Node {
 						for len(rtypes) < i {
 							rtypes = append(rtypes, nil)
 						}
-						rtypes = append(rtypes, reflectdata.TypePtrAt(cas.Pos(), types.Types[types.TBOOL]))
+						rtypes = append(rtypes, reflectdata.TypePtrForUseAt(cas.Pos(), types.Types[types.TBOOL]))
 					}
 				}
 			}
@@ -3165,7 +3165,7 @@ func (r *reader) rtype0(pos src.XPos) (typ *types.Type, rtype ir.Node) {
 	}
 
 	typ = r.typ()
-	rtype = reflectdata.TypePtrAt(pos, typ)
+	rtype = reflectdata.TypePtrForUseAt(pos, typ)
 	return
 }
 
@@ -3204,8 +3204,7 @@ func (r *reader) itab(pos src.XPos) (typ *types.Type, typRType ir.Node, iface *t
 			base.AssertfAt(!typ.HasShape(), pos, "%v is a shape type", typ)
 			base.AssertfAt(!iface.HasShape(), pos, "%v is a shape type", iface)
 
-			lsym := reflectdata.ITabLsym(typ, iface)
-			itab = typecheck.LinksymAddr(pos, lsym, types.Types[types.TUINT8])
+			itab = reflectdata.ITabAddrForUseAt(pos, typ, iface)
 		}
 	}
 

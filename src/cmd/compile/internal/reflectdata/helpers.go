@@ -33,7 +33,7 @@ func assertOp2(n ir.Node, op1, op2 ir.Op) {
 // expression that yields the *runtime._type value representing typ.
 func kindRType(pos src.XPos, typ *types.Type, k types.Kind) ir.Node {
 	base.AssertfAt(typ.Kind() == k, pos, "want %v type, have %v", k, typ)
-	return TypePtrAt(pos, typ)
+	return TypePtrForUseAt(pos, typ)
 }
 
 // mapRType asserts that typ is a map type, and returns an expression
@@ -53,7 +53,7 @@ func chanRType(pos src.XPos, typ *types.Type) ir.Node {
 // element type.
 func sliceElemRType(pos src.XPos, typ *types.Type) ir.Node {
 	base.AssertfAt(typ.IsSlice(), pos, "want slice type, have %v", typ)
-	return TypePtrAt(pos, typ.Elem())
+	return TypePtrForUseAt(pos, typ.Elem())
 }
 
 // concreteRType asserts that typ is not an interface type, and
@@ -61,7 +61,7 @@ func sliceElemRType(pos src.XPos, typ *types.Type) ir.Node {
 // representing typ.
 func concreteRType(pos src.XPos, typ *types.Type) ir.Node {
 	base.AssertfAt(!typ.IsInterface(), pos, "want non-interface type, have %v", typ)
-	return TypePtrAt(pos, typ)
+	return TypePtrForUseAt(pos, typ)
 }
 
 // AppendElemRType asserts that n is an "append" operation, and
@@ -112,7 +112,7 @@ func ConvIfaceTypeWord(pos src.XPos, n *ir.ConvExpr) ir.Node {
 	if !src.IsInterface() {
 		return ITabAddrAt(pos, src, dst) // direct iface construction
 	}
-	return TypePtrAt(pos, dst) // convI2I
+	return TypePtrForUseAt(pos, dst) // convI2I
 }
 
 // ConvIfaceSrcRType asserts that n is a conversion from

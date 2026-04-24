@@ -352,6 +352,10 @@ func buildModeInit() {
 		}
 	}
 
+	if !gccgo && cfg.Goos == "windows" {
+		forcedGcflags = append(forcedGcflags, "-typetab")
+	}
+
 	switch cfg.BuildMod {
 	case "":
 		// Behavior will be determined automatically, as if no flag were passed.

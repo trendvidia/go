@@ -582,8 +582,64 @@ func TypeLinksym(t *types.Type) *obj.LSym {
 
 // TypePtrAt returns an expression that evaluates to the
 // *runtime._type value for t.
+//
+// The returned expression is a direct address of type:<t> — suitable for
+// static initializers where the value must be computable at link time.
+// For runtime interface construction, prefer TypePtrForUseAt (which may
+// route through a per-module typeptr slot so that plugin-loaded values
+// resolve to the host's canonical *_type pointer).
 func TypePtrAt(pos src.XPos, t *types.Type) *ir.AddrExpr {
 	return typecheck.LinksymAddr(pos, TypeLinksym(t), types.Types[types.TUINT8])
+}
+
+// TypePtrForUseAt returns an expression that evaluates to the *_type
+// value for t, suitable for USE as a runtime value (e.g., written to an
+// interface header at runtime, passed to a runtime helper). For plugin-
+// compatible builds (Flag_shared || Flag_dynlink) the expression loads
+// through a per-module go.typeptr.<t> slot, which the runtime rewrites
+// at plugin load to the host's canonical *_type when available — so
+// interface{} values built in the plugin carry the same type descriptor
+// pointer the host would have used.
+//
+// Callers emitting a static initializer (where the value must be known
+// at link time) must use TypePtrAt instead; the indirection here is
+// only valid in expression contexts that execute at runtime.
+func TypePtrForUseAt(pos src.XPos, t *types.Type) ir.Node {
+	if !base.Ctxt.Flag_typetab {
+		return TypePtrAt(pos, t)
+	}
+	slot := TypeptrLsym(t)
+	// LinksymOffsetExpr used as an expression generates a load of
+	// size Type() from the symbol's offset (see ssagen/ssa.go:OLINKSYMOFFSET).
+	// Typing as *uint8 gives a pointer-sized load.
+	return ir.NewLinksymExpr(pos, slot, types.NewPtr(types.Types[types.TUINT8]))
+}
+
+// TypeptrLsym returns the linker symbol for the go.typeptr.<t> slot.
+// Exported for use from ssagen (see s.reflectType).
+//
+// The slot is a pointer-sized writable data location whose static
+// initializer is the address of type:<t>. At plugin load time, the
+// runtime may rewrite it to the host's canonical *_type for t (via
+// the typemap populated by typelinksinit); host modules leave the
+// slot self-referential. DUPOK means the linker deduplicates the slot
+// across packages that reference the same type.
+func TypeptrLsym(t *types.Type) *obj.LSym {
+	typeSym := TypeLinksym(t)
+	name := "go.typeptr." + typeSym.Name
+	s := base.Ctxt.Lookup(name)
+	// Guard against concurrent emission (signatmu mirrors how
+	// TypeLinksym protects type-descriptor metadata). Without this,
+	// two goroutines compiling packages in parallel can both see
+	// Size == 0, both call objw.Global, and the linker complains of
+	// a redeclared symbol.
+	signatmu.Lock()
+	if s.Size == 0 {
+		objw.SymPtr(s, 0, typeSym, 0)
+		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
+	}
+	signatmu.Unlock()
+	return s
 }
 
 // ITabLsym returns the LSym representing the itab for concrete type typ implementing
@@ -616,9 +672,45 @@ func itabLsym(typ, iface *types.Type, allowNonImplement bool) *obj.LSym {
 // ITabAddrAt returns an expression that evaluates to the
 // *runtime.itab value for concrete type typ implementing interface
 // iface.
+//
+// Returns a direct address of go.itab.<typ>,<iface>. Runtime iface
+// construction should prefer ITabAddrForUseAt for cross-module itab
+// deduplication under plugin loads.
 func ITabAddrAt(pos src.XPos, typ, iface *types.Type) *ir.AddrExpr {
 	lsym := itabLsym(typ, iface, false)
 	return typecheck.LinksymAddr(pos, lsym, types.Types[types.TUINT8])
+}
+
+// ITabAddrForUseAt returns an expression that evaluates to a *runtime.itab
+// suitable for USE as a runtime value (written to a non-empty interface
+// header at runtime). Under -typetab, loads through a per-module
+// go.itabptr.<X> slot that the runtime rewrites at plugin load to the
+// canonical itab returned by getitab(canonicalInter, canonicalType) —
+// so non-empty interface values built in the plugin carry the same itab
+// pointer host/other modules would have used. See TypePtrForUseAt.
+func ITabAddrForUseAt(pos src.XPos, typ, iface *types.Type) ir.Node {
+	if !base.Ctxt.Flag_typetab {
+		return ITabAddrAt(pos, typ, iface)
+	}
+	slot := itabptrLsym(typ, iface)
+	return ir.NewLinksymExpr(pos, slot, types.NewPtr(types.Types[types.TUINT8]))
+}
+
+// itabptrLsym returns the linker symbol for the go.itabptr.<X> slot
+// shadowing go.itab.<X> for (typ, iface). Pointer-sized writable data
+// initialized to &go.itab.<X>; the runtime rewrites it at plugin load
+// to getitab(canonicalInter, canonicalType). DUPOK lets the linker
+// dedup the slot across packages that reference the same (typ, iface)
+// pair.
+func itabptrLsym(typ, iface *types.Type) *obj.LSym {
+	itabSym := itabLsym(typ, iface, false)
+	name := "go.itabptr." + typ.LinkString() + "," + iface.LinkString()
+	s := base.Ctxt.Lookup(name)
+	if s.Size == 0 {
+		objw.SymPtr(s, 0, itabSym, 0)
+		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
+	}
+	return s
 }
 
 // needkeyupdate reports whether map updates with t as a key
@@ -942,8 +1034,11 @@ func writeType(t *types.Type) *obj.LSym {
 	// types in the binary, so the runtime can find them.
 	//
 	// When buildmode=shared, all types are in typelinks so the
-	// runtime can deduplicate type pointers.
-	keep := base.Ctxt.Flag_dynlink
+	// runtime can deduplicate type pointers. -typetab (Windows
+	// plugin type/itab dedup) needs the same coverage so that
+	// typeptrsinit / itabptrsinit can canonicalize every type
+	// referenced via a go.typeptr.X or go.itabptr.X slot.
+	keep := base.Ctxt.Flag_dynlink || base.Ctxt.Flag_typetab
 	if !keep && t.Sym() == nil {
 		// For an unnamed type, we only need the link if the type can
 		// be created at run time by reflect.PointerTo and similar

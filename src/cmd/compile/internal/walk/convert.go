@@ -103,8 +103,23 @@ func walkConvInterface(n *ir.ConvExpr, init *ir.Nodes) ir.Node {
 
 	// Must be converting I2I (more specific to less specific interface).
 	// Use the same code as e, _ = c.(T).
+	//
+	// Pattern matched here: TypeWord = OADDR(OLINKSYMOFFSET(type:T)) — a
+	// direct address of the target type descriptor. In that case the
+	// runtime can compare pointer-to-pointer against a statically baked
+	// target in the assertion descriptor.
+	//
+	// Bare OLINKSYMOFFSET (my go.typeptr.<T> slot load, emitted by
+	// TypePtrForUseAt under -typetab) must NOT take the static path here.
+	// The slot's value is the CANONICAL host *_type after plugin load, but
+	// the static TypeAssert descriptor still bakes in the plugin-local
+	// target pointer. The resulting direct pointer compare between a
+	// canonical *_type (from the iface's itab) and a plugin-local *_type
+	// (from the descriptor) fails, crashing reflect-heavy plugin code.
+	// The dynamic path uses TypeWord's value as the target, which is
+	// canonicalized consistently — so comparisons succeed cross-module.
 	var rhs ir.Node
-	if n.TypeWord == nil || n.TypeWord.Op() == ir.OADDR && n.TypeWord.(*ir.AddrExpr).X.Op() == ir.OLINKSYMOFFSET {
+	if n.TypeWord == nil || (n.TypeWord.Op() == ir.OADDR && n.TypeWord.(*ir.AddrExpr).X.Op() == ir.OLINKSYMOFFSET) {
 		// Fixed (not loaded from a dictionary) type.
 		ta := ir.NewTypeAssertExpr(base.Pos, c, toType)
 		ta.SetOp(ir.ODOTTYPE2)

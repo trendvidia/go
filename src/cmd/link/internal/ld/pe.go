@@ -79,6 +79,47 @@ func peNeedsGdbScriptWorkaround(ctxt *Link) bool {
 		ctxt.BuildMode == BuildModeCArchive
 }
 
+// peArgs appends Windows PE-specific external-linker flags to argv
+// during hostlink, and returns the updated argv together with the
+// linker-style detection (isMSVC) and the -Wl flag prefix to use for
+// the rest of the link. MSVC's lld-link expects single-dash options
+// while mingw expects double-dash, so the caller must use the
+// returned wlPrefix for any later -Wl flags it appends.
+//
+// Flags appended:
+//   - -mwindows / -mconsole based on the windowsgui package flag.
+//   - tsaware: marks the binary as Terminal Services aware.
+//   - nxcompat: enables Data Execution Prevention.
+//   - --major/minor-os-version and --major/minor-subsystem-version
+//     (mingw only): set PE minimum target versions.
+func peArgs(ctxt *Link, argv []string) (newArgv []string, isMSVC bool, wlPrefix string) {
+	wlPrefix = "-Wl,--"
+	isMSVC = ctxt.isMSVC()
+	if isMSVC {
+		// MSVC lld-link only accepts one-dash options for many flags.
+		// TODO: mingw clang appears to accept either; we may be able
+		// to always use one dash, but legacy compilers in use today
+		// haven't been verified.
+		wlPrefix = "-Wl,-"
+	}
+
+	if windowsgui {
+		argv = append(argv, "-mwindows")
+	} else {
+		argv = append(argv, "-mconsole")
+	}
+	argv = append(argv, wlPrefix+"tsaware")
+	argv = append(argv, wlPrefix+"nxcompat")
+
+	if !isMSVC {
+		argv = append(argv, fmt.Sprintf("-Wl,--major-os-version=%d", PeMinimumTargetMajorVersion))
+		argv = append(argv, fmt.Sprintf("-Wl,--minor-os-version=%d", PeMinimumTargetMinorVersion))
+		argv = append(argv, fmt.Sprintf("-Wl,--major-subsystem-version=%d", PeMinimumTargetMajorVersion))
+		argv = append(argv, fmt.Sprintf("-Wl,--minor-subsystem-version=%d", PeMinimumTargetMinorVersion))
+	}
+	return argv, isMSVC, wlPrefix
+}
+
 type IMAGE_IMPORT_DESCRIPTOR struct {
 	OriginalFirstThunk uint32
 	TimeDateStamp      uint32

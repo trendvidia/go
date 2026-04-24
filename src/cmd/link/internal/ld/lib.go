@@ -1467,34 +1467,7 @@ func (ctxt *Link) hostlink() {
 	case objabi.Hopenbsd:
 		argv = openbsdArgs(ctxt, argv)
 	case objabi.Hwindows:
-		isMSVC = ctxt.isMSVC()
-		if isMSVC {
-			// For various options, MSVC lld-link only accepts one dash.
-			// TODO: It seems mingw clang supports one or two dashes,
-			// maybe we can always use one dash,  but I'm not sure about
-			// legacy compilers that currently work.
-			wlPrefix = "-Wl,-"
-		}
-
-		if windowsgui {
-			argv = append(argv, "-mwindows")
-		} else {
-			argv = append(argv, "-mconsole")
-		}
-		// Mark as having awareness of terminal services, to avoid
-		// ancient compatibility hacks.
-
-		argv = append(argv, wlPrefix+"tsaware")
-
-		// Enable DEP
-		argv = append(argv, wlPrefix+"nxcompat")
-
-		if !isMSVC {
-			argv = append(argv, fmt.Sprintf("-Wl,--major-os-version=%d", PeMinimumTargetMajorVersion))
-			argv = append(argv, fmt.Sprintf("-Wl,--minor-os-version=%d", PeMinimumTargetMinorVersion))
-			argv = append(argv, fmt.Sprintf("-Wl,--major-subsystem-version=%d", PeMinimumTargetMajorVersion))
-			argv = append(argv, fmt.Sprintf("-Wl,--minor-subsystem-version=%d", PeMinimumTargetMinorVersion))
-		}
+		argv, isMSVC, wlPrefix = peArgs(ctxt, argv)
 	case objabi.Haix:
 		argv = xcoffArgs(ctxt, argv)
 	}

@@ -1349,9 +1349,7 @@ func (d *dwctxt) writelines(unit *sym.CompilationUnit, lineProlog loader.Sym) []
 		}
 	}
 
-	if d.linkctxt.HeadType == objabi.Haix {
-		addDwsectCUSize(".debug_line", unit.Lib.Pkg, uint64(unitlen))
-	}
+	xcoffDwarfRecordCUSize(d.linkctxt, ".debug_line", unit.Lib.Pkg, uint64(unitlen))
 
 	if isDwarf64(d.linkctxt) {
 		lsu.SetUint(d.arch, unitLengthOffset+4, uint64(unitlen)) // +4 because of 0xFFFFFFFF
@@ -1404,9 +1402,7 @@ func (d *dwctxt) writepcranges(unit *sym.CompilationUnit, base loader.Sym, pcs [
 		rsize += uint64(d.ldr.SymSize(s))
 	}
 
-	if d.linkctxt.HeadType == objabi.Haix {
-		addDwsectCUSize(".debug_ranges", unit.Lib.Pkg, rsize)
-	}
+	xcoffDwarfRecordCUSize(d.linkctxt, ".debug_ranges", unit.Lib.Pkg, rsize)
 
 	return syms
 }
@@ -1581,9 +1577,7 @@ func (d *dwctxt) writeframes(fs loader.Sym) dwarfSecInfo {
 		fsu.AddUintXX(d.arch, uint64(len(d.ldr.Data(fn))), d.arch.PtrSize) // address range
 		fsu.AddBytes(deltaBuf)
 
-		if d.linkctxt.HeadType == objabi.Haix {
-			addDwsectCUSize(".debug_frame", d.ldr.SymPkg(fn), fdeLength+uint64(lengthFieldSize))
-		}
+		xcoffDwarfRecordCUSize(d.linkctxt, ".debug_frame", d.ldr.SymPkg(fn), fdeLength+uint64(lengthFieldSize))
 	}
 
 	return dwarfSecInfo{syms: []loader.Sym{fs}}
@@ -1673,9 +1667,7 @@ func (d *dwctxt) writeUnitInfo(u *sym.CompilationUnit, abbrevsym loader.Sym, add
 	cusize++
 
 	// Save size for AIX symbol table.
-	if d.linkctxt.HeadType == objabi.Haix {
-		addDwsectCUSize(".debug_info", d.getPkgFromCUSym(s), uint64(cusize))
-	}
+	xcoffDwarfRecordCUSize(d.linkctxt, ".debug_info", d.getPkgFromCUSym(s), uint64(cusize))
 	if isDwarf64(d.linkctxt) {
 		cusize -= 12                          // exclude the length field.
 		su.SetUint(d.arch, 4, uint64(cusize)) // 4 because of 0XFFFFFFFF
@@ -1688,16 +1680,10 @@ func (d *dwctxt) writeUnitInfo(u *sym.CompilationUnit, abbrevsym loader.Sym, add
 
 func (d *dwctxt) writegdbscript() dwarfSecInfo {
 	// TODO (aix): make it available
-	if d.linkctxt.HeadType == objabi.Haix {
+	if xcoffDwarfSkip(d.linkctxt) {
 		return dwarfSecInfo{}
 	}
-	if d.linkctxt.LinkMode == LinkExternal && d.linkctxt.HeadType == objabi.Hwindows && d.linkctxt.BuildMode == BuildModeCArchive {
-		// gcc on Windows places .debug_gdb_scripts in the wrong location, which
-		// causes the program not to run. See https://golang.org/issue/20183
-		// Non c-archives can avoid this issue via a linker script
-		// (see fix near writeGDBLinkerScript).
-		// c-archive users would need to specify the linker script manually.
-		// For UX it's better not to deal with this.
+	if peNeedsGdbScriptWorkaround(d.linkctxt) {
 		return dwarfSecInfo{}
 	}
 	if gdbscript == "" {
@@ -2522,25 +2508,6 @@ func compilationUnitByStartPCCmp(a, b *sym.CompilationUnit) int {
 // the package name.
 func (d *dwctxt) getPkgFromCUSym(s loader.Sym) string {
 	return strings.TrimPrefix(d.ldr.SymName(s), dwarf.InfoPrefix+".pkg.")
-}
-
-// On AIX, the symbol table needs to know where are the compilation units parts
-// for a specific package in each .dw section.
-// dwsectCUSize map will save the size of a compilation unit for
-// the corresponding .dw section.
-// This size can later be retrieved with the index "sectionName.pkgName".
-var dwsectCUSizeMu sync.Mutex
-var dwsectCUSize map[string]uint64
-
-// getDwsectCUSize retrieves the corresponding package size inside the current section.
-func getDwsectCUSize(sname string, pkgname string) uint64 {
-	return dwsectCUSize[sname+"."+pkgname]
-}
-
-func addDwsectCUSize(sname string, pkgname string, size uint64) {
-	dwsectCUSizeMu.Lock()
-	defer dwsectCUSizeMu.Unlock()
-	dwsectCUSize[sname+"."+pkgname] += size
 }
 
 // writeDebugMiscSecHdr writes a header section for the new new DWARF5

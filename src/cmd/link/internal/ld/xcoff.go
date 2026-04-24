@@ -40,6 +40,47 @@ func xcoffApplyDataSegmentBase(va uint64) uint64 {
 	return va + uint64(XCOFFDATABASE) - uint64(XCOFFTEXTBASE)
 }
 
+// On AIX, the symbol table needs to know where are the compilation units parts
+// for a specific package in each .dw section.
+// dwsectCUSize map will save the size of a compilation unit for
+// the corresponding .dw section.
+// This size can later be retrieved with the index "sectionName.pkgName".
+//
+// The map is initialized only on AIX (in dwarfGenerateDebugInfo); on other
+// platforms it stays nil and addDwsectCUSize early-returns. The
+// xcoffDwarfRecordCUSize wrapper handles the platform guard at call sites.
+var dwsectCUSizeMu sync.Mutex
+var dwsectCUSize map[string]uint64
+
+// getDwsectCUSize retrieves the corresponding package size inside the current section.
+func getDwsectCUSize(sname string, pkgname string) uint64 {
+	return dwsectCUSize[sname+"."+pkgname]
+}
+
+func addDwsectCUSize(sname string, pkgname string, size uint64) {
+	dwsectCUSizeMu.Lock()
+	defer dwsectCUSizeMu.Unlock()
+	dwsectCUSize[sname+"."+pkgname] += size
+}
+
+// xcoffDwarfRecordCUSize records the size of a compilation unit's piece of a
+// DWARF section in the XCOFF dwsectCUSize map. Called from dwarf.go and
+// data.go in places that previously had `if HeadType == Haix { addDwsectCUSize(...) }`
+// guards inline; this wrapper internalizes the platform check.
+func xcoffDwarfRecordCUSize(ctxt *Link, sname, pkgname string, size uint64) {
+	if ctxt.HeadType != objabi.Haix {
+		return
+	}
+	addDwsectCUSize(sname, pkgname, size)
+}
+
+// xcoffDwarfSkip reports whether DWARF generation should be skipped for the
+// current section on AIX. AIX support is incomplete (TODO(aix)) so several
+// DWARF sub-sections short-circuit when targeting AIX.
+func xcoffDwarfSkip(ctxt *Link) bool {
+	return ctxt.HeadType == objabi.Haix
+}
+
 // This file handles all algorithms related to XCOFF files generation.
 // Most of them are adaptations of the ones in  cmd/link/internal/pe.go
 // as PE and XCOFF are based on COFF files.

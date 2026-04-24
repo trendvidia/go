@@ -65,6 +65,20 @@ func peAlignDwarfSection(va uint64) uint64 {
 	return uint64(Rnd(int64(va), PEFILEALIGN))
 }
 
+// peNeedsGdbScriptWorkaround reports whether DWARF generation should
+// skip emitting the .debug_gdb_scripts section. gcc on Windows places
+// .debug_gdb_scripts in the wrong location for c-archive external
+// links, which prevents the program from running
+// (https://golang.org/issue/20183). Non-c-archive builds avoid this
+// issue via a linker script (see writeGDBLinkerScript). c-archive
+// users would need to specify the linker script manually, so for UX
+// we simply omit the section.
+func peNeedsGdbScriptWorkaround(ctxt *Link) bool {
+	return ctxt.LinkMode == LinkExternal &&
+		ctxt.HeadType == objabi.Hwindows &&
+		ctxt.BuildMode == BuildModeCArchive
+}
+
 type IMAGE_IMPORT_DESCRIPTOR struct {
 	OriginalFirstThunk uint32
 	TimeDateStamp      uint32

@@ -2313,10 +2313,10 @@ func (state *dodataState) allocateDwarfSections(ctxt *Link) {
 
 		for j := 0; j < len(subSyms); j++ {
 			s := subSyms[j]
-			if ctxt.HeadType == objabi.Haix && curType == sym.SDWARFLOC {
+			if curType == sym.SDWARFLOC {
 				// Update the size of .debug_loc for this symbol's
-				// package.
-				addDwsectCUSize(".debug_loc", ldr.SymPkg(s), uint64(ldr.SymSize(s)))
+				// package (no-op when not targeting AIX).
+				xcoffDwarfRecordCUSize(ctxt, ".debug_loc", ldr.SymPkg(s), uint64(ldr.SymSize(s)))
 			}
 		}
 		sect.Length = uint64(state.datsize) - sect.Vaddr

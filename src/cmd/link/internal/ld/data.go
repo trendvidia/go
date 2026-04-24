@@ -2130,13 +2130,10 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 		}
 		state.assignToSection(sect, symn, sym.SRODATA)
 		setCarrierSize(symn, state.datsize-symnStartValue)
-		if ctxt.HeadType == objabi.Haix {
-			// Read-only symbols might be wrapped inside their outer
-			// symbol.
-			// XCOFF symbol table needs to know the size of
-			// these outer symbols.
-			xcoffUpdateOuterSize(ctxt, state.datsize-symnStartValue, symn)
-		}
+		// Read-only symbols might be wrapped inside their outer
+		// symbol on AIX; the XCOFF symbol table needs the outer
+		// symbol size. xcoffUpdateOuterSize no-ops on non-AIX.
+		xcoffUpdateOuterSize(ctxt, state.datsize-symnStartValue, symn)
 	}
 
 	/* gopclntab */
@@ -2151,9 +2148,7 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 	ldr.SetSymSect(ldr.LookupOrCreateSym("go:func.*", 0), sect)
 	ldr.SetSymSect(ldr.LookupOrCreateSym("runtime.epclntab", 0), sect)
 	setCarrierSize(sym.SPCLNTAB, int64(sect.Length))
-	if ctxt.HeadType == objabi.Haix {
-		xcoffUpdateOuterSize(ctxt, int64(sect.Length), sym.SPCLNTAB)
-	}
+	xcoffUpdateOuterSize(ctxt, int64(sect.Length), sym.SPCLNTAB)
 
 	/* read-only ELF, Mach-O sections */
 	state.allocateSingleSymSections(segro, sym.SELFROSECT, sym.SRODATA, 04)
@@ -2240,13 +2235,10 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 			}
 			state.assignToSection(sect, symn, sym.SRODATA)
 			setCarrierSize(symn, state.datsize-symnStartValue)
-			if ctxt.HeadType == objabi.Haix {
-				// Read-only symbols might be wrapped inside their outer
-				// symbol.
-				// XCOFF symbol table needs to know the size of
-				// these outer symbols.
-				xcoffUpdateOuterSize(ctxt, state.datsize-symnStartValue, symn)
-			}
+			// xcoffUpdateOuterSize records the outer-symbol size on
+			// AIX (no-op elsewhere); read-only symbols may be
+			// wrapped inside an outer symbol that XCOFF needs.
+			xcoffUpdateOuterSize(ctxt, state.datsize-symnStartValue, symn)
 		}
 		sect.Length = uint64(state.datsize) - sect.Vaddr
 

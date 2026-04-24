@@ -633,8 +633,13 @@ var (
 )
 
 // xcoffUpdateOuterSize stores the size of outer symbols in order to have it
-// in the symbol table.
+// in the symbol table. Safe to call on non-AIX targets; it returns
+// immediately when the head type is not Haix, so callers don't need to
+// gate the call themselves.
 func xcoffUpdateOuterSize(ctxt *Link, size int64, stype sym.SymKind) {
+	if ctxt.HeadType != objabi.Haix {
+		return
+	}
 	if size == 0 {
 		return
 	}

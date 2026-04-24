@@ -1830,41 +1830,7 @@ func (ctxt *Link) hostlink() {
 		checkStatic(p)
 	}
 	if ctxt.HeadType == objabi.Hwindows {
-		// Determine which linker we're using. Add in the extldflags in
-		// case used has specified "-fuse-ld=...".
-		extld := ctxt.extld()
-		name, args := extld[0], extld[1:]
-		args = append(args, trimLinkerArgv(flagExtldflags)...)
-		args = append(args, "-Wl,--version")
-		cmd := exec.Command(name, args...)
-		usingLLD := false
-		if out, err := cmd.CombinedOutput(); err == nil {
-			if bytes.Contains(out, []byte("LLD ")) {
-				usingLLD = true
-			}
-		}
-
-		// use gcc linker script to work around gcc bug
-		// (see https://golang.org/issue/20183 for details).
-		if !usingLLD {
-			p := writeGDBLinkerScript()
-			argv = append(argv, "-Wl,-T,"+p)
-		}
-		if *flagRace {
-			// Apparently --print-file-name doesn't work with -msvc clang.
-			// (The library name is synchronization.lib, but even with that
-			// name it still doesn't print the full path.) Assume it always
-			// it.
-			if isMSVC || ctxt.findLibPath("libsynchronization.a") != "libsynchronization.a" {
-				argv = append(argv, "-lsynchronization")
-			}
-		}
-		if !isMSVC {
-			// libmingw32 and libmingwex have some inter-dependencies,
-			// so must use linker groups.
-			argv = append(argv, "-Wl,--start-group", "-lmingwex", "-lmingw32", "-Wl,--end-group")
-		}
-		argv = append(argv, peimporteddlls()...)
+		argv = peAppendMingwLibs(ctxt, argv, isMSVC)
 	}
 
 	argv = ctxt.passLongArgsInResponseFile(argv, altLinker)

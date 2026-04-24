@@ -21,6 +21,7 @@ import (
 	"internal/buildcfg"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -77,6 +78,51 @@ func peNeedsGdbScriptWorkaround(ctxt *Link) bool {
 	return ctxt.LinkMode == LinkExternal &&
 		ctxt.HeadType == objabi.Hwindows &&
 		ctxt.BuildMode == BuildModeCArchive
+}
+
+// peAppendMingwLibs appends Windows-specific late-stage hostlink
+// arguments: the gcc gdb-script linker workaround, the -lsynchronization
+// race-detector library, the mingw libgroup, and the per-imported-DLL
+// argument list. Called from hostlink AFTER all earlier flags and .o
+// files have been queued, so the libraries are linked last.
+//
+// Detects whether the active linker is LLD (mingw-clang's lld-link or
+// equivalent) by running -Wl,--version and grepping the output. The
+// gcc gdb-script workaround is only needed for non-LLD linkers
+// (https://golang.org/issue/20183).
+func peAppendMingwLibs(ctxt *Link, argv []string, isMSVC bool) []string {
+	// Determine which linker we're using. Add in the extldflags in
+	// case the user has specified "-fuse-ld=...".
+	extld := ctxt.extld()
+	name, args := extld[0], extld[1:]
+	args = append(args, trimLinkerArgv(flagExtldflags)...)
+	args = append(args, "-Wl,--version")
+	cmd := exec.Command(name, args...)
+	usingLLD := false
+	if out, err := cmd.CombinedOutput(); err == nil {
+		if bytes.Contains(out, []byte("LLD ")) {
+			usingLLD = true
+		}
+	}
+
+	// gcc linker script workaround (golang.org/issue/20183).
+	if !usingLLD {
+		p := writeGDBLinkerScript()
+		argv = append(argv, "-Wl,-T,"+p)
+	}
+	if *flagRace {
+		// --print-file-name doesn't reliably resolve with -msvc clang
+		// for libsynchronization, so we always pass -lsynchronization.
+		if isMSVC || ctxt.findLibPath("libsynchronization.a") != "libsynchronization.a" {
+			argv = append(argv, "-lsynchronization")
+		}
+	}
+	if !isMSVC {
+		// libmingw32 and libmingwex have inter-dependencies; group them.
+		argv = append(argv, "-Wl,--start-group", "-lmingwex", "-lmingw32", "-Wl,--end-group")
+	}
+	argv = append(argv, peimporteddlls()...)
+	return argv
 }
 
 // peArgs appends Windows PE-specific external-linker flags to argv

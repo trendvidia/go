@@ -1520,14 +1520,7 @@ func (ctxt *Link) hostlink() {
 			argv = append(argv, fmt.Sprintf("-Wl,--minor-subsystem-version=%d", PeMinimumTargetMinorVersion))
 		}
 	case objabi.Haix:
-		argv = append(argv, "-pthread")
-		// prevent ld to reorder .text functions to keep the same
-		// first/last functions for moduledata.
-		argv = append(argv, "-Wl,-bnoobjreorder")
-		// mcmodel=large is needed for every gcc generated files, but
-		// ld still need -bbigtoc in order to allow larger TOC.
-		argv = append(argv, "-mcmodel=large")
-		argv = append(argv, "-Wl,-bbigtoc")
+		argv = xcoffArgs(ctxt, argv)
 	}
 
 	// On PPC64, verify the external toolchain supports Power10. This is needed when

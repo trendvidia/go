@@ -81,6 +81,22 @@ func xcoffDwarfSkip(ctxt *Link) bool {
 	return ctxt.HeadType == objabi.Haix
 }
 
+// xcoffArgs appends AIX-specific external-linker flags to argv during
+// hostlink. AIX-specific options:
+//   - -pthread: required for AIX threading.
+//   - -Wl,-bnoobjreorder: prevents ld from reordering .text functions
+//     so that first/last function addresses stay stable for moduledata.
+//   - -mcmodel=large: needed for every gcc-generated file on AIX 64-bit.
+//   - -Wl,-bbigtoc: tells ld to allow a larger TOC, which mcmodel=large
+//     can require.
+func xcoffArgs(ctxt *Link, argv []string) []string {
+	argv = append(argv, "-pthread")
+	argv = append(argv, "-Wl,-bnoobjreorder")
+	argv = append(argv, "-mcmodel=large")
+	argv = append(argv, "-Wl,-bbigtoc")
+	return argv
+}
+
 // This file handles all algorithms related to XCOFF files generation.
 // Most of them are adaptations of the ones in  cmd/link/internal/pe.go
 // as PE and XCOFF are based on COFF files.

@@ -108,7 +108,12 @@ func xcoffArgs(ctxt *Link, argv []string) []string {
 // asking the configured external linker via --print-file-name; some
 // older gcc installations don't have the _64 variants, so we fall back
 // to the unsuffixed names.
+//
+// No-op on non-AIX targets so callers can invoke unconditionally.
 func xcoffCrtArgs(ctxt *Link, argv []string) []string {
+	if ctxt.HeadType != objabi.Haix {
+		return argv
+	}
 	// Place C startup files after Go files so ld can clean up
 	// trampoline csects.
 	argv = append(argv, "-nostartfiles")

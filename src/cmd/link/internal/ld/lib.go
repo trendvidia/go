@@ -1749,9 +1749,7 @@ func (ctxt *Link) hostlink() {
 
 	argv = append(argv, godotopath)
 	argv = append(argv, hostObjCopyPaths...)
-	if ctxt.HeadType == objabi.Haix {
-		argv = xcoffCrtArgs(ctxt, argv)
-	}
+	argv = xcoffCrtArgs(ctxt, argv)
 
 	if ctxt.linkShared {
 		seenDirs := make(map[string]bool)
@@ -1829,9 +1827,7 @@ func (ctxt *Link) hostlink() {
 		argv = append(argv, p)
 		checkStatic(p)
 	}
-	if ctxt.HeadType == objabi.Hwindows {
-		argv = peAppendMingwLibs(ctxt, argv, isMSVC)
-	}
+	argv = peAppendMingwLibs(ctxt, argv, isMSVC)
 
 	argv = ctxt.passLongArgsInResponseFile(argv, altLinker)
 

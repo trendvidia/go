@@ -90,7 +90,12 @@ func peNeedsGdbScriptWorkaround(ctxt *Link) bool {
 // equivalent) by running -Wl,--version and grepping the output. The
 // gcc gdb-script workaround is only needed for non-LLD linkers
 // (https://golang.org/issue/20183).
+//
+// No-op on non-Windows targets so callers can invoke unconditionally.
 func peAppendMingwLibs(ctxt *Link, argv []string, isMSVC bool) []string {
+	if ctxt.HeadType != objabi.Hwindows {
+		return argv
+	}
 	// Determine which linker we're using. Add in the extldflags in
 	// case the user has specified "-fuse-ld=...".
 	extld := ctxt.extld()

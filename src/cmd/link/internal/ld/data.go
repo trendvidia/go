@@ -3172,9 +3172,9 @@ func (ctxt *Link) layout(order []*sym.Segment) uint64 {
 					Exitf("bad segment rounding (Vaddr=%#x Fileoff=%#x FlagRound=%#x)", seg.Vaddr, seg.Fileoff, *FlagRound)
 				}
 			case objabi.Hwindows:
-				seg.Fileoff = prev.Fileoff + uint64(Rnd(int64(prev.Filelen), PEFILEALIGN))
+				seg.Fileoff = peSegmentFileOffset(prev)
 			case objabi.Hplan9:
-				seg.Fileoff = prev.Fileoff + prev.Filelen
+				seg.Fileoff = plan9SegmentFileOffset(prev)
 			}
 		}
 		if seg != &Segdata {

@@ -47,6 +47,17 @@ func ldpe(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 	ctxt.Textp = append(ctxt.Textp, ls.Textp...)
 }
 
+// peSegmentFileOffset returns the file offset for a segment placed after
+// prev in a PE binary. PE requires file-alignment rounding on the
+// previous segment's length using PEFILEALIGN, but does NOT require the
+// stricter (Vaddr%R == Fileoff%R) invariant that ELF-style layouts
+// enforce — the PE loader maps sections via separate VirtualAddress
+// and PointerToRawData fields, so file-side and memory-side alignment
+// are independent.
+func peSegmentFileOffset(prev *sym.Segment) uint64 {
+	return prev.Fileoff + uint64(Rnd(int64(prev.Filelen), PEFILEALIGN))
+}
+
 type IMAGE_IMPORT_DESCRIPTOR struct {
 	OriginalFirstThunk uint32
 	TimeDateStamp      uint32

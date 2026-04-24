@@ -9,9 +9,11 @@ package ld
 
 import (
 	"bytes"
+	"cmd/internal/bio"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"cmd/link/internal/loader"
+	"cmd/link/internal/loadpe"
 	"cmd/link/internal/sym"
 	"debug/pe"
 	"encoding/binary"
@@ -25,6 +27,25 @@ import (
 	"strconv"
 	"strings"
 )
+
+// ldpe loads a PE host object as part of ldobj's format dispatch.
+func ldpe(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
+	ls, err := loadpe.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
+	if err != nil {
+		Errorf("%v", err)
+		return
+	}
+	if len(ls.Resources) != 0 {
+		setpersrc(ctxt, ls.Resources)
+	}
+	if ls.PData != 0 {
+		sehp.pdata = append(sehp.pdata, ls.PData)
+	}
+	if ls.XData != 0 {
+		sehp.xdata = append(sehp.xdata, ls.XData)
+	}
+	ctxt.Textp = append(ctxt.Textp, ls.Textp...)
+}
 
 type IMAGE_IMPORT_DESCRIPTOR struct {
 	OriginalFirstThunk uint32

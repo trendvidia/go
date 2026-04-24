@@ -15,10 +15,22 @@ import (
 	"strings"
 	"sync"
 
+	"cmd/internal/bio"
 	"cmd/internal/objabi"
 	"cmd/link/internal/loader"
+	"cmd/link/internal/loadxcoff"
 	"cmd/link/internal/sym"
 )
+
+// ldxcoff loads an XCOFF host object as part of ldobj's format dispatch.
+func ldxcoff(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
+	textp, err := loadxcoff.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
+	if err != nil {
+		Errorf("%v", err)
+		return
+	}
+	ctxt.Textp = append(ctxt.Textp, textp...)
+}
 
 // This file handles all algorithms related to XCOFF files generation.
 // Most of them are adaptations of the ones in  cmd/link/internal/pe.go

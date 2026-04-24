@@ -5,9 +5,11 @@
 package ld
 
 import (
+	"cmd/internal/bio"
 	"cmd/internal/hash"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
+	"cmd/link/internal/loadelf"
 	"cmd/link/internal/loader"
 	"cmd/link/internal/sym"
 	"cmp"
@@ -22,6 +24,17 @@ import (
 	"slices"
 	"strings"
 )
+
+// ldelf loads an ELF host object as part of ldobj's format dispatch.
+func ldelf(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
+	textp, flags, err := loadelf.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn, ehdr.Flags)
+	if err != nil {
+		Errorf("%v", err)
+		return
+	}
+	ehdr.Flags = flags
+	ctxt.Textp = append(ctxt.Textp, textp...)
+}
 
 /*
  * Derived from:

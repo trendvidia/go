@@ -6,11 +6,13 @@ package ld
 
 import (
 	"bytes"
+	"cmd/internal/bio"
 	"cmd/internal/codesign"
 	imacho "cmd/internal/macho"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"cmd/link/internal/loader"
+	"cmd/link/internal/loadmacho"
 	"cmd/link/internal/sym"
 	"debug/macho"
 	"encoding/binary"
@@ -22,6 +24,16 @@ import (
 	"strings"
 	"unsafe"
 )
+
+// ldmacho loads a Mach-O host object as part of ldobj's format dispatch.
+func ldmacho(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
+	textp, err := loadmacho.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
+	if err != nil {
+		Errorf("%v", err)
+		return
+	}
+	ctxt.Textp = append(ctxt.Textp, textp...)
+}
 
 type MachoHdr struct {
 	cpu    uint32

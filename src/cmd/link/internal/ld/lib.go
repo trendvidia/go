@@ -56,11 +56,8 @@ import (
 	"cmd/internal/hash"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
-	"cmd/link/internal/loadelf"
 	"cmd/link/internal/loader"
-	"cmd/link/internal/loadmacho"
 	"cmd/link/internal/loadpe"
-	"cmd/link/internal/loadxcoff"
 	"cmd/link/internal/sym"
 )
 
@@ -2317,27 +2314,10 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 
 	magic := uint32(c1)<<24 | uint32(c2)<<16 | uint32(c3)<<8 | uint32(c4)
 	if magic == 0x7f454c46 { // \x7F E L F
-		ldelf := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
-			textp, flags, err := loadelf.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn, ehdr.Flags)
-			if err != nil {
-				Errorf("%v", err)
-				return
-			}
-			ehdr.Flags = flags
-			ctxt.Textp = append(ctxt.Textp, textp...)
-		}
 		return ldhostobj(ldelf, ctxt.HeadType, f, pkg, length, pn, file)
 	}
 
 	if magic&^1 == 0xfeedface || magic&^0x01000000 == 0xcefaedfe {
-		ldmacho := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
-			textp, err := loadmacho.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
-			if err != nil {
-				Errorf("%v", err)
-				return
-			}
-			ctxt.Textp = append(ctxt.Textp, textp...)
-		}
 		return ldhostobj(ldmacho, ctxt.HeadType, f, pkg, length, pn, file)
 	}
 
@@ -2346,35 +2326,10 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 		0x6486, // amd64
 		0xc401, // arm
 		0x64aa: // arm64
-		ldpe := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
-			ls, err := loadpe.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
-			if err != nil {
-				Errorf("%v", err)
-				return
-			}
-			if len(ls.Resources) != 0 {
-				setpersrc(ctxt, ls.Resources)
-			}
-			if ls.PData != 0 {
-				sehp.pdata = append(sehp.pdata, ls.PData)
-			}
-			if ls.XData != 0 {
-				sehp.xdata = append(sehp.xdata, ls.XData)
-			}
-			ctxt.Textp = append(ctxt.Textp, ls.Textp...)
-		}
 		return ldhostobj(ldpe, ctxt.HeadType, f, pkg, length, pn, file)
 	}
 
 	if c1 == 0x01 && (c2 == 0xD7 || c2 == 0xF7) {
-		ldxcoff := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
-			textp, err := loadxcoff.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
-			if err != nil {
-				Errorf("%v", err)
-				return
-			}
-			ctxt.Textp = append(ctxt.Textp, textp...)
-		}
 		return ldhostobj(ldxcoff, ctxt.HeadType, f, pkg, length, pn, file)
 	}
 

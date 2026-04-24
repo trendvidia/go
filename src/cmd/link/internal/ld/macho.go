@@ -35,6 +35,38 @@ func ldmacho(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 	ctxt.Textp = append(ctxt.Textp, textp...)
 }
 
+// machoArgs appends Darwin-specific external-linker flags to argv during
+// hostlink. combineDwarf signals whether DWARF will be merged into the
+// final binary (only macOS supports the unmapped __DWARF segment).
+//   - -Wl,-headerpad,1144 reserves space for DWARF combining; only
+//     applied when combineDwarf is set, since headerpad is incompatible
+//     with -fembed-bitcode.
+//   - -Wl,-flat_namespace,-bind_at_load forces eager resolution for
+//     plugin support; deprecated on iOS so we skip it there
+//     (golang.org/issue/38824).
+//   - -Wl,-S suppresses STAB symbols when DWARF is not combined; -Wl,-x
+//     additionally suppresses local symbols if debug_s is set.
+//   - -Wl,-no_uuid omits the LC_UUID load command when -B=none is in
+//     effect.
+func machoArgs(ctxt *Link, argv []string, combineDwarf bool) []string {
+	if combineDwarf {
+		argv = append(argv, "-Wl,-headerpad,1144")
+	}
+	if ctxt.DynlinkingGo() && buildcfg.GOOS != "ios" {
+		argv = append(argv, "-Wl,-flat_namespace", "-Wl,-bind_at_load")
+	}
+	if !combineDwarf {
+		argv = append(argv, "-Wl,-S")
+		if debug_s {
+			argv = append(argv, "-Wl,-x")
+		}
+	}
+	if *flagHostBuildid == "none" {
+		argv = append(argv, "-Wl,-no_uuid")
+	}
+	return argv
+}
+
 type MachoHdr struct {
 	cpu    uint32
 	subcpu uint32

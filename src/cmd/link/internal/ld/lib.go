@@ -1463,31 +1463,7 @@ func (ctxt *Link) hostlink() {
 
 	switch ctxt.HeadType {
 	case objabi.Hdarwin:
-		if combineDwarf {
-			// Leave room for DWARF combining.
-			// -headerpad is incompatible with -fembed-bitcode.
-			argv = append(argv, "-Wl,-headerpad,1144")
-		}
-		if ctxt.DynlinkingGo() && buildcfg.GOOS != "ios" {
-			// -flat_namespace is deprecated on iOS.
-			// It is useful for supporting plugins. We don't support plugins on iOS.
-			// -flat_namespace may cause the dynamic linker to hang at forkExec when
-			// resolving a lazy binding. See issue 38824.
-			// Force eager resolution to work around.
-			argv = append(argv, "-Wl,-flat_namespace", "-Wl,-bind_at_load")
-		}
-		if !combineDwarf {
-			argv = append(argv, "-Wl,-S") // suppress STAB (symbolic debugging) symbols
-			if debug_s {
-				// We are generating a binary with symbol table suppressed.
-				// Suppress local symbols. We need to keep dynamically exported
-				// and referenced symbols so the dynamic linker can resolve them.
-				argv = append(argv, "-Wl,-x")
-			}
-		}
-		if *flagHostBuildid == "none" {
-			argv = append(argv, "-Wl,-no_uuid")
-		}
+		argv = machoArgs(ctxt, argv, combineDwarf)
 	case objabi.Hopenbsd:
 		argv = openbsdArgs(ctxt, argv)
 	case objabi.Hwindows:

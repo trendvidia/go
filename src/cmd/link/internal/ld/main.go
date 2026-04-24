@@ -393,23 +393,25 @@ func Main(arch *sys.Arch, theArch Arch) {
 	bench.Start("mangleTypeSym")
 	ctxt.mangleTypeSym()
 
-	if ctxt.IsELF {
-		bench.Start("doelf")
-		ctxt.doelf()
-	}
-	if ctxt.IsDarwin() {
+	switch ctxt.HeadType {
+	case objabi.Hdarwin:
 		bench.Start("domacho")
 		ctxt.domacho()
-	}
-	if ctxt.IsWindows() {
+	case objabi.Hwindows:
 		bench.Start("dope")
 		ctxt.dope()
 		bench.Start("windynrelocsyms")
 		ctxt.windynrelocsyms()
-	}
-	if ctxt.IsAIX() {
+	case objabi.Haix:
 		bench.Start("doxcoff")
 		ctxt.doxcoff()
+	default:
+		// ELF formats (Linux, FreeBSD, NetBSD, OpenBSD, DragonFly, Solaris).
+		// Hjs, Hwasip1, and Hplan9 do not run any per-format pre-Gentext step.
+		if ctxt.IsELF {
+			bench.Start("doelf")
+			ctxt.doelf()
+		}
 	}
 
 	bench.Start("textbuildid")

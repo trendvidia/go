@@ -32,6 +32,14 @@ func ldxcoff(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 	ctxt.Textp = append(ctxt.Textp, textp...)
 }
 
+// xcoffApplyDataSegmentBase adjusts va by the offset between AIX's text
+// and data segments so that the next segment is placed in the correct
+// position-independent address space. Called by data.go::address at the
+// boundary between code/rodata and data (or relro) on AIX.
+func xcoffApplyDataSegmentBase(va uint64) uint64 {
+	return va + uint64(XCOFFDATABASE) - uint64(XCOFFTEXTBASE)
+}
+
 // This file handles all algorithms related to XCOFF files generation.
 // Most of them are adaptations of the ones in  cmd/link/internal/pe.go
 // as PE and XCOFF are based on COFF files.

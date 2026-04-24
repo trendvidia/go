@@ -2887,7 +2887,7 @@ func (ctxt *Link) address() []*sym.Segment {
 		va = uint64(Rnd(int64(va), *FlagRound))
 		if ctxt.HeadType == objabi.Haix {
 			// Relro data are inside data segment on AIX.
-			va += uint64(XCOFFDATABASE) - uint64(XCOFFTEXTBASE)
+			va = xcoffApplyDataSegmentBase(va)
 		}
 
 		order = append(order, &Segrelrodata)
@@ -2907,7 +2907,7 @@ func (ctxt *Link) address() []*sym.Segment {
 		// Data sections are moved to an unreachable segment
 		// to ensure that they are position-independent.
 		// Already done if relro sections exist.
-		va += uint64(XCOFFDATABASE) - uint64(XCOFFTEXTBASE)
+		va = xcoffApplyDataSegmentBase(va)
 	}
 	order = append(order, &Segdata)
 	Segdata.Rwx = 06
@@ -2993,7 +2993,7 @@ func (ctxt *Link) address() []*sym.Segment {
 		s.Vaddr = va
 		va += uint64(vlen)
 		if ctxt.HeadType == objabi.Hwindows {
-			va = uint64(Rnd(int64(va), PEFILEALIGN))
+			va = peAlignDwarfSection(va)
 		}
 		Segdwarf.Length = va - Segdwarf.Vaddr
 	}

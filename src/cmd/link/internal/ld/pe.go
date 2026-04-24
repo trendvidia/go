@@ -58,6 +58,13 @@ func peSegmentFileOffset(prev *sym.Segment) uint64 {
 	return prev.Fileoff + uint64(Rnd(int64(prev.Filelen), PEFILEALIGN))
 }
 
+// peAlignDwarfSection rounds va up to PEFILEALIGN. Called inside
+// data.go::address's per-DWARF-section loop so each PE DWARF section
+// starts on a file-alignment boundary.
+func peAlignDwarfSection(va uint64) uint64 {
+	return uint64(Rnd(int64(va), PEFILEALIGN))
+}
+
 type IMAGE_IMPORT_DESCRIPTOR struct {
 	OriginalFirstThunk uint32
 	TimeDateStamp      uint32

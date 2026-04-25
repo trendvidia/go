@@ -128,6 +128,7 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-buildmode=plugin", "-o=unnamed1.so", "./unnamed1/main.go")
 	goCmd(nil, "build", "-buildmode=plugin", "-o=unnamed2.so", "./unnamed2/main.go")
 	goCmd(nil, "build", "-o", "host.exe", "./host")
+	goCmd(nil, "build", "-o", "closeapi.exe", "./closeapi")
 
 	return m.Run()
 }
@@ -223,6 +224,13 @@ func TestBuildID(t *testing.T) {
 func TestRunHost(t *testing.T) {
 	globalSkip(t)
 	run(t, "./host.exe")
+}
+
+// TestCloseAPI exercises the L3.b additions: Plugin.Close,
+// Plugin.HasDependents, Plugin.Dependents.
+func TestCloseAPI(t *testing.T) {
+	globalSkip(t)
+	run(t, "./closeapi.exe")
 }
 
 func TestUniqueTypesAndItabs(t *testing.T) {

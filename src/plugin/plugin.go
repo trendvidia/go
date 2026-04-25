@@ -157,6 +157,10 @@ func closePlugin(p *Plugin) error {
 	if errstr := pluginClose(p.pluginpath); errstr != "" {
 		return pluginErr("Close", p.pluginpath, errstr)
 	}
+	// Clear p.syms so Lookup post-Close returns the standard
+	// "symbol not found" error for every name without needing a
+	// separate is-closed check in lookup().
+	p.syms = nil
 	p.err = "closed"
 	return nil
 }

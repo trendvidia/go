@@ -156,9 +156,10 @@ func (ctxt *Link) emitSlotCarriers(kind string, slots []loader.Sym) {
 		target := strings.TrimPrefix(full, prefix)
 		// Write the int32 offset.
 		nameoffs.SetUint32(ctxt.Arch, int64(i*4), uint32(off))
-		// Append target + NUL to names blob.
+		// Addstring appends target AND a NUL terminator — don't add
+		// a second NUL or offsets drift behind the blob's actual
+		// position by one byte per slot.
 		names.Addstring(target)
-		names.AddUint8(0)
 		off += int64(len(target)) + 1
 	}
 }

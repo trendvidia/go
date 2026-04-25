@@ -1492,6 +1492,8 @@ func fixZeroSizedSymbols(ctxt *Link) {
 	// aren't real symbols, their alignment might not match the
 	// first symbol alignment. Therefore, there are explicitly put at the
 	// beginning of their section with the same alignment.
+	// phase2: valid disjunction — keep inline (excludes two specific
+	// runtime conditions: dyn-Go-on-Darwin and external-linked AIX).
 	if !(ctxt.DynlinkingGo() && ctxt.HeadType == objabi.Hdarwin) && !(ctxt.HeadType == objabi.Haix && ctxt.LinkMode == LinkExternal) {
 		return
 	}
@@ -2096,6 +2098,8 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 	if len(state.data[sym.STLSBSS]) > 0 {
 		var sect *sym.Section
 		// FIXME: not clear why it is sometimes necessary to suppress .tbss section creation.
+		// phase2: valid disjunction — keep inline (ELF and AIX share this
+		// dynamic-import check; the LinkExternal/!FlagD gate is orthogonal).
 		if (ctxt.IsELF || ctxt.HeadType == objabi.Haix) && (ctxt.LinkMode == LinkExternal || !*FlagD) {
 			sect = addsection(ldr, ctxt.Arch, &Segdata, ".tbss", 06)
 			sect.Align = int32(ctxt.Arch.PtrSize)
@@ -2393,6 +2397,9 @@ func (state *dodataState) dodataSect(ctxt *Link, symn sym.SymKind, syms []loader
 		// If the usually-special section-marker symbols are being laid
 		// out as regular symbols, put them either at the beginning or
 		// end of their section.
+		// phase2: valid disjunction — keep inline (mirror of the
+		// Hdarwin/Haix exclusion above; same two formats trigger the
+		// alternate addressing path).
 		if (ctxt.DynlinkingGo() && ctxt.HeadType == objabi.Hdarwin) || (ctxt.HeadType == objabi.Haix && ctxt.LinkMode == LinkExternal) {
 			switch ldr.SymName(s) {
 			case "runtime.text", "runtime.bss", "runtime.data", "runtime.types", "runtime.rodata",
@@ -2584,6 +2591,9 @@ func (ctxt *Link) textaddress() {
 		u.SetSize(8)
 	}
 
+	// phase2: valid disjunction — keep inline (same dyn-Go-on-Darwin /
+	// external-AIX pair as line 1495; this site iterates relocations
+	// where the two formats need the same workaround).
 	if (ctxt.DynlinkingGo() && ctxt.IsDarwin()) || (ctxt.IsAIX() && ctxt.IsExternal()) {
 		ldr.SetSymSect(etext, sect)
 		ctxt.Textp = append(ctxt.Textp, etext, 0)
@@ -2844,6 +2854,9 @@ func resetAddress(ctxt *Link, s loader.Sym) {
 // machinery in the external linker; see #58425 for more on the
 // history here.
 func splitTextSections(ctxt *Link) bool {
+	// phase2: arch×format — needs matrix dispatch (ARM/PPC64 unconditional
+	// plus ARM64×Hdarwin). The named-helper form is fine for now; Phase 3's
+	// arch×format dispatch can absorb it.
 	return (ctxt.IsARM() || ctxt.IsPPC64() || (ctxt.IsARM64() && ctxt.IsDarwin())) && ctxt.IsExternal()
 }
 
@@ -2940,6 +2953,10 @@ func (ctxt *Link) address() []*sym.Segment {
 	var noptrbss *sym.Section
 	var fuzzCounters *sym.Section
 	for i, s := range Segdata.Sections {
+		// phase2: valid disjunction — keep inline (.tbss is an ELF/AIX
+		// concept; the disjunction is the cross-format predicate, not
+		// a tangle to extract — Phase 1 plan step 4 explicitly called
+		// this out).
 		if (ctxt.IsELF || ctxt.HeadType == objabi.Haix) && s.Name == ".tbss" {
 			continue
 		}
@@ -3149,6 +3166,8 @@ func (ctxt *Link) address() []*sym.Segment {
 		ldr.SetSymSect(ldr.Lookup("_end", 0), ldr.SymSect(end))
 	}
 
+	// phase2: arch×format — needs matrix dispatch (PPC64 × ELF for
+	// .TOC. resolution; canonical Phase-3 candidate).
 	if ctxt.IsPPC64() && ctxt.IsElf() {
 		// Resolve .TOC. symbols for all objects. Only one TOC region is supported. If a
 		// GOT section is present, compute it as suggested by the ELFv2 ABI. Otherwise,

@@ -925,6 +925,8 @@ func (ctxt *Link) linksetup() {
 	ctxt.loader.SetAttrReachable(moduledata, true)
 	ctxt.Moduledata = moduledata
 
+	// phase2: arch×format — needs matrix dispatch (Arch386 + non-Hwindows
+	// gate, plus BuildMode×IsELF in the inner condition).
 	if ctxt.Arch == sys.Arch386 && ctxt.HeadType != objabi.Hwindows {
 		if (ctxt.BuildMode == BuildModeCArchive && ctxt.IsELF) || ctxt.BuildMode == BuildModeCShared || ctxt.BuildMode == BuildModePIE || ctxt.DynlinkingGo() {
 			got := ctxt.loader.LookupOrCreateSym("_GLOBAL_OFFSET_TABLE_", 0)
@@ -1448,6 +1450,8 @@ func (ctxt *Link) hostlink() {
 			argv = append(argv, "-s")
 		}
 	} else if *FlagW {
+		// phase2: valid disjunction — keep inline (-S has format-specific
+		// meaning on AIX and Solaris, so suppress for those two only).
 		if !ctxt.IsAIX() && !ctxt.IsSolaris() { // The AIX and Solaris linkers' -S has different meaning
 			argv = append(argv, "-Wl,-S") // suppress debugging symbols
 		}
@@ -1537,9 +1541,15 @@ func (ctxt *Link) hostlink() {
 		return argv
 	}
 
+	// phase2: BuildMode×HeadType — keep inline (Phase-2 boundary). Each
+	// arm extracts per-HeadType case bodies but the outer BuildMode
+	// switch stays as a structured dispatch; combining the two into a
+	// (BuildMode, HeadType) matrix dispatch is Phase 3 territory.
 	switch ctxt.BuildMode {
 	case BuildModeExe:
 		if ctxt.HeadType == objabi.Hdarwin {
+			// phase2: arch×format — needs matrix dispatch
+			// (Hdarwin × AMD64 with PLATFORM_MACOS gate).
 			if machoPlatform == PLATFORM_MACOS && ctxt.IsAMD64() {
 				argv = append(argv, "-Wl,-no_pie")
 			}
@@ -1799,6 +1809,8 @@ func (ctxt *Link) hostlink() {
 	// does not work, the resulting programs will not run. See
 	// issue #17847. To avoid this problem pass -no-pie to the
 	// toolchain if it is supported.
+	// phase2: arch×format inside BuildMode×HeadType — needs matrix dispatch
+	// (the arch×format exclusion is Hdarwin × ARM64).
 	if ctxt.BuildMode == BuildModeExe && !ctxt.linkShared && !(ctxt.IsDarwin() && ctxt.IsARM64()) {
 		// GCC uses -no-pie, clang uses -nopie.
 		for _, nopie := range []string{"-no-pie", "-nopie"} {
@@ -1859,6 +1871,8 @@ func (ctxt *Link) hostlink() {
 	if len(out) > 0 {
 		// always print external output even if the command is successful, so that we don't
 		// swallow linker warnings (see https://golang.org/issue/17935).
+		// phase2: arch×format — needs matrix dispatch (Hdarwin × AMD64
+		// for the -no_pie warning suppression).
 		if ctxt.IsDarwin() && ctxt.IsAMD64() {
 			const noPieWarning = "ld: warning: -no_pie is deprecated when targeting new OS versions\n"
 			if i := bytes.Index(out, []byte(noPieWarning)); i >= 0 {

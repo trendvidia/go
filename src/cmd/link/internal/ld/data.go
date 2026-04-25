@@ -3168,24 +3168,12 @@ func (ctxt *Link) address() []*sym.Segment {
 		ldr.SetSymSect(ldr.Lookup("_end", 0), ldr.SymSect(end))
 	}
 
-	// phase2: arch×format — needs matrix dispatch (PPC64 × ELF for
-	// .TOC. resolution; canonical Phase-3 candidate).
-	if ctxt.IsPPC64() && ctxt.IsElf() {
-		// Resolve .TOC. symbols for all objects. Only one TOC region is supported. If a
-		// GOT section is present, compute it as suggested by the ELFv2 ABI. Otherwise,
-		// choose a similar offset from the start of the data segment.
-		tocAddr := int64(Segdata.Vaddr) + 0x8000
-		if gotAddr := ldr.SymValue(ctxt.GOT); gotAddr != 0 {
-			tocAddr = gotAddr + 0x8000
-		}
-		for i := range ctxt.DotTOC {
-			if i >= sym.SymVerABICount && i < sym.SymVerStatic { // these versions are not used currently
-				continue
-			}
-			if toc := ldr.Lookup(".TOC.", i); toc != 0 {
-				ldr.SetSymValue(toc, tocAddr)
-			}
-		}
+	// Per-arch post-address hook. Runs only after Segdata.Vaddr is set;
+	// this temporal precondition matters because hooks like PPC64's
+	// .TOC. resolver read Segdata.Vaddr directly. If you reorder this
+	// site, update the hook bodies' assumptions.
+	if thearch.AddressSpecialSymbols != nil {
+		thearch.AddressSpecialSymbols(ctxt, ldr)
 	}
 
 	return order

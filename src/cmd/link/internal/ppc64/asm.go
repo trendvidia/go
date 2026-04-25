@@ -1758,3 +1758,31 @@ func ensureglinkresolver(ctxt *ld.Link, ldr *loader.Loader) *loader.SymbolBuilde
 
 	return glink
 }
+
+
+// addressSpecialSymbols resolves the .TOC. anchor for every PPC64
+// object after segment addresses are assigned. Only one TOC region is
+// supported. If a GOT section is present, place the anchor as
+// suggested by the ELFv2 ABI; otherwise pick a similar offset from
+// the start of the data segment.
+//
+// Wired as Arch.AddressSpecialSymbols (called from data.go's address
+// pass). Self-guarded for ELF — non-ELF PPC64 builds (Mach-O, AIX
+// XCOFF) don't use .TOC. and skip the body.
+func addressSpecialSymbols(ctxt *ld.Link, ldr *loader.Loader) {
+	if !ctxt.IsElf() {
+		return
+	}
+	tocAddr := int64(ld.Segdata.Vaddr) + 0x8000
+	if gotAddr := ldr.SymValue(ctxt.GOT); gotAddr != 0 {
+		tocAddr = gotAddr + 0x8000
+	}
+	for i := range ctxt.DotTOC {
+		if i >= sym.SymVerABICount && i < sym.SymVerStatic { // these versions are not used currently
+			continue
+		}
+		if toc := ldr.Lookup(".TOC.", i); toc != 0 {
+			ldr.SetSymValue(toc, tocAddr)
+		}
+	}
+}

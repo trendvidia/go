@@ -66,7 +66,8 @@ func Init() (*sys.Arch, ld.Arch) {
 		Machoreloc1:      machoreloc1,
 		Xcoffreloc1:      xcoffreloc1,
 
-		SplitTextSections: func(ctxt *ld.Link) bool { return ctxt.IsExternal() },
+		SplitTextSections:     func(ctxt *ld.Link) bool { return ctxt.IsExternal() },
+		AddressSpecialSymbols: addressSpecialSymbols,
 
 		ELF: ld.ELFArch{
 			Linuxdynld:     dynld,

@@ -253,6 +253,14 @@ type Arch struct {
 	// See data.go for the full rationale.
 	SplitTextSections func(*Link) bool
 
+	// AddressSpecialSymbols runs after the address() pass has assigned
+	// virtual addresses to all segments and is the place to resolve any
+	// arch-specific symbols whose value depends on segment layout (e.g.,
+	// PPC64's .TOC. anchor at Segdata.Vaddr+0x8000). Format prerequisites
+	// (e.g., "only meaningful under ELF") live inside the hook body, not
+	// at the call site. nil = no per-arch action (default).
+	AddressSpecialSymbols func(*Link, *loader.Loader)
+
 	// Generate additional symbols for the native symbol table just prior to
 	// code generation.
 	GenSymsLate func(*Link, *loader.Loader)

@@ -190,6 +190,14 @@ func closePlugin(p *Plugin) error {
 		// Already closed (or failed to load); idempotent return.
 		return nil
 	}
+	// p.pluginpath's bytes live in the plugin's RODATA — dlclose in
+	// phase 2 unmaps that memory, leaving the string header dangling.
+	// Anything that reads p.pluginpath after Close (e.g. lookup()'s
+	// "symbol not found in <path>" error path) would then fault.
+	// Clone into host memory before phase 1 so the field stays
+	// usable for diagnostics, and so pluginErr below — which also
+	// formats with p.pluginpath — works after a unloadPlugin failure.
+	p.pluginpath = cloneString(p.pluginpath)
 	if errstr := pluginClose(p.pluginpath, p.funcDescriptors); errstr != "" {
 		return pluginErr("Close", p.pluginpath, errstr)
 	}
@@ -215,6 +223,21 @@ func closePlugin(p *Plugin) error {
 // and dependency-free so it works in stub builds too.
 func pluginErr(op, path, msg string) error {
 	return &pluginError{op: op, path: path, msg: msg}
+}
+
+// cloneString returns a copy of s whose backing bytes are
+// freshly heap-allocated host memory, independent of any mapping s
+// may have been spliced from. The plugin pkg uses this on Close to
+// detach pluginpath from the plugin's RODATA before dlclose unmaps
+// that page. Equivalent to strings.Clone, reinlined here so the
+// plugin package keeps its small (errors-only) dependency surface.
+func cloneString(s string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	b := make([]byte, len(s))
+	copy(b, s)
+	return string(b)
 }
 
 type pluginError struct {

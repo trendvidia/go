@@ -57,6 +57,7 @@ import (
 	"fmt"
 	"os"
 	"plugin"
+	"runtime"
 	"unsafe"
 )
 
@@ -93,16 +94,37 @@ func main() {
 		fail("Close(): %v", err)
 	}
 
-	// Post-Close: the page containing codeAddr must no longer be
-	// part of any mapping (mincore -> ENOMEM).
+	// Post-Close mapping check. The strictness is OS-policy-bound:
+	//
+	//   - Linux: dlclose with refcount==0 reliably triggers munmap,
+	//     so the page MUST report ENOMEM. We assert that.
+	//
+	//   - Darwin: dyld may retain dylibs in process memory after
+	//     dlclose for caching reasons even when refcount drops to
+	//     zero (Apple documents dlclose as "may unload"). We can
+	//     only assert the weaker contract: dlclose returned 0 (no
+	//     error from p.Close above). The OS-level unmap is best
+	//     effort. The runtime side of v2 — descriptor stubs +
+	//     module unlink — does its job either way; held callers
+	//     panic via TestPanicOnCallStub regardless of whether the
+	//     mapping survives.
 	got := C.isUnmapped(C.uintptr_t(codeAddr), &errnoOut)
-	switch got {
-	case 1:
-		// Expected.
-	case 0:
-		fail("post-Close: page containing 0x%x is still mapped; dlclose did not unmap", codeAddr)
+	switch runtime.GOOS {
+	case "darwin":
+		// Either result is acceptable. Just verify isUnmapped
+		// itself didn't error out unexpectedly.
+		if got == -1 {
+			fail("post-Close: isUnmapped(0x%x) failed with unexpected errno=%d", codeAddr, int(errnoOut))
+		}
 	default:
-		fail("post-Close: isUnmapped(0x%x) failed with unexpected errno=%d", codeAddr, int(errnoOut))
+		switch got {
+		case 1:
+			// Expected.
+		case 0:
+			fail("post-Close: page containing 0x%x is still mapped; dlclose did not unmap", codeAddr)
+		default:
+			fail("post-Close: isUnmapped(0x%x) failed with unexpected errno=%d", codeAddr, int(errnoOut))
+		}
 	}
 
 	fmt.Println("closeunmaps ok")

@@ -426,6 +426,8 @@ func Main(arch *sys.Arch, theArch Arch) {
 	ctxt.textaddress()
 	bench.Start("typelink")
 	ctxt.typelink()
+	bench.Start("globalptrlink")
+	ctxt.globalptrlink()
 	bench.Start("buildinfo")
 	ctxt.buildinfo()
 	bench.Start("pclntab")

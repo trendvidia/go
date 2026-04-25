@@ -67,3 +67,56 @@ func (ctxt *Link) typelink() {
 		r.SetType(objabi.R_ADDR)
 	}
 }
+
+// globalptrlink gathers all per-module go.globalptr.* and go.funcptr.*
+// indirection slots emitted by the compiler under -shared/-dynlink and
+// builds the runtime.globalptrlinks / runtime.funcptrlinks carrier
+// symbols. moduledata exposes those carriers as slices so the runtime's
+// canonicalisation pass at module-load time can iterate every slot
+// without scanning the symbol table.
+//
+// In -buildmode=exe the compiler emits no slot symbols, so both
+// carriers remain zero-sized and the corresponding moduledata slices
+// are empty — runtime canonicalisation walks become no-ops.
+func (ctxt *Link) globalptrlink() {
+	ldr := ctxt.loader
+	var globalptrs, funcptrs []loader.Sym
+	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+		if !ldr.AttrReachable(s) {
+			continue
+		}
+		name := ldr.SymName(s)
+		switch {
+		case strings.HasPrefix(name, "go.globalptr."):
+			globalptrs = append(globalptrs, s)
+		case strings.HasPrefix(name, "go.funcptr."):
+			funcptrs = append(funcptrs, s)
+		}
+	}
+	// Sort by symbol name so emission is deterministic across builds.
+	slices.SortFunc(globalptrs, func(a, b loader.Sym) int {
+		return strings.Compare(ldr.SymName(a), ldr.SymName(b))
+	})
+	slices.SortFunc(funcptrs, func(a, b loader.Sym) int {
+		return strings.Compare(ldr.SymName(a), ldr.SymName(b))
+	})
+
+	ptrsize := ctxt.Arch.PtrSize
+	emit := func(carrierName string, slots []loader.Sym) {
+		c := ldr.CreateSymForUpdate(carrierName, 0)
+		c.SetType(sym.SRODATA)
+		ldr.SetAttrLocal(c.Sym(), true)
+		c.SetSize(int64(ptrsize * len(slots)))
+		c.Grow(c.Size())
+		relocs := c.AddRelocs(len(slots))
+		for i, s := range slots {
+			r := relocs.At(i)
+			r.SetSym(s)
+			r.SetOff(int32(i * ptrsize))
+			r.SetSiz(uint8(ptrsize))
+			r.SetType(objabi.R_ADDR)
+		}
+	}
+	emit("runtime.globalptrlinks", globalptrs)
+	emit("runtime.funcptrlinks", funcptrs)
+}

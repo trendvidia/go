@@ -791,6 +791,24 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 		nilSlice() // moduleshashes slice
 	}
 
+	// L2 globalptrs / funcptrs slot tables. Carriers are emitted by
+	// globalptrlink() in typelink.go; in -buildmode=exe both carriers
+	// are zero-sized so the slices come out empty.
+	globalptrlinkSym := ldr.Lookup("runtime.globalptrlinks", 0)
+	if globalptrlinkSym != 0 && ldr.SymSize(globalptrlinkSym) > 0 {
+		nslots := uint64(ldr.SymSize(globalptrlinkSym)) / uint64(ctxt.Arch.PtrSize)
+		slice(globalptrlinkSym, nslots)
+	} else {
+		nilSlice()
+	}
+	funcptrlinkSym := ldr.Lookup("runtime.funcptrlinks", 0)
+	if funcptrlinkSym != 0 && ldr.SymSize(funcptrlinkSym) > 0 {
+		nslots := uint64(ldr.SymSize(funcptrlinkSym)) / uint64(ctxt.Arch.PtrSize)
+		slice(funcptrlinkSym, nslots)
+	} else {
+		nilSlice()
+	}
+
 	hasmain := ctxt.BuildMode == BuildModeExe || ctxt.BuildMode == BuildModePIE
 	if hasmain {
 		moduledata.AddUint8(1)

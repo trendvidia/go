@@ -77,6 +77,14 @@ type Plugin struct {
 	err        string        // set if plugin failed to load
 	loaded     chan struct{} // closed when loaded
 	syms       map[string]any
+	// funcDescriptors are heap-allocated 1-word holders, one per
+	// function symbol returned by Lookup; each holds the dlsym'd
+	// code address and is the data pointer of the user's func
+	// value. At Close, the runtime overwrites *each holder with
+	// the address of runtime.pluginClosedFuncStub so a held call
+	// panics with a recognisable message instead of jumping into
+	// what dlclose has just unmapped.
+	funcDescriptors []*uintptr
 }
 
 // Open opens a Go plugin.
@@ -136,16 +144,27 @@ func pluginHasDependents(pluginpath string) bool
 func pluginDependents(pluginpath string) []string
 
 //go:linkname pluginClose
-func pluginClose(pluginpath string) (errstr string)
+func pluginClose(pluginpath string, funcDescriptors []*uintptr) (errstr string)
 
 // closePlugin is the platform-independent half of Plugin.Close: it
-// asks the runtime to remove the module's canonicalSyms entries and
-// unlink moduledata, then marks the plugin handle closed so future
-// Lookup calls fail with a clear error. v1 does NOT dlclose the .so
-// — the OS keeps the mapping but no Go state references it. Func
-// values held by the application across Close remain callable but
-// have no canonicalisation guarantee; calling them is application
-// responsibility (documented as undefined behaviour).
+// asks the runtime to remove the module's canonicalSyms entries,
+// rewrite every closure descriptor pointing into this plugin to a
+// panic-on-call stub, and unlink moduledata. Then it marks the
+// handle closed so future Lookup calls fail with a clear error.
+//
+// Two flavours of descriptor are neutralised by the runtime side:
+//
+//   - the static descriptors (pkg.F·f symbols) emitted into the
+//     plugin's own .noptrdata, found by walking canonicalSyms;
+//
+//   - the per-Lookup heap holders threaded through funcDescriptors:
+//     these are the 1-word allocations open() makes for each func
+//     symbol so the user's func value has somewhere stable to
+//     dereference into the dlsym'd code address.
+//
+// v2 does not yet dlclose the .so — that ships with the descriptor
+// rewrite as a paired feature so held calls panic before any access
+// to unmapped pages.
 func closePlugin(p *Plugin) error {
 	if p == nil {
 		return nil
@@ -154,13 +173,16 @@ func closePlugin(p *Plugin) error {
 		// Already closed (or failed to load); idempotent return.
 		return nil
 	}
-	if errstr := pluginClose(p.pluginpath); errstr != "" {
+	if errstr := pluginClose(p.pluginpath, p.funcDescriptors); errstr != "" {
 		return pluginErr("Close", p.pluginpath, errstr)
 	}
 	// Clear p.syms so Lookup post-Close returns the standard
 	// "symbol not found" error for every name without needing a
-	// separate is-closed check in lookup().
+	// separate is-closed check in lookup(). Drop funcDescriptors
+	// for the same reason — the runtime has already neutralised
+	// each holder, and the plugin handle is dead.
 	p.syms = nil
+	p.funcDescriptors = nil
 	p.err = "closed"
 	return nil
 }

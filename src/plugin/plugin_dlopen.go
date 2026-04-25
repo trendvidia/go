@@ -96,6 +96,7 @@ func open(name string) (*Plugin, error) {
 
 	// Fill out the value of each plugin symbol.
 	updatedSyms := map[string]any{}
+	var funcDescriptors []*uintptr
 	for symName, sym := range syms {
 		isFunc := symName[0] == '.'
 		if isFunc {
@@ -107,21 +108,34 @@ func open(name string) (*Plugin, error) {
 		cname := make([]byte, len(fullName)+1)
 		copy(cname, fullName)
 
-		p := C.pluginLookup(h, (*C.char)(unsafe.Pointer(&cname[0])), &cErr)
-		if p == nil {
+		dlp := C.pluginLookup(h, (*C.char)(unsafe.Pointer(&cname[0])), &cErr)
+		if dlp == nil {
 			return nil, errors.New(`plugin.Open("` + name + `"): could not find symbol ` + symName + `: ` + C.GoString(cErr))
 		}
 		valp := (*[2]unsafe.Pointer)(unsafe.Pointer(&sym))
 		if isFunc {
-			(*valp)[1] = unsafe.Pointer(&p)
+			// A Go func value is a 1-pointer struct whose data
+			// pointer points at a closure descriptor; calling
+			// the value loads descriptor[0] and indirects to it.
+			// Allocate that descriptor explicitly here (instead
+			// of the historic &p escape trick) so we have a
+			// stable reference to give to Plugin.Close — at
+			// Close, the runtime overwrites *holder with the
+			// pluginClosedFuncStub PC, converting any held call
+			// into a clean panic.
+			holder := new(uintptr)
+			*holder = uintptr(dlp)
+			(*valp)[1] = unsafe.Pointer(holder)
+			funcDescriptors = append(funcDescriptors, holder)
 		} else {
-			(*valp)[1] = p
+			(*valp)[1] = dlp
 		}
 		// we can't add to syms during iteration as we'll end up processing
 		// some symbols twice with the inability to tell if the symbol is a function
 		updatedSyms[symName] = sym
 	}
 	p.syms = updatedSyms
+	p.funcDescriptors = funcDescriptors
 
 	close(p.loaded)
 	return p, nil

@@ -129,6 +129,7 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-buildmode=plugin", "-o=unnamed2.so", "./unnamed2/main.go")
 	goCmd(nil, "build", "-o", "host.exe", "./host")
 	goCmd(nil, "build", "-o", "closeapi.exe", "./closeapi")
+	goCmd(nil, "build", "-o", "panicstub.exe", "./panicstub")
 
 	// TestRefcountUnload setup: two plugins importing a shared
 	// package the host doesn't, plus a host that exercises the
@@ -238,6 +239,17 @@ func TestRunHost(t *testing.T) {
 func TestCloseAPI(t *testing.T) {
 	globalSkip(t)
 	run(t, "./closeapi.exe")
+}
+
+// TestPanicOnCallStub exercises v2's funcptr panic-on-call stub
+// conversion: a func value obtained from plugin.Lookup must, after
+// Plugin.Close, panic with a recognisable message rather than jumping
+// into unmapped plugin text. The fixture loads plugin1.so, takes a
+// reference to plugin1.F, closes the plugin, then invokes the held
+// reference under recover() and checks the panic message.
+func TestPanicOnCallStub(t *testing.T) {
+	globalSkip(t)
+	run(t, "./panicstub.exe")
 }
 
 // TestRefcountUnload exercises the cross-plugin dependency tracking

@@ -6,6 +6,7 @@ package runtime
 
 import (
 	"internal/abi"
+	"internal/stringslite"
 	"unsafe"
 )
 
@@ -185,8 +186,68 @@ func plugin_dependents(pluginpath string) []string {
 	return out
 }
 
+// pluginClosedFuncStub is the target written into every closure
+// descriptor's F field at Plugin.Close. A held func value (e.g. one
+// returned by plugin.Lookup, or one referenced by a plugin-internal
+// global the host obtained through Lookup-of-variable) calls indirect
+// through descriptor.F; after the rewrite that indirect lands here
+// and panics with a recognisable message.
+//
+// The stub takes no arguments and returns nothing — caller's actual
+// signature can be anything. The ABI mismatch is harmless: panic
+// unwinds via deferred handlers before the caller's epilogue runs,
+// so the caller never observes a return.
+//
+// Without this rewrite, a held call after dlclose would jump into
+// unmapped memory and SIGSEGV; with it, the failure is an ordinary
+// (recoverable) Go panic. v2 ships this together with the descriptor-
+// writability change in cmd/compile/internal/staticdata.WriteFuncSyms
+// — the rewrite at Close requires the target descriptor to live in
+// writable .noptrdata rather than RODATA.
+func pluginClosedFuncStub() {
+	panic(pluginClosedFuncMsg)
+}
+
+const pluginClosedFuncMsg = "plugin: function value invoked after Plugin.Close"
+
+// funcSymSuffix is the string a closure-descriptor symbol's name ends
+// with: U+00B7 MIDDLE DOT (0xC2 0xB7 in UTF-8) followed by 'f', i.e.
+// "·f". cmd/compile/internal/ir.FuncSymName forms descriptor names
+// this way and the linker preserves the suffix into the per-module
+// funcptrnames blob, where canonicalSyms uses the (suffix-bearing)
+// name as its key. Filtering on this suffix at Close distinguishes
+// PFUNC slots (descriptor addresses, what we want to rewrite) from
+// OCFUNC slots (raw code addresses, irrelevant for stub conversion).
+const funcSymSuffix = "·f"
+
+// neutraliseStaticDescriptors rewrites every closure descriptor owned
+// by md (i.e. emitted into md's writable .noptrdata) so its F field
+// points at pluginClosedFuncStub. Called from plugin_close before the
+// canonicalSyms cleanup tears down the (name, addr, owner) triples.
+//
+// canonicalSyms is keyed by the slot symbol's suffix (the descriptor's
+// own name including "·f"); an entry's addr is the address of the
+// descriptor itself (since canonicalizeSlots stored *slot, and the
+// slot was initialised by SymPtr to the descriptor symbol). Filtering
+// owner == md keeps us from touching descriptors that md merely
+// references — those belong to other modules whose mappings remain.
+//
+// Caller holds canonicalSymsLock.
+func neutraliseStaticDescriptors(md *moduledata, stubPC uintptr) {
+	for name, entry := range canonicalSyms {
+		if entry.owner != md {
+			continue
+		}
+		if !stringslite.HasSuffix(name, funcSymSuffix) {
+			continue
+		}
+		descF := (*uintptr)(unsafe.Pointer(entry.addr))
+		*descF = stubPC
+	}
+}
+
 //go:linkname plugin_close plugin.pluginClose
-func plugin_close(pluginpath string) (errstr string) {
+func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string) {
 	lock(&canonicalSymsLock)
 	defer unlock(&canonicalSymsLock)
 
@@ -196,6 +257,35 @@ func plugin_close(pluginpath string) (errstr string) {
 	}
 	if md.refcount > 0 {
 		return "plugin has dependents; Close them first"
+	}
+
+	// Convert every held func value pointing into this module to a
+	// panic-on-call. Two distinct sources:
+	//
+	//   (1) Static closure descriptors emitted by the compiler for
+	//       the plugin's own PFUNC values. Reachable from anything
+	//       (host or other plugin) that holds a function-typed
+	//       variable whose address ultimately resolves into this
+	//       module's data — e.g. the host obtained `*[]func()` via
+	//       Lookup-of-variable. Rewritten via canonicalSyms walk.
+	//
+	//   (2) Heap descriptors allocated per call by plugin.Lookup
+	//       when the user requested a function symbol — each such
+	//       Lookup escapes a 1-word holder containing the dlsym'd
+	//       code address; the func value's data pointer points at
+	//       that holder, not at the static descriptor. The plugin
+	//       package threads the slice of holders to us.
+	//
+	// Both rewrites must happen BEFORE dlclose (added in the second
+	// half of v2): once the plugin's text and data are unmapped we
+	// can neither read the descriptor's current contents nor write
+	// new ones without faulting.
+	stubPC := abi.FuncPCABIInternal(pluginClosedFuncStub)
+	neutraliseStaticDescriptors(md, stubPC)
+	for _, descF := range heapDescriptors {
+		if descF != nil {
+			*descF = stubPC
+		}
 	}
 
 	// Remove canonicalSyms entries owned by this module — they

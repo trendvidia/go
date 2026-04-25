@@ -130,6 +130,13 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "host.exe", "./host")
 	goCmd(nil, "build", "-o", "closeapi.exe", "./closeapi")
 
+	// TestRefcountUnload setup: two plugins importing a shared
+	// package the host doesn't, plus a host that exercises the
+	// L3 dependency tracking.
+	goCmd(nil, "build", "-buildmode=plugin", "-o=plugA.so", "./refcount/plugA")
+	goCmd(nil, "build", "-buildmode=plugin", "-o=plugB.so", "./refcount/plugB")
+	goCmd(nil, "build", "-o", "refcount.exe", "./refcount/host")
+
 	return m.Run()
 }
 
@@ -231,6 +238,19 @@ func TestRunHost(t *testing.T) {
 func TestCloseAPI(t *testing.T) {
 	globalSkip(t)
 	run(t, "./closeapi.exe")
+}
+
+// TestRefcountUnload exercises the cross-plugin dependency tracking
+// added by L3.a. plugA and plugB both import a package the host
+// does not (refcount/mylib), so plugA owns the canonical
+// mylib.Counter and plugB's slots canonicalise to plugA's instance.
+// The test verifies that Counter is shared (canonicalisation
+// works), that plugA reports plugB as a dependent, that Close on
+// plugA fails while plugB depends on it, and that the order
+// plugB→plugA Close succeeds.
+func TestRefcountUnload(t *testing.T) {
+	globalSkip(t)
+	run(t, "./refcount.exe")
 }
 
 func TestUniqueTypesAndItabs(t *testing.T) {

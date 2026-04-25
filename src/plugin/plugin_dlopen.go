@@ -30,6 +30,22 @@ static void* pluginLookup(uintptr_t h, const char* name, char** err) {
 	}
 	return r;
 }
+
+static int pluginCloseHandle(uintptr_t h, char** err) {
+	// dlclose returns 0 on success, non-zero on failure with the
+	// reason retrievable via dlerror. After a successful return the
+	// .so's mapping refcount is decremented; the OS unmaps once it
+	// reaches zero. v2's Plugin.Close ensures every held descriptor
+	// has already been rewritten to the runtime panic stub before
+	// this call, so even if a goroutine still holds a func value
+	// derived from this plugin, calling it lands in the stub (which
+	// is mapped in the host) rather than what we're about to unmap.
+	if (dlclose((void*)h) != 0) {
+		*err = (char*)dlerror();
+		return 1;
+	}
+	return 0;
+}
 */
 import "C"
 
@@ -88,6 +104,7 @@ func open(name string) (*Plugin, error) {
 	p := &Plugin{
 		pluginpath: pluginpath,
 		loaded:     make(chan struct{}),
+		handle:     uintptr(h),
 	}
 	plugins[filepath] = p
 	pluginsMu.Unlock()
@@ -146,6 +163,39 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 		return s, nil
 	}
 	return nil, errors.New("plugin: symbol " + symName + " not found in plugin " + p.pluginpath)
+}
+
+// unloadPlugin is the platform-side phase 2 of Plugin.Close: it
+// dlcloses the OS handle so the .so's mapping refcount drops and
+// the kernel may unmap the text/data backing pages.
+//
+// The Plugin's runtime state has already been torn down by phase 1
+// (descriptor rewrite + module unlink) when this is called. A zero
+// handle (failed-load placeholder, or an entry that already had
+// Close run) is a no-op so callers can be conservative.
+//
+// Cache cleanup: the plugins[filepath] entry is also removed under
+// pluginsMu so a future plugin.Open of the same path obtains a
+// fresh dlopen (and a fresh moduledata) instead of latching onto
+// the closed handle. Without this step, Close would unmap but the
+// next Open would short-circuit on the cached closed *Plugin.
+func unloadPlugin(p *Plugin) error {
+	if p.handle == 0 {
+		return nil
+	}
+	var cErr *C.char
+	if C.pluginCloseHandle(C.uintptr_t(p.handle), &cErr) != 0 {
+		return errors.New(C.GoString(cErr))
+	}
+	pluginsMu.Lock()
+	for path, q := range plugins {
+		if q == p {
+			delete(plugins, path)
+			break
+		}
+	}
+	pluginsMu.Unlock()
+	return nil
 }
 
 var (

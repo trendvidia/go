@@ -130,6 +130,7 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "host.exe", "./host")
 	goCmd(nil, "build", "-o", "closeapi.exe", "./closeapi")
 	goCmd(nil, "build", "-o", "panicstub.exe", "./panicstub")
+	goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
 
 	// TestRefcountUnload setup: two plugins importing a shared
 	// package the host doesn't, plus a host that exercises the
@@ -250,6 +251,18 @@ func TestCloseAPI(t *testing.T) {
 func TestPanicOnCallStub(t *testing.T) {
 	globalSkip(t)
 	run(t, "./panicstub.exe")
+}
+
+// TestCloseUnloadsMemory verifies that v2's Plugin.Close actually
+// dlcloses the plugin and the kernel unmaps its text pages. The
+// fixture captures the dlsym'd code address before Close, calls
+// Close, then probes the page with mincore — ENOMEM proves the
+// mapping is gone. TestPanicOnCallStub on its own only shows that
+// the descriptor rewrite ran before unmap; this test shows that the
+// unmap also happened.
+func TestCloseUnloadsMemory(t *testing.T) {
+	globalSkip(t)
+	run(t, "./closeunmaps.exe")
 }
 
 // TestRefcountUnload exercises the cross-plugin dependency tracking

@@ -85,6 +85,14 @@ type Plugin struct {
 	// panics with a recognisable message instead of jumping into
 	// what dlclose has just unmapped.
 	funcDescriptors []*uintptr
+	// handle is the platform dlopen handle (or 0 in stub builds /
+	// failed-load entries). Plugin.Close passes this to the
+	// platform unloadPlugin path which calls dlclose, releasing
+	// the OS-level mapping after the runtime side has rewritten
+	// every held descriptor to a panic stub. Handles are not
+	// reused across re-opens: each successful Open obtains a fresh
+	// handle from dlopen.
+	handle uintptr
 }
 
 // Open opens a Go plugin.
@@ -146,25 +154,34 @@ func pluginDependents(pluginpath string) []string
 //go:linkname pluginClose
 func pluginClose(pluginpath string, funcDescriptors []*uintptr) (errstr string)
 
-// closePlugin is the platform-independent half of Plugin.Close: it
-// asks the runtime to remove the module's canonicalSyms entries,
-// rewrite every closure descriptor pointing into this plugin to a
-// panic-on-call stub, and unlink moduledata. Then it marks the
-// handle closed so future Lookup calls fail with a clear error.
+// closePlugin is the platform-independent half of Plugin.Close. It
+// runs in three ordered phases:
 //
-// Two flavours of descriptor are neutralised by the runtime side:
+//  1. Runtime side (pluginClose): rewrites every closure descriptor
+//     pointing into this plugin to runtime.pluginClosedFuncStub —
+//     both the static descriptors emitted into the plugin's
+//     .noptrdata (found via canonicalSyms) and the per-Lookup heap
+//     holders threaded through funcDescriptors. Removes the
+//     module's canonicalSyms entries and unlinks moduledata.
 //
-//   - the static descriptors (pkg.F·f symbols) emitted into the
-//     plugin's own .noptrdata, found by walking canonicalSyms;
+//  2. Platform side (unloadPlugin): dlclose / FreeLibraryEx. The OS
+//     unmaps the plugin's text and data. Held func values are safe
+//     to call: phase 1 already redirected them at the panic stub.
 //
-//   - the per-Lookup heap holders threaded through funcDescriptors:
-//     these are the 1-word allocations open() makes for each func
-//     symbol so the user's func value has somewhere stable to
-//     dereference into the dlsym'd code address.
+//  3. Marker: clear syms/funcDescriptors and set err so subsequent
+//     Lookup calls return the standard "symbol not found" error and
+//     repeated Close calls are no-ops.
 //
-// v2 does not yet dlclose the .so — that ships with the descriptor
-// rewrite as a paired feature so held calls panic before any access
-// to unmapped pages.
+// The phase ordering is load-bearing: phase 1 reads and writes the
+// plugin's still-mapped descriptor pages; doing it after phase 2
+// would fault. Phase 2 cannot precede phase 1 for the same reason
+// (descriptors gone, held callers would jump into unmapped text).
+//
+// Concurrent Close + held-call: an in-flight call started before
+// phase 1 may dispatch through the original (still-valid) code
+// pointer it loaded, then phase 2 unmaps the text out from under
+// it. v2 does not STW for unload; the application must ensure no
+// goroutine is mid-call into the plugin when it invokes Close.
 func closePlugin(p *Plugin) error {
 	if p == nil {
 		return nil
@@ -176,13 +193,20 @@ func closePlugin(p *Plugin) error {
 	if errstr := pluginClose(p.pluginpath, p.funcDescriptors); errstr != "" {
 		return pluginErr("Close", p.pluginpath, errstr)
 	}
-	// Clear p.syms so Lookup post-Close returns the standard
-	// "symbol not found" error for every name without needing a
-	// separate is-closed check in lookup(). Drop funcDescriptors
-	// for the same reason — the runtime has already neutralised
-	// each holder, and the plugin handle is dead.
+	if err := unloadPlugin(p); err != nil {
+		// Runtime state is already torn down. Surface the dlclose
+		// error but mark the plugin closed regardless: re-trying
+		// Close would no-op (p.err is set below) and the OS
+		// handle, if it survived dlclose's failure, is leaked
+		// rather than retried.
+		p.syms = nil
+		p.funcDescriptors = nil
+		p.err = "closed"
+		return pluginErr("Close", p.pluginpath, err.Error())
+	}
 	p.syms = nil
 	p.funcDescriptors = nil
+	p.handle = 0
 	p.err = "closed"
 	return nil
 }

@@ -28,7 +28,7 @@ import "unsafe"
 // plugin against the existing registry.
 //
 // Access is serialised by canonicalSymsLock.
-var canonicalSyms map[string]uintptr
+var canonicalSyms = make(map[string]uintptr, 1024)
 var canonicalSymsLock mutex
 
 // canonicalSymName returns the target name for slot index i in the
@@ -77,9 +77,6 @@ func globalptrsinit() {
 		return
 	}
 	lock(&canonicalSymsLock)
-	if canonicalSyms == nil {
-		canonicalSyms = make(map[string]uintptr)
-	}
 	for _, md := range activeModules() {
 		if len(md.globalptrs) == 0 {
 			continue
@@ -97,9 +94,6 @@ func funcptrsinit() {
 		return
 	}
 	lock(&canonicalSymsLock)
-	if canonicalSyms == nil {
-		canonicalSyms = make(map[string]uintptr)
-	}
 	for _, md := range activeModules() {
 		if len(md.funcptrs) == 0 {
 			continue

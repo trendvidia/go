@@ -286,7 +286,22 @@ func WriteFuncSyms() {
 			base.Fatalf("expected ABIInternal: %v has %v", target, target.ABI())
 		}
 		objw.SymPtr(sf, 0, target, 0)
-		objw.Global(sf, int32(types.PtrSize), obj.DUPOK|obj.RODATA)
+		// Under -buildmode=plugin / -buildmode=shared, closure
+		// descriptors must be writable so Plugin.Close (v2) can
+		// rewrite the F field to a panic-on-call stub before
+		// dlclose unmaps the plugin's text. Force SNOPTRDATA via
+		// the same pattern used for go.globalptr/go.funcptr slots
+		// (NOPTR alone makes Globl pick SNOPTRBSS for content-less
+		// symbols; we have a 1-pointer SymPtr initialiser here so
+		// we explicitly force SNOPTRDATA to land in writable
+		// .noptrdata). Standard -buildmode=exe keeps RODATA — bit-
+		// identical output for non-plugin builds.
+		if base.Ctxt.Flag_dynlink || base.Ctxt.Flag_shared {
+			objw.Global(sf, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
+			sf.Type = objabi.SNOPTRDATA
+		} else {
+			objw.Global(sf, int32(types.PtrSize), obj.DUPOK|obj.RODATA)
+		}
 	}
 }
 

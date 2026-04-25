@@ -76,14 +76,40 @@ func slotLsym(prefix string, orig *obj.LSym) *obj.LSym {
 }
 
 // isCompilerInternal reports whether name identifies a per-module
-// compiler-generated symbol that shouldn't get a cross-module
-// indirection slot. Go's convention is `<pkg>..<internal>` (a literal
-// double-dot in the symbol name) for these — statictmps
-// (`runtime..stmp_NNN`), gcdata (`<pkg>..gcdata`), inittask
-// (`<pkg>..inittask`), etc. The double-dot is what distinguishes them
-// from user-visible package members, which can never contain `..`.
+// symbol that shouldn't get a cross-module indirection slot.
+//
+// Two categories:
+//
+//  1. Compiler-generated names containing a literal `..` —
+//     statictmps (runtime..stmp_NNN), gcdata (<pkg>..gcdata),
+//     inittask (<pkg>..inittask), etc. The double-dot is Go's
+//     convention; user-visible package members can never contain it.
+//
+//  2. Symbols in the `runtime` package or `internal/` packages —
+//     these include per-module-instance state (runtime.firstmoduledata,
+//     runtime.lastmoduledatap) that MUST stay local to its emitting
+//     module. Canonicalising plugin's runtime.firstmoduledata to the
+//     host's value breaks plugin registration: addmoduledata would
+//     receive the host's already-registered struct instead of the
+//     plugin's new one. Other runtime globals (e.g. runtime.GOOS) are
+//     duplicated harmlessly across modules — each has the same value
+//     at link time. Direct addressing within each module is correct.
+//
+// Other packages — including the standard library and user code — go
+// through indirection so that plugin and host see the same canonical
+// instance of, e.g., os.Args, fmt's interface tables, or a user's
+// `var Counter int` exported across module boundaries.
 func isCompilerInternal(name string) bool {
-	return strings.Contains(name, "..")
+	if strings.Contains(name, "..") {
+		return true
+	}
+	if strings.HasPrefix(name, "runtime.") {
+		return true
+	}
+	if strings.HasPrefix(name, "internal/") {
+		return true
+	}
+	return false
 }
 
 // slotMu serialises slot creation. Without it, two goroutines

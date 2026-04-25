@@ -13,31 +13,28 @@ import "unsafe"
 // subsequent modules' slots are rewritten to point at the registered
 // address (first-loader-wins).
 //
-// canonicalSyms persists across module loads. Plugin Close (Layer 3)
-// is responsible for any per-module entry cleanup; the table itself
-// outlives individual modules.
+// canonicalSyms is allocated lazily on the FIRST plugin load —
+// single-module programs never touch it. This sidesteps an early-
+// runtime heap-allocator state issue that surfaces when a map is
+// grown from inside schedinit before the page allocator is fully
+// settled (typelinksinit avoids the same problem with its own
+// firstmoduledata.next == nil short-circuit).
 //
-// Access is serialised by canonicalSymsLock. The map is created
-// lazily by globalptrsinit on first call.
+// On the first plugin load, globalptrsinit walks ALL active modules:
+// host first (since modulesinit places the hasmain module at index
+// 0), then the plugin. Host's slot values get registered as
+// canonical; plugin's slot values get rewritten to the registered
+// canonical. Subsequent plugin loads canonicalise just the new
+// plugin against the existing registry.
 //
-// TODO(L2.d follow-up): the mutation path (canonicalSyms[name] = addr
-// and slot rewrite) bus-errors during early runtime startup on
-// darwin/arm64 — bisection on galaxy showed even slice-append-based
-// alternatives fail in the same way. Likely a write-barrier or PAC
-// interaction specific to early-startup global mutation. For now
-// canonicalizeSlots iterates and reads but does not mutate, leaving
-// every slot self-referential. This is correct for single-module
-// programs (the host's own slots already point at the host's
-// instances); cross-module canonicalisation under -buildmode=plugin
-// will need this resolved before L3's Close can rely on it.
+// Access is serialised by canonicalSymsLock.
 var canonicalSyms map[string]uintptr
 var canonicalSymsLock mutex
 
-// canonicalSymName returns the target name for slot index i in tab,
-// where tab is one of moduledata.globalptrnameoffs / funcptrnameoffs
-// and blob is the matching globalptrnames / funcptrnames byte slice.
-// The name is a substring of the blob; valid for the lifetime of the
-// module.
+// canonicalSymName returns the target name for slot index i in the
+// per-module name table. Returned string shares storage with the
+// module's globalptrnames / funcptrnames blob (via unsafe.String);
+// valid for the lifetime of the module.
 func canonicalSymName(blob []byte, offs []int32, i int) string {
 	off := int(offs[i])
 	end := off
@@ -47,26 +44,42 @@ func canonicalSymName(blob []byte, offs []int32, i int) string {
 	return unsafe.String(&blob[off], end-off)
 }
 
-// canonicalizeSlots walks slots, names, and offsets in lockstep.
-// When the canonicalSyms registry mutation issue (see file-level
-// TODO) is resolved, this becomes the first-loader-wins
-// canonicalisation pass. Until then it's a structural placeholder
-// that exercises the iteration and name decode without touching the
-// shared registry — slots stay self-referential.
+// canonicalizeSlots walks slots, names, and offsets in lockstep,
+// registering each previously-unseen target name's address as
+// canonical and rewriting subsequent loaders' slots to point at it.
+//
+// Caller holds canonicalSymsLock and has already verified that more
+// than one module is loaded (so the canonicalSyms map is safe to
+// allocate and grow).
 func canonicalizeSlots(slots []uintptr, offs []int32, blob []byte) {
 	for i := range slots {
-		_ = (*uintptr)(unsafe.Pointer(slots[i]))
-		_ = canonicalSymName(blob, offs, i)
+		slot := (*uintptr)(unsafe.Pointer(slots[i]))
+		name := canonicalSymName(blob, offs, i)
+		if canonical, ok := canonicalSyms[name]; ok {
+			if *slot != canonical {
+				*slot = canonical
+			}
+			continue
+		}
+		canonicalSyms[name] = *slot
 	}
 }
 
-// globalptrsinit will canonicalise all go.globalptr.* slot
-// indirections across every active module to their first-loader-wins
-// instance once the registry mutation issue is resolved. Currently
-// runs the iteration scaffolding only; slots stay self-referential,
-// which is correct for single-module programs.
+// globalptrsinit canonicalises go.globalptr.* slot indirections
+// across every active module to their first-loader-wins instance.
+// Run at every module load (host startup and each plugin load),
+// but short-circuits for single-module programs where slots are
+// already self-referential and no cross-module canonicalisation is
+// possible.
 func globalptrsinit() {
+	if firstmoduledata.next == nil {
+		// Single-module program; slots already self-referential.
+		return
+	}
 	lock(&canonicalSymsLock)
+	if canonicalSyms == nil {
+		canonicalSyms = make(map[string]uintptr)
+	}
 	for _, md := range activeModules() {
 		if len(md.globalptrs) == 0 {
 			continue
@@ -76,12 +89,17 @@ func globalptrsinit() {
 	unlock(&canonicalSymsLock)
 }
 
-// funcptrsinit will canonicalise all go.funcptr.* slot indirections
-// (closure code pointers, function values, method-value wrappers).
-// Currently the structural placeholder; see globalptrsinit and the
-// file-level TODO.
+// funcptrsinit canonicalises go.funcptr.* slot indirections (closure
+// code pointers, function values, method-value wrappers) the same
+// way globalptrsinit handles data globals.
 func funcptrsinit() {
+	if firstmoduledata.next == nil {
+		return
+	}
 	lock(&canonicalSymsLock)
+	if canonicalSyms == nil {
+		canonicalSyms = make(map[string]uintptr)
+	}
 	for _, md := range activeModules() {
 		if len(md.funcptrs) == 0 {
 			continue

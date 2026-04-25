@@ -3072,9 +3072,11 @@ func (s *state) exprCheckPtr(n ir.Node, checkPtrOK bool) *ssa.Value {
 			// go.funcptr.<sym> slot so plugin/host see the same
 			// canonical entry point after first-loader-wins
 			// canonicalisation. See L2.a comment on PEXTERN.
-			slot := staticdata.FuncPtrLsym(aux)
-			slotAddr := s.entryNewValue1A(ssa.OpAddr, types.NewPtr(n.Type()), slot, s.sb)
-			return s.rawLoad(n.Type(), slotAddr)
+			// nil = compiler-internal symbol; fall through.
+			if slot := staticdata.FuncPtrLsym(aux); slot != nil {
+				slotAddr := s.entryNewValue1A(ssa.OpAddr, types.NewPtr(n.Type()), slot, s.sb)
+				return s.rawLoad(n.Type(), slotAddr)
+			}
 		}
 		return s.entryNewValue1A(ssa.OpAddr, n.Type(), aux, s.sb)
 	case ir.ONAME:
@@ -3085,10 +3087,12 @@ func (s *state) exprCheckPtr(n ir.Node, checkPtrOK bool) *ssa.Value {
 			if base.Ctxt.Flag_dynlink || base.Ctxt.Flag_shared {
 				// Indirect through go.funcptr.<sym> so values of type
 				// func(...) hold the canonical descriptor address.
-				slot := staticdata.FuncPtrLsym(sym)
-				ptrToFunc := types.NewPtr(n.Type())
-				slotAddr := s.entryNewValue1A(ssa.OpAddr, types.NewPtr(ptrToFunc), slot, s.sb)
-				return s.rawLoad(ptrToFunc, slotAddr)
+				// nil = compiler-internal symbol; fall through.
+				if slot := staticdata.FuncPtrLsym(sym); slot != nil {
+					ptrToFunc := types.NewPtr(n.Type())
+					slotAddr := s.entryNewValue1A(ssa.OpAddr, types.NewPtr(ptrToFunc), slot, s.sb)
+					return s.rawLoad(ptrToFunc, slotAddr)
+				}
 			}
 			return s.entryNewValue1A(ssa.OpAddr, types.NewPtr(n.Type()), sym, s.sb)
 		}
@@ -5293,9 +5297,11 @@ func (s *state) addr(n ir.Node) *ssa.Value {
 				// first-loader's instance at module-load time. See
 				// staticdata.GlobalPtrLsym for the slot's shape and
 				// runtime/symtab.go for the rewriting pass.
-				slot := staticdata.GlobalPtrLsym(n.Linksym())
-				slotAddr := s.entryNewValue1A(ssa.OpAddr, types.NewPtr(t), slot, s.sb)
-				return s.rawLoad(t, slotAddr)
+				// nil = compiler-internal symbol; fall through.
+				if slot := staticdata.GlobalPtrLsym(n.Linksym()); slot != nil {
+					slotAddr := s.entryNewValue1A(ssa.OpAddr, types.NewPtr(t), slot, s.sb)
+					return s.rawLoad(t, slotAddr)
+				}
 			}
 			return linksymOffset(n.Linksym(), 0)
 		case ir.PPARAM:

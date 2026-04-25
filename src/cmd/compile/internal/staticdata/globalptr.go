@@ -11,6 +11,7 @@ import (
 	"cmd/compile/internal/objw"
 	"cmd/compile/internal/types"
 	"cmd/internal/obj"
+	"cmd/internal/objabi"
 )
 
 // GlobalPtrLsym returns the linker symbol for the go.globalptr.<orig.Name>
@@ -52,6 +53,12 @@ func slotLsym(prefix string, orig *obj.LSym) *obj.LSym {
 	if s.Size == 0 {
 		objw.SymPtr(s, 0, orig, 0)
 		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
+		// Force SNOPTRDATA so the slot lives in writable .noptrdata
+		// rather than being promoted to a RELRO read-only section by
+		// makeRelroForSharedLib (which boosts ReadOnly symbol kinds
+		// with relocations to *RELRO variants). The runtime needs to
+		// write to the slot during canonicalisation at module load.
+		s.Type = objabi.SNOPTRDATA
 	}
 	slotMu.Unlock()
 	return s

@@ -461,6 +461,17 @@ type moduledata struct {
 
 	typemap map[typeOff]*_type // offset to *_rtype in previous module
 
+	// L3 cross-module dependency tracking. dependents is the set of
+	// modules that hold canonicalised references into THIS module's
+	// symbols (populated by canonicalizeSlots when it rewrites a
+	// referencer's slot to point at one of our addresses). refcount
+	// is len(dependents), cached for fast HasDependents queries.
+	// Both are runtime-populated (linker emits zero-init); the map
+	// is allocated lazily on the first dependency edge into this
+	// module. Access is serialised by canonicalSymsLock.
+	dependents map[*moduledata]struct{}
+	refcount   uint64
+
 	next *moduledata
 }
 

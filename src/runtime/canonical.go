@@ -6,29 +6,29 @@ package runtime
 
 import "unsafe"
 
+// canonicalEntry records the canonical (first-loader-wins) address
+// of a target symbol along with the module that owns it. Recording
+// the owner is what lets L3 build the per-module dependents set:
+// when canonicalizeSlots rewrites a referencer's slot to point at
+// owner's address, we know to record (referencer → owner) as a
+// dependency edge.
+type canonicalEntry struct {
+	addr  uintptr
+	owner *moduledata
+}
+
 // canonicalSyms maps a symbol's target name (the string after the
-// "go.globalptr." or "go.funcptr." prefix in a slot symbol's name) to
-// the canonical address of that target across all loaded modules.
-// The first module to register a name owns the canonical address;
-// subsequent modules' slots are rewritten to point at the registered
-// address (first-loader-wins).
+// "go.globalptr." or "go.funcptr." prefix in a slot symbol's name)
+// to the canonical (addr, owner). The first module to register a
+// name owns the canonical address; subsequent modules' slots are
+// rewritten to that address (first-loader-wins).
 //
-// canonicalSyms is allocated lazily on the FIRST plugin load —
-// single-module programs never touch it. This sidesteps an early-
-// runtime heap-allocator state issue that surfaces when a map is
-// grown from inside schedinit before the page allocator is fully
-// settled (typelinksinit avoids the same problem with its own
-// firstmoduledata.next == nil short-circuit).
-//
-// On the first plugin load, globalptrsinit walks ALL active modules:
-// host first (since modulesinit places the hasmain module at index
-// 0), then the plugin. Host's slot values get registered as
-// canonical; plugin's slot values get rewritten to the registered
-// canonical. Subsequent plugin loads canonicalise just the new
-// plugin against the existing registry.
+// canonicalSyms persists across module loads. Plugin Close (L3.b)
+// removes the closing module's owner entries; remaining entries
+// outlive individual modules.
 //
 // Access is serialised by canonicalSymsLock.
-var canonicalSyms = make(map[string]uintptr, 1024)
+var canonicalSyms = make(map[string]canonicalEntry, 1024)
 var canonicalSymsLock mutex
 
 // canonicalSymName returns the target name for slot index i in the
@@ -48,20 +48,44 @@ func canonicalSymName(blob []byte, offs []int32, i int) string {
 // registering each previously-unseen target name's address as
 // canonical and rewriting subsequent loaders' slots to point at it.
 //
-// Caller holds canonicalSymsLock and has already verified that more
-// than one module is loaded (so the canonicalSyms map is safe to
-// allocate and grow).
-func canonicalizeSlots(slots []uintptr, offs []int32, blob []byte) {
+// cur is the module owning these slots. When a slot is rewritten to
+// point at another module's instance, we record that cur depends on
+// that other module — used by Plugin.Close to refuse unload of a
+// module whose symbols are still referenced.
+//
+// Caller holds canonicalSymsLock.
+func canonicalizeSlots(cur *moduledata, slots []uintptr, offs []int32, blob []byte) {
 	for i := range slots {
 		slot := (*uintptr)(unsafe.Pointer(slots[i]))
 		name := canonicalSymName(blob, offs, i)
-		if canonical, ok := canonicalSyms[name]; ok {
-			if *slot != canonical {
-				*slot = canonical
+		if entry, ok := canonicalSyms[name]; ok {
+			if *slot != entry.addr {
+				*slot = entry.addr
 			}
+			recordDependency(cur, entry.owner)
 			continue
 		}
-		canonicalSyms[name] = *slot
+		canonicalSyms[name] = canonicalEntry{addr: *slot, owner: cur}
+	}
+}
+
+// recordDependency notes that referencer holds a canonicalised
+// reference into target's symbols. Self-references (cur == owner of
+// canonical, common when iterating the FIRST loader of a name) are
+// no-ops. The dependent set is allocated lazily on first edge.
+//
+// Caller holds canonicalSymsLock so the lazy allocation and map
+// write are race-free.
+func recordDependency(referencer, target *moduledata) {
+	if referencer == target {
+		return
+	}
+	if target.dependents == nil {
+		target.dependents = make(map[*moduledata]struct{})
+	}
+	if _, exists := target.dependents[referencer]; !exists {
+		target.dependents[referencer] = struct{}{}
+		target.refcount++
 	}
 }
 
@@ -81,7 +105,7 @@ func globalptrsinit() {
 		if len(md.globalptrs) == 0 {
 			continue
 		}
-		canonicalizeSlots(md.globalptrs, md.globalptrnameoffs, md.globalptrnames)
+		canonicalizeSlots(md, md.globalptrs, md.globalptrnameoffs, md.globalptrnames)
 	}
 	unlock(&canonicalSymsLock)
 }
@@ -98,7 +122,7 @@ func funcptrsinit() {
 		if len(md.funcptrs) == 0 {
 			continue
 		}
-		canonicalizeSlots(md.funcptrs, md.funcptrnameoffs, md.funcptrnames)
+		canonicalizeSlots(md, md.funcptrs, md.funcptrnameoffs, md.funcptrnames)
 	}
 	unlock(&canonicalSymsLock)
 }

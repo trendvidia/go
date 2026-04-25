@@ -140,3 +140,97 @@ type ptabEntry struct {
 	name nameOff
 	typ  typeOff
 }
+
+// findPluginModule walks the active modules list, returning the
+// moduledata whose pluginpath matches. nil if no match. The caller
+// holds canonicalSymsLock; we don't lock here to avoid lock-ordering
+// concerns between canonicalSymsLock and modulesSlice's atomicity
+// (modulesSlice is read via activeModules without taking a lock —
+// it's atomic-store/atomic-load).
+func findPluginModule(pluginpath string) *moduledata {
+	for _, md := range activeModules() {
+		if md.pluginpath == pluginpath {
+			return md
+		}
+	}
+	return nil
+}
+
+//go:linkname plugin_hasDependents plugin.pluginHasDependents
+func plugin_hasDependents(pluginpath string) bool {
+	lock(&canonicalSymsLock)
+	md := findPluginModule(pluginpath)
+	r := md != nil && md.refcount > 0
+	unlock(&canonicalSymsLock)
+	return r
+}
+
+//go:linkname plugin_dependents plugin.pluginDependents
+func plugin_dependents(pluginpath string) []string {
+	lock(&canonicalSymsLock)
+	defer unlock(&canonicalSymsLock)
+	md := findPluginModule(pluginpath)
+	if md == nil || len(md.dependents) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(md.dependents))
+	for dep := range md.dependents {
+		// Filter out the host (which has no pluginpath); callers
+		// use Dependents() to know which other plugins to Close
+		// first, and the host doesn't unload.
+		if dep.pluginpath != "" {
+			out = append(out, dep.pluginpath)
+		}
+	}
+	return out
+}
+
+//go:linkname plugin_close plugin.pluginClose
+func plugin_close(pluginpath string) (errstr string) {
+	lock(&canonicalSymsLock)
+	defer unlock(&canonicalSymsLock)
+
+	md := findPluginModule(pluginpath)
+	if md == nil {
+		return "plugin not found: " + pluginpath
+	}
+	if md.refcount > 0 {
+		return "plugin has dependents; Close them first"
+	}
+
+	// Remove canonicalSyms entries owned by this module — they
+	// referenced this module's now-disappearing addresses.
+	for name, entry := range canonicalSyms {
+		if entry.owner == md {
+			delete(canonicalSyms, name)
+		}
+	}
+
+	// Decrement refcount on every module THIS one was depending on.
+	// We didn't track outbound edges directly; iterate to find them.
+	for _, other := range activeModules() {
+		if other == md {
+			continue
+		}
+		if _, ok := other.dependents[md]; ok {
+			delete(other.dependents, md)
+			other.refcount--
+		}
+	}
+
+	// Mark the module bad so it won't appear in subsequent
+	// modulesinit results, and unlink it from the firstmoduledata
+	// chain so the chain walker skips it. We don't dlclose the .so
+	// in v1; the OS keeps the mapping but no Go state references it.
+	md.bad = true
+	for prev := &firstmoduledata; prev.next != nil; prev = prev.next {
+		if prev.next == md {
+			prev.next = md.next
+			break
+		}
+	}
+	// Rebuild activeModules so the unlinked module disappears from
+	// future iterations.
+	modulesinit()
+	return ""
+}

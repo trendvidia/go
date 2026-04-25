@@ -69,6 +69,8 @@
 // operations may be more suitable despite the performance overheads.
 package plugin
 
+import _ "unsafe" // for go:linkname
+
 // Plugin is a loaded Go plugin.
 type Plugin struct {
 	pluginpath string
@@ -90,6 +92,87 @@ func Open(path string) (*Plugin, error) {
 // It is safe for concurrent use by multiple goroutines.
 func (p *Plugin) Lookup(symName string) (Symbol, error) {
 	return lookup(p, symName)
+}
+
+// Close marks the plugin closed and releases its internal runtime
+// state. Returns an error and leaves the plugin loaded if any other
+// plugin currently holds canonicalised references into this plugin
+// (see [Plugin.Dependents]); the caller must Close those plugins
+// first.
+//
+// After a successful Close, [Plugin.Lookup] returns an error and
+// function values previously obtained via Lookup must NOT be called
+// — doing so is undefined behaviour. The application is responsible
+// for releasing or never invoking such references across Close.
+func (p *Plugin) Close() error {
+	return closePlugin(p)
+}
+
+// HasDependents reports whether any other plugin currently holds
+// canonicalised references into p. If false, [Plugin.Close] is
+// guaranteed to succeed.
+func (p *Plugin) HasDependents() bool {
+	return pluginHasDependents(p.pluginpath)
+}
+
+// Dependents returns the pluginpaths of plugins that currently
+// reference exported symbols from p. The application must Close
+// those plugins (or release their references) before Closing p.
+//
+// The returned slice is a snapshot; concurrent loads or closes may
+// invalidate it. The host program (the main executable) is omitted
+// from the list since it does not Unload.
+func (p *Plugin) Dependents() []string {
+	return pluginDependents(p.pluginpath)
+}
+
+// pluginHasDependents, pluginDependents, and pluginClose are
+// defined in package runtime and linked here via go:linkname.
+
+//go:linkname pluginHasDependents
+func pluginHasDependents(pluginpath string) bool
+
+//go:linkname pluginDependents
+func pluginDependents(pluginpath string) []string
+
+//go:linkname pluginClose
+func pluginClose(pluginpath string) (errstr string)
+
+// closePlugin is the platform-independent half of Plugin.Close: it
+// asks the runtime to remove the module's canonicalSyms entries and
+// unlink moduledata, then marks the plugin handle closed so future
+// Lookup calls fail with a clear error. v1 does NOT dlclose the .so
+// — the OS keeps the mapping but no Go state references it. Func
+// values held by the application across Close remain callable but
+// have no canonicalisation guarantee; calling them is application
+// responsibility (documented as undefined behaviour).
+func closePlugin(p *Plugin) error {
+	if p == nil {
+		return nil
+	}
+	if p.err != "" {
+		// Already closed (or failed to load); idempotent return.
+		return nil
+	}
+	if errstr := pluginClose(p.pluginpath); errstr != "" {
+		return pluginErr("Close", p.pluginpath, errstr)
+	}
+	p.err = "closed"
+	return nil
+}
+
+// pluginErr formats an error from a plugin operation. Kept simple
+// and dependency-free so it works in stub builds too.
+func pluginErr(op, path, msg string) error {
+	return &pluginError{op: op, path: path, msg: msg}
+}
+
+type pluginError struct {
+	op, path, msg string
+}
+
+func (e *pluginError) Error() string {
+	return "plugin." + e.op + `("` + e.path + `"): ` + e.msg
 }
 
 // A Symbol is a pointer to a variable or function.

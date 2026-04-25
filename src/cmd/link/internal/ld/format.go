@@ -188,3 +188,64 @@ func pickExportSymbols(ctxt *Link) exportSymbolDispatcher {
 	}
 	return nil
 }
+
+// pieFlagDispatcher handles per-format/arch PIE-flag insertion in
+// hostlink. Two methods because the BuildModeExe arm needs two
+// distinct signals: explicit no-PIE flags to add (Macho/AMD64), and
+// whether to skip the default -no-pie/-nopie probe (Macho/ARM64).
+// Implementations may dispatch on arch internally; the picker keys
+// on HeadType only. nil = no per-format PIE handling needed.
+type pieFlagDispatcher interface {
+	// emitNoPie appends format/arch-specific PIE-disabling flags
+	// for BuildModeExe. argv is mutated and returned.
+	emitNoPie(ctxt *Link, argv []string) []string
+	// suppressDefaultNoPie reports whether the generic
+	// -no-pie/-nopie probe (lib.go's BuildModeExe block) should be
+	// skipped for this target.
+	suppressDefaultNoPie(ctxt *Link) bool
+}
+
+type machoPie struct{}
+
+func (machoPie) emitNoPie(ctxt *Link, argv []string) []string {
+	return machoEmitNoPie(ctxt, argv)
+}
+
+func (machoPie) suppressDefaultNoPie(ctxt *Link) bool {
+	return ctxt.IsARM64()
+}
+
+// pickPieFlags returns the per-format PIE-flag dispatcher for
+// ctxt.HeadType, or nil if the target needs no special handling.
+// Currently only Macho participates; Linux/Windows/etc. let the
+// shared BuildModeExe path emit the default -no-pie/-nopie probe.
+func pickPieFlags(ctxt *Link) pieFlagDispatcher {
+	if ctxt.HeadType == objabi.Hdarwin {
+		return machoPie{}
+	}
+	return nil
+}
+
+// hostlinkOutputFilter rewrites the linker's stderr/stdout before
+// cmd/link prints it, to swallow benign deprecation warnings that
+// originate in the system linker (not in user code). nil = pass
+// through unchanged.
+type hostlinkOutputFilter interface {
+	filterOutput(ctxt *Link, out []byte) []byte
+}
+
+type machoOutputFilter struct{}
+
+func (machoOutputFilter) filterOutput(ctxt *Link, out []byte) []byte {
+	return machoFilterHostlinkOutput(ctxt, out)
+}
+
+// pickHostlinkOutputFilter selects a per-format output filter or
+// returns nil. Only Macho currently filters; ELF/PE/XCOFF pass
+// through unchanged.
+func pickHostlinkOutputFilter(ctxt *Link) hostlinkOutputFilter {
+	if ctxt.HeadType == objabi.Hdarwin {
+		return machoOutputFilter{}
+	}
+	return nil
+}

@@ -1569,12 +1569,8 @@ func (ctxt *Link) hostlink() {
 	// (BuildMode, HeadType) matrix dispatch is Phase 3 territory.
 	switch ctxt.BuildMode {
 	case BuildModeExe:
-		if ctxt.HeadType == objabi.Hdarwin {
-			// phase2: arch×format — needs matrix dispatch
-			// (Hdarwin × AMD64 with PLATFORM_MACOS gate).
-			if machoPlatform == PLATFORM_MACOS && ctxt.IsAMD64() {
-				argv = append(argv, "-Wl,-no_pie")
-			}
+		if d := pickPieFlags(ctxt); d != nil {
+			argv = d.emitNoPie(ctxt, argv)
 		}
 		if *flagRace && ctxt.HeadType == objabi.Hwindows {
 			// Current windows/amd64 race detector tsan support
@@ -1831,9 +1827,14 @@ func (ctxt *Link) hostlink() {
 	// does not work, the resulting programs will not run. See
 	// issue #17847. To avoid this problem pass -no-pie to the
 	// toolchain if it is supported.
-	// phase2: arch×format inside BuildMode×HeadType — needs matrix dispatch
-	// (the arch×format exclusion is Hdarwin × ARM64).
-	if ctxt.BuildMode == BuildModeExe && !ctxt.linkShared && !(ctxt.IsDarwin() && ctxt.IsARM64()) {
+	// Probe the host toolchain for the generic -no-pie/-nopie flag.
+	// Macho/ARM64 opts out via pieFlagDispatcher.suppressDefaultNoPie
+	// because Darwin's ld64 takes neither spelling on arm64.
+	suppress := false
+	if d := pickPieFlags(ctxt); d != nil {
+		suppress = d.suppressDefaultNoPie(ctxt)
+	}
+	if ctxt.BuildMode == BuildModeExe && !ctxt.linkShared && !suppress {
 		// GCC uses -no-pie, clang uses -nopie.
 		for _, nopie := range []string{"-no-pie", "-nopie"} {
 			if linkerFlagSupported(ctxt.Arch, argv[0], altLinker, nopie) {
@@ -1893,24 +1894,10 @@ func (ctxt *Link) hostlink() {
 	if len(out) > 0 {
 		// always print external output even if the command is successful, so that we don't
 		// swallow linker warnings (see https://golang.org/issue/17935).
-		// phase2: arch×format — needs matrix dispatch (Hdarwin × AMD64
-		// for the -no_pie warning suppression).
-		if ctxt.IsDarwin() && ctxt.IsAMD64() {
-			const noPieWarning = "ld: warning: -no_pie is deprecated when targeting new OS versions\n"
-			if i := bytes.Index(out, []byte(noPieWarning)); i >= 0 {
-				// swallow -no_pie deprecation warning, issue 54482
-				out = append(out[:i], out[i+len(noPieWarning):]...)
-			}
-		}
-		if ctxt.IsDarwin() {
-			const bindAtLoadWarning = "ld: warning: -bind_at_load is deprecated on macOS\n"
-			if i := bytes.Index(out, []byte(bindAtLoadWarning)); i >= 0 {
-				// -bind_at_load is deprecated with ld-prime, but needed for
-				// correctness with older versions of ld64. Swallow the warning.
-				// TODO: maybe pass -bind_at_load conditionally based on C
-				// linker version.
-				out = append(out[:i], out[i+len(bindAtLoadWarning):]...)
-			}
+		// Per-format output filter swallows benign deprecation warnings
+		// from the system linker (currently only Macho participates).
+		if f := pickHostlinkOutputFilter(ctxt); f != nil {
+			out = f.filterOutput(ctxt, out)
 		}
 		ctxt.Logf("%s", out)
 	}

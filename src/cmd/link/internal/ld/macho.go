@@ -1604,3 +1604,41 @@ func machoCodeSign(ctxt *Link, fname string) error {
 	err = f.Truncate(sigOff + sz)
 	return err
 }
+
+// machoEmitNoPie appends the Macho-specific no-PIE flag for
+// BuildModeExe. Only macOS/AMD64 needs it: explicit -Wl,-no_pie
+// keeps macOS-targeted executables non-PIE when the host toolchain
+// would otherwise default to PIE. iOS, the simulator, and ARM64
+// don't take the flag — for those, the BuildModeExe arm is a
+// no-op for Mach-O.
+func machoEmitNoPie(ctxt *Link, argv []string) []string {
+	if machoPlatform == PLATFORM_MACOS && ctxt.IsAMD64() {
+		argv = append(argv, "-Wl,-no_pie")
+	}
+	return argv
+}
+
+// machoFilterHostlinkOutput strips two benign deprecation warnings
+// from the system linker's stderr:
+//
+//   - "-no_pie is deprecated when targeting new OS versions"
+//     (issue 54482) — only emitted on AMD64 because that's the only
+//     arch that passes -no_pie via machoEmitNoPie.
+//   - "-bind_at_load is deprecated on macOS" — emitted on every
+//     Macho arch because machoArgs unconditionally adds
+//     -Wl,-flat_namespace,-bind_at_load. The flag is still required
+//     for correctness with older ld64, so we suppress the warning
+//     rather than dropping the flag.
+func machoFilterHostlinkOutput(ctxt *Link, out []byte) []byte {
+	if ctxt.IsAMD64() {
+		const noPieWarning = "ld: warning: -no_pie is deprecated when targeting new OS versions\n"
+		if i := bytes.Index(out, []byte(noPieWarning)); i >= 0 {
+			out = append(out[:i], out[i+len(noPieWarning):]...)
+		}
+	}
+	const bindAtLoadWarning = "ld: warning: -bind_at_load is deprecated on macOS\n"
+	if i := bytes.Index(out, []byte(bindAtLoadWarning)); i >= 0 {
+		out = append(out[:i], out[i+len(bindAtLoadWarning):]...)
+	}
+	return out
+}

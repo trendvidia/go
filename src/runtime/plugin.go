@@ -60,6 +60,8 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 
 	// Initialize the freshly loaded module.
 	modulesinit()
+	globalptrsinit()
+	funcptrsinit()
 	typelinksinit()
 
 	pluginftabverify(md)

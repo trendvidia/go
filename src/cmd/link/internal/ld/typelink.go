@@ -70,14 +70,23 @@ func (ctxt *Link) typelink() {
 
 // globalptrlink gathers all per-module go.globalptr.* and go.funcptr.*
 // indirection slots emitted by the compiler under -shared/-dynlink and
-// builds the runtime.globalptrlinks / runtime.funcptrlinks carrier
-// symbols. moduledata exposes those carriers as slices so the runtime's
-// canonicalisation pass at module-load time can iterate every slot
-// without scanning the symbol table.
+// builds three carrier symbols per category:
 //
-// In -buildmode=exe the compiler emits no slot symbols, so both
-// carriers remain zero-sized and the corresponding moduledata slices
-// are empty — runtime canonicalisation walks become no-ops.
+//   - runtime.globalptrlinks / runtime.funcptrlinks — pointer-sized
+//     slot addresses (R_ADDR relocations to each slot).
+//   - runtime.globalptrnameoffs / runtime.funcptrnameoffs — int32
+//     offsets into the per-category names blob, one per slot.
+//   - runtime.globalptrnames / runtime.funcptrnames — packed null-
+//     terminated target names (extracted from the slot symbol's name
+//     by stripping the go.globalptr. or go.funcptr. prefix).
+//
+// moduledata exposes the three carriers as parallel slices so the
+// runtime's canonicalisation pass can map each slot to its target's
+// name and look up the canonical (first-loader-wins) instance across
+// all loaded modules.
+//
+// In -buildmode=exe the compiler emits no slot symbols, so all
+// carriers remain zero-sized and runtime canonicalisation is a no-op.
 func (ctxt *Link) globalptrlink() {
 	ldr := ctxt.loader
 	var globalptrs, funcptrs []loader.Sym
@@ -93,7 +102,6 @@ func (ctxt *Link) globalptrlink() {
 			funcptrs = append(funcptrs, s)
 		}
 	}
-	// Sort by symbol name so emission is deterministic across builds.
 	slices.SortFunc(globalptrs, func(a, b loader.Sym) int {
 		return strings.Compare(ldr.SymName(a), ldr.SymName(b))
 	})
@@ -101,22 +109,56 @@ func (ctxt *Link) globalptrlink() {
 		return strings.Compare(ldr.SymName(a), ldr.SymName(b))
 	})
 
+	ctxt.emitSlotCarriers("globalptr", globalptrs)
+	ctxt.emitSlotCarriers("funcptr", funcptrs)
+}
+
+// emitSlotCarriers emits the three carrier symbols for a slot category
+// (kind = "globalptr" or "funcptr"): runtime.<kind>links (slot
+// addresses), runtime.<kind>nameoffs (per-slot int32 offsets), and
+// runtime.<kind>names (packed null-terminated names).
+func (ctxt *Link) emitSlotCarriers(kind string, slots []loader.Sym) {
+	ldr := ctxt.loader
 	ptrsize := ctxt.Arch.PtrSize
-	emit := func(carrierName string, slots []loader.Sym) {
-		c := ldr.CreateSymForUpdate(carrierName, 0)
-		c.SetType(sym.SRODATA)
-		ldr.SetAttrLocal(c.Sym(), true)
-		c.SetSize(int64(ptrsize * len(slots)))
-		c.Grow(c.Size())
-		relocs := c.AddRelocs(len(slots))
-		for i, s := range slots {
-			r := relocs.At(i)
-			r.SetSym(s)
-			r.SetOff(int32(i * ptrsize))
-			r.SetSiz(uint8(ptrsize))
-			r.SetType(objabi.R_ADDR)
-		}
+	prefix := "go." + kind + "."
+
+	// runtime.<kind>links — slot addresses.
+	links := ldr.CreateSymForUpdate("runtime."+kind+"links", 0)
+	links.SetType(sym.SRODATA)
+	ldr.SetAttrLocal(links.Sym(), true)
+	links.SetSize(int64(ptrsize * len(slots)))
+	links.Grow(links.Size())
+	relocs := links.AddRelocs(len(slots))
+	for i, s := range slots {
+		r := relocs.At(i)
+		r.SetSym(s)
+		r.SetOff(int32(i * ptrsize))
+		r.SetSiz(uint8(ptrsize))
+		r.SetType(objabi.R_ADDR)
 	}
-	emit("runtime.globalptrlinks", globalptrs)
-	emit("runtime.funcptrlinks", funcptrs)
+
+	// runtime.<kind>nameoffs and runtime.<kind>names — extract target
+	// name from each slot symbol's name (strip prefix), pack the names
+	// into a single blob, record per-slot offsets in parallel.
+	nameoffs := ldr.CreateSymForUpdate("runtime."+kind+"nameoffs", 0)
+	nameoffs.SetType(sym.SRODATA)
+	ldr.SetAttrLocal(nameoffs.Sym(), true)
+	nameoffs.SetSize(int64(4 * len(slots)))
+	nameoffs.Grow(nameoffs.Size())
+
+	names := ldr.CreateSymForUpdate("runtime."+kind+"names", 0)
+	names.SetType(sym.SRODATA)
+	ldr.SetAttrLocal(names.Sym(), true)
+
+	off := int64(0)
+	for i, s := range slots {
+		full := ldr.SymName(s)
+		target := strings.TrimPrefix(full, prefix)
+		// Write the int32 offset.
+		nameoffs.SetUint32(ctxt.Arch, int64(i*4), uint32(off))
+		// Append target + NUL to names blob.
+		names.Addstring(target)
+		names.AddUint8(0)
+		off += int64(len(target)) + 1
+	}
 }

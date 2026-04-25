@@ -791,23 +791,28 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 		nilSlice() // moduleshashes slice
 	}
 
-	// L2 globalptrs / funcptrs slot tables. Carriers are emitted by
-	// globalptrlink() in typelink.go; in -buildmode=exe both carriers
-	// are zero-sized so the slices come out empty.
-	globalptrlinkSym := ldr.Lookup("runtime.globalptrlinks", 0)
-	if globalptrlinkSym != 0 && ldr.SymSize(globalptrlinkSym) > 0 {
-		nslots := uint64(ldr.SymSize(globalptrlinkSym)) / uint64(ctxt.Arch.PtrSize)
-		slice(globalptrlinkSym, nslots)
-	} else {
-		nilSlice()
+	// L2 globalptrs / funcptrs slot tables and parallel name tables.
+	// Carriers are emitted by globalptrlink() in typelink.go; in
+	// -buildmode=exe all carriers are zero-sized so the slice headers
+	// come out empty. Order matches the moduledata struct layout in
+	// runtime/symtab.go.
+	emitSlotSlice := func(carrier string, elemSize uint64) {
+		s := ldr.Lookup(carrier, 0)
+		if s != 0 && ldr.SymSize(s) > 0 {
+			n := uint64(ldr.SymSize(s)) / elemSize
+			slice(s, n)
+		} else {
+			nilSlice()
+		}
 	}
-	funcptrlinkSym := ldr.Lookup("runtime.funcptrlinks", 0)
-	if funcptrlinkSym != 0 && ldr.SymSize(funcptrlinkSym) > 0 {
-		nslots := uint64(ldr.SymSize(funcptrlinkSym)) / uint64(ctxt.Arch.PtrSize)
-		slice(funcptrlinkSym, nslots)
-	} else {
-		nilSlice()
-	}
+	ptrSz := uint64(ctxt.Arch.PtrSize)
+	emitSlotSlice("runtime.globalptrlinks", ptrSz)
+	emitSlotSlice("runtime.globalptrnameoffs", 4)
+	// names slice: the carrier holds raw bytes; element size is 1.
+	emitSlotSlice("runtime.globalptrnames", 1)
+	emitSlotSlice("runtime.funcptrlinks", ptrSz)
+	emitSlotSlice("runtime.funcptrnameoffs", 4)
+	emitSlotSlice("runtime.funcptrnames", 1)
 
 	hasmain := ctxt.BuildMode == BuildModeExe || ctxt.BuildMode == BuildModePIE
 	if hasmain {

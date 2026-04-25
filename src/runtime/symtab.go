@@ -440,16 +440,19 @@ type moduledata struct {
 	modulename   string
 	modulehashes []modulehash
 
-	// L2 cross-module canonicalisation tables. Each slice element is
-	// the address of a per-module pointer slot emitted by the compiler
-	// under -shared/-dynlink (go.globalptr.<sym> for data globals,
-	// go.funcptr.<sym> for function/method-value code pointers). At
+	// L2 cross-module canonicalisation tables. globalptrs/funcptrs
+	// hold slot addresses; *nameoffs hold per-slot int32 offsets into
+	// the matching *names blob (packed null-terminated target names,
+	// extracted by the linker from each slot symbol's name). At
 	// module-load time the runtime walks these and rewrites each slot
-	// to point at the canonical (first-loader-wins) instance of its
-	// target across all loaded modules. In -buildmode=exe both slices
-	// are empty.
-	globalptrs []uintptr
-	funcptrs   []uintptr
+	// to point at the canonical (first-loader-wins) instance across
+	// all loaded modules. In -buildmode=exe all six slices are empty.
+	globalptrs        []uintptr
+	globalptrnameoffs []int32
+	globalptrnames    []byte
+	funcptrs          []uintptr
+	funcptrnameoffs   []int32
+	funcptrnames      []byte
 
 	hasmain uint8 // 1 if module contains the main function, 0 otherwise
 	bad     bool  // module failed to load and should be ignored

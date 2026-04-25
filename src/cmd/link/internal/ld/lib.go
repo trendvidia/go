@@ -1485,9 +1485,7 @@ func (ctxt *Link) hostlink() {
 	// through with no extension (pickHostlinkExtender returns nil).
 	st := &hostlinkState{
 		argv: argv,
-		// On darwin, whether to combine DWARF into executable.
-		// Only macOS supports unmapped segments such as our __DWARF segment.
-		combineDwarf: ctxt.IsDarwin() && !*FlagW && machoPlatform == PLATFORM_MACOS,
+		combineDwarf: machoShouldCombineDwarf(ctxt),
 		wlPrefix:     "-Wl,--",
 	}
 	if h := pickHostlinkExtender(ctxt); h != nil {
@@ -1636,73 +1634,11 @@ func (ctxt *Link) hostlink() {
 		}
 	}
 
-	var altLinker string
-	if ctxt.IsELF && (ctxt.DynlinkingGo() || *flagBindNow) {
-		// For ELF targets, when producing dynamically linked Go code
-		// or when immediate binding is explicitly requested,
-		// we force all symbol resolution to be done at program startup
-		// because lazy PLT resolution can use large amounts of stack at
-		// times we cannot allow it to do so.
-		argv = append(argv, "-Wl,-z,now")
-	}
+	argv = elfBindNowArgs(ctxt, argv)
 
-	if ctxt.IsELF && ctxt.DynlinkingGo() {
-		// Do not let the host linker generate COPY relocations. These
-		// can move symbols out of sections that rely on stable offsets
-		// from the beginning of the section (like sym.STYPE).
-		argv = append(argv, "-Wl,-z,nocopyreloc")
+	argv, altLinker := elfDynlinkArgs(ctxt, argv)
 
-		if buildcfg.GOOS == "android" {
-			// Use lld to avoid errors from default linker (issue #38838)
-			altLinker = "lld"
-		}
-
-		if ctxt.Arch.InFamily(sys.ARM64) && buildcfg.GOOS == "linux" {
-			// On ARM64, the GNU linker will fail with
-			// -znocopyreloc if it thinks a COPY relocation is
-			// required. Switch to gold.
-			// https://sourceware.org/bugzilla/show_bug.cgi?id=19962
-			// https://go.dev/issue/22040
-			altLinker = "gold"
-
-			// If gold is not installed, gcc will silently switch
-			// back to ld.bfd. So we parse the version information
-			// and provide a useful error if gold is missing.
-			name, args := flagExtld[0], flagExtld[1:]
-			args = append(args, "-fuse-ld=gold", "-Wl,--version")
-			cmd := exec.Command(name, args...)
-			if out, err := cmd.CombinedOutput(); err == nil {
-				if !bytes.Contains(out, []byte("GNU gold")) {
-					log.Fatalf("ARM64 external linker must be gold (issue #15696, 22040), but is not: %s", out)
-				}
-			}
-		}
-	}
-	if ctxt.Arch.Family == sys.ARM64 && buildcfg.GOOS == "freebsd" {
-		// Switch to ld.bfd on freebsd/arm64.
-		altLinker = "bfd"
-
-		// Provide a useful error if ld.bfd is missing.
-		name, args := flagExtld[0], flagExtld[1:]
-		args = append(args, "-fuse-ld=bfd", "-Wl,--version")
-		cmd := exec.Command(name, args...)
-		if out, err := cmd.CombinedOutput(); err == nil {
-			if !bytes.Contains(out, []byte("GNU ld")) {
-				log.Fatalf("ARM64 external linker must be ld.bfd (issue #35197), please install devel/binutils")
-			}
-		}
-	}
-	if altLinker != "" {
-		argv = append(argv, "-fuse-ld="+altLinker)
-	}
-
-	if ctxt.IsELF && linkerFlagSupported(ctxt.Arch, argv[0], "", "-Wl,--build-id=0x1234567890abcdef") { // Solaris ld doesn't support --build-id.
-		if len(buildinfo) > 0 {
-			argv = append(argv, fmt.Sprintf("-Wl,--build-id=0x%x", buildinfo))
-		} else if *flagHostBuildid == "none" {
-			argv = append(argv, "-Wl,--build-id=none")
-		}
-	}
+	argv = elfBuildIDArgs(ctxt, argv)
 
 	// On Windows, given -o foo, GCC will append ".exe" to produce
 	// "foo.exe".  We have decided that we want to honor the -o
@@ -1745,16 +1681,7 @@ func (ctxt *Link) hostlink() {
 		argv = append(argv, unusedArguments)
 	}
 
-	if ctxt.IsWindows() {
-		// Suppress generation of the PE file header timestamp,
-		// so as to avoid spurious build ID differences between
-		// linked binaries that are otherwise identical other than
-		// the date/time they were linked.
-		const noTimeStamp = "-Wl,--no-insert-timestamp"
-		if linkerFlagSupported(ctxt.Arch, argv[0], altLinker, noTimeStamp) {
-			argv = append(argv, noTimeStamp)
-		}
-	}
+	argv = peNoTimestampArgs(ctxt, argv, altLinker)
 
 	const compressDWARF = "-Wl,--compress-debug-sections=zlib"
 	if ctxt.compressDWARF && linkerFlagSupported(ctxt.Arch, argv[0], altLinker, compressDWARF) {
@@ -1989,12 +1916,7 @@ func (ctxt *Link) hostlink() {
 			uuidUpdated = true
 		}
 	}
-	if ctxt.IsDarwin() && !uuidUpdated && len(buildinfo) > 0 {
-		updateMachoOutFile("rewriting uuid",
-			func(ctxt *Link, exef *os.File, exem *macho.File, outexe string) error {
-				return machoRewriteUuid(ctxt, exef, exem, outexe)
-			})
-	}
+	machoRewriteUuidIfNeeded(ctxt, uuidUpdated, updateMachoOutFile)
 	hostlinkfips(ctxt, *flagOutfile, *flagFipso)
 	if ctxt.NeedCodeSign() {
 		err := machoCodeSign(ctxt, *flagOutfile)

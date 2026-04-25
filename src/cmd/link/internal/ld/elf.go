@@ -5,6 +5,7 @@
 package ld
 
 import (
+	"bytes"
 	"cmd/internal/bio"
 	"cmd/internal/hash"
 	"cmd/internal/objabi"
@@ -18,7 +19,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"internal/buildcfg"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -49,6 +52,106 @@ func elfExportArgs(ctxt *Link, st *hostlinkState) {
 	})
 	slices.Sort(exports)
 	st.argv = append(st.argv, exports...)
+}
+
+// elfBindNowArgs appends -Wl,-z,now to argv when the target is ELF and
+// either dynamically linking Go or explicit bind-now is requested.
+// Lazy PLT resolution can consume large amounts of stack at times we
+// cannot allow it.
+func elfBindNowArgs(ctxt *Link, argv []string) []string {
+	if !ctxt.IsELF {
+		return argv
+	}
+	if ctxt.DynlinkingGo() || *flagBindNow {
+		argv = append(argv, "-Wl,-z,now")
+	}
+	return argv
+}
+
+// elfDynlinkArgs appends ELF-specific dynamic-linking flags to argv
+// and selects an alternative linker when needed. Returns the updated
+// argv and the name of the alternative linker (empty string if the
+// default is acceptable).
+//
+// Flags and linker overrides:
+//   - -Wl,-z,nocopyreloc prevents COPY relocations that can move
+//     symbols out of sections relying on stable offsets (sym.STYPE).
+//   - Android: uses lld (issue #38838).
+//   - ARM64 Linux: uses gold to avoid GNU ld's -znocopyreloc bug
+//     (issue #22040).
+//   - ARM64 FreeBSD: uses ld.bfd (issue #35197).
+//   - -fuse-ld=<alt> is appended when an override is selected.
+func elfDynlinkArgs(ctxt *Link, argv []string) ([]string, string) {
+	if !ctxt.IsELF {
+		return argv, ""
+	}
+	var altLinker string
+	if ctxt.DynlinkingGo() {
+		// Do not let the host linker generate COPY relocations. These
+		// can move symbols out of sections that rely on stable offsets
+		// from the beginning of the section (like sym.STYPE).
+		argv = append(argv, "-Wl,-z,nocopyreloc")
+
+		if buildcfg.GOOS == "android" {
+			// Use lld to avoid errors from default linker (issue #38838)
+			altLinker = "lld"
+		}
+
+		if ctxt.Arch.InFamily(sys.ARM64) && buildcfg.GOOS == "linux" {
+			// On ARM64, the GNU linker will fail with
+			// -znocopyreloc if it thinks a COPY relocation is
+			// required. Switch to gold.
+			// https://sourceware.org/bugzilla/show_bug.cgi?id=19962
+			// https://go.dev/issue/22040
+			altLinker = "gold"
+
+			// If gold is not installed, gcc will silently switch
+			// back to ld.bfd. So we parse the version information
+			// and provide a useful error if gold is missing.
+			name, args := flagExtld[0], flagExtld[1:]
+			args = append(args, "-fuse-ld=gold", "-Wl,--version")
+			cmd := exec.Command(name, args...)
+			if out, err := cmd.CombinedOutput(); err == nil {
+				if !bytes.Contains(out, []byte("GNU gold")) {
+					log.Fatalf("ARM64 external linker must be gold (issue #15696, 22040), but is not: %s", out)
+				}
+			}
+		}
+	}
+	if ctxt.Arch.Family == sys.ARM64 && buildcfg.GOOS == "freebsd" {
+		// Switch to ld.bfd on freebsd/arm64.
+		altLinker = "bfd"
+
+		// Provide a useful error if ld.bfd is missing.
+		name, args := flagExtld[0], flagExtld[1:]
+		args = append(args, "-fuse-ld=bfd", "-Wl,--version")
+		cmd := exec.Command(name, args...)
+		if out, err := cmd.CombinedOutput(); err == nil {
+			if !bytes.Contains(out, []byte("GNU ld")) {
+				log.Fatalf("ARM64 external linker must be ld.bfd (issue #35197), please install devel/binutils")
+			}
+		}
+	}
+	if altLinker != "" {
+		argv = append(argv, "-fuse-ld="+altLinker)
+	}
+	return argv, altLinker
+}
+
+// elfBuildIDArgs appends --build-id flags to argv for ELF targets.
+// Solaris ld doesn't support --build-id, so the flag is probed first.
+func elfBuildIDArgs(ctxt *Link, argv []string) []string {
+	if !ctxt.IsELF {
+		return argv
+	}
+	if linkerFlagSupported(ctxt.Arch, argv[0], "", "-Wl,--build-id=0x1234567890abcdef") {
+		if len(buildinfo) > 0 {
+			argv = append(argv, fmt.Sprintf("-Wl,--build-id=0x%x", buildinfo))
+		} else if *flagHostBuildid == "none" {
+			argv = append(argv, "-Wl,--build-id=none")
+		}
+	}
+	return argv
 }
 
 // ldelf loads an ELF host object as part of ldobj's format dispatch.

@@ -194,6 +194,21 @@ func peArgs(ctxt *Link, argv []string) (newArgv []string, isMSVC bool, wlPrefix 
 	return argv, isMSVC, wlPrefix
 }
 
+// peNoTimestampArgs appends --no-insert-timestamp to argv for Windows
+// targets, suppressing generation of the PE file header timestamp so
+// that linked binaries are reproducible. The flag is probed first
+// because not all toolchains support it.
+func peNoTimestampArgs(ctxt *Link, argv []string, altLinker string) []string {
+	if !ctxt.IsWindows() {
+		return argv
+	}
+	const noTimeStamp = "-Wl,--no-insert-timestamp"
+	if linkerFlagSupported(ctxt.Arch, argv[0], altLinker, noTimeStamp) {
+		argv = append(argv, noTimeStamp)
+	}
+	return argv
+}
+
 type IMAGE_IMPORT_DESCRIPTOR struct {
 	OriginalFirstThunk uint32
 	TimeDateStamp      uint32

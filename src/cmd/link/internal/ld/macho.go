@@ -67,6 +67,25 @@ func machoArgs(ctxt *Link, argv []string, combineDwarf bool) []string {
 	return argv
 }
 
+// machoShouldCombineDwarf reports whether DWARF should be combined into
+// the executable. Only macOS supports unmapped segments such as __DWARF.
+func machoShouldCombineDwarf(ctxt *Link) bool {
+	return ctxt.IsDarwin() && !*FlagW && machoPlatform == PLATFORM_MACOS
+}
+
+// machoRewriteUuidIfNeeded rewrites the Mach-O UUID to match buildinfo
+// when the UUID was not already updated by DWARF combining. No-op on
+// non-Darwin targets or when buildinfo is empty.
+func machoRewriteUuidIfNeeded(ctxt *Link, uuidUpdated bool, updateFunc func(string, machoUpdateFunc)) {
+	if !ctxt.IsDarwin() || uuidUpdated || len(buildinfo) == 0 {
+		return
+	}
+	updateFunc("rewriting uuid",
+		func(ctxt *Link, exef *os.File, exem *macho.File, outexe string) error {
+			return machoRewriteUuid(ctxt, exef, exem, outexe)
+		})
+}
+
 type MachoHdr struct {
 	cpu    uint32
 	subcpu uint32

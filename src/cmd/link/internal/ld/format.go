@@ -71,20 +71,28 @@ func pickSegmentLayout(ctxt *Link) segmentLayout {
 }
 
 // hostlinkState carries the cross-cutting variables that hostlink's
-// per-format argv-extension steps read and write. It exists so that the
-// hostlinkExtender interface can have a uniform single-argument shape
-// even though Macho needs combineDwarf as input and PE needs to write
-// back isMSVC/wlPrefix. Other formats touch only argv.
+// per-format dispatch steps read and write. It exists so that the
+// per-step interfaces (hostlinkExtender, exportSymbolDispatcher) can
+// have a uniform single-argument shape even though each step's set of
+// inputs/outputs differs by format.
 //
-// hostlink's downstream code (ASLR flag synthesis, export-dynamic
-// switch, mingw libs, combineDwarf-gated post-link processing) reads
-// these values back as locals after dispatch, so the struct does not
-// extend beyond the argv-assembly step.
+// Fields are populated incrementally as hostlink runs:
+//   - argv, combineDwarf, wlPrefix: ready before the hostlinkExtender
+//     dispatch (~lib.go:1467).
+//   - isMSVC: written by peHostlink during that dispatch.
+//   - altLinker, outopt: set later in hostlink and mirrored into the
+//     struct just before the exportSymbolDispatcher dispatch (~1700).
+//
+// Locals are kept in sync with the struct at each dispatch boundary so
+// hostlink's downstream blocks (ASLR, mingw libs, combineDwarf-gated
+// post-link) read locals as before.
 type hostlinkState struct {
 	argv         []string
 	combineDwarf bool
 	isMSVC       bool
 	wlPrefix     string
+	altLinker    string
+	outopt       string
 }
 
 // hostlinkExtender appends format-specific flags to a hostlink
@@ -133,6 +141,50 @@ func pickHostlinkExtender(ctxt *Link) hostlinkExtender {
 		return peHostlink{}
 	case objabi.Haix:
 		return xcoffHostlink{}
+	}
+	return nil
+}
+
+// exportSymbolDispatcher handles hostlink's per-format dynamic-symbol
+// export step. Each implementation reads the inputs it needs from st
+// (argv, altLinker, outopt, isMSVC, wlPrefix) and appends to st.argv.
+// Self-guarding for runtime conditions (e.g., user-supplied
+// export-all-symbols flag on PE) is done inside the method, not by the
+// picker.
+type exportSymbolDispatcher interface {
+	exportSymbols(ctxt *Link, st *hostlinkState)
+}
+
+type elfExportSymbols struct{}
+
+func (elfExportSymbols) exportSymbols(ctxt *Link, st *hostlinkState) {
+	elfExportArgs(ctxt, st)
+}
+
+type peExportSymbols struct{}
+
+func (peExportSymbols) exportSymbols(ctxt *Link, st *hostlinkState) {
+	peExportArgs(ctxt, st)
+}
+
+type xcoffExportSymbols struct{}
+
+func (xcoffExportSymbols) exportSymbols(ctxt *Link, st *hostlinkState) {
+	xcoffExportArgs(ctxt, st)
+}
+
+// pickExportSymbols selects the dispatcher whose predicate matches the
+// current target. The predicate ordering matches the original switch at
+// lib.go:1701 (IsELF first, then IsAIX, then IsWindows). Returns nil
+// for Hdarwin/Hplan9/etc., where the original switch matched no case.
+func pickExportSymbols(ctxt *Link) exportSymbolDispatcher {
+	switch {
+	case ctxt.IsELF:
+		return elfExportSymbols{}
+	case ctxt.IsAIX():
+		return xcoffExportSymbols{}
+	case ctxt.IsWindows():
+		return peExportSymbols{}
 	}
 	return nil
 }

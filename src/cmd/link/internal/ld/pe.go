@@ -29,6 +29,29 @@ import (
 	"strings"
 )
 
+// peExportArgs appends a -def: file flag to st.argv that tells the
+// linker how to populate the PE export table. Self-guards against the
+// case where the user has already supplied -extldflags=...
+// export-all-symbols (assumed manual control), so the call site can
+// invoke unconditionally on Windows.
+//
+// MSVC lld-link uses -Wl,-def: with a different prefix from the
+// MinGW form (which omits the prefix entirely and lets gcc supply it
+// via /implib equivalence). The wlPrefix-driven branch in peArgs
+// records which mode is in effect; here we only need to know the
+// MSVC-vs-MinGW split via st.isMSVC.
+func peExportArgs(ctxt *Link, st *hostlinkState) {
+	if slices.Contains(flagExtldflags, st.wlPrefix+"export-all-symbols") {
+		return
+	}
+	fileName := peCreateExportFile(ctxt, filepath.Base(st.outopt))
+	prefix := ""
+	if st.isMSVC {
+		prefix = "-Wl,-def:"
+	}
+	st.argv = append(st.argv, prefix+fileName)
+}
+
 // ldpe loads a PE host object as part of ldobj's format dispatch.
 func ldpe(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 	ls, err := loadpe.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)

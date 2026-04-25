@@ -46,7 +46,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1697,30 +1696,16 @@ func (ctxt *Link) hostlink() {
 		argv = append(argv, fmt.Sprintf("-Wl,--dynamic-linker,%s", *flagInterpreter))
 	}
 
-	// Force global symbols to be exported for dlopen, etc.
-	switch {
-	case ctxt.IsELF:
-		if ctxt.DynlinkingGo() || ctxt.BuildMode == BuildModeCShared || !linkerFlagSupported(ctxt.Arch, argv[0], altLinker, "-Wl,--export-dynamic-symbol=main") {
-			argv = append(argv, "-rdynamic")
-		} else {
-			var exports []string
-			ctxt.loader.ForAllCgoExportDynamic(func(s loader.Sym) {
-				exports = append(exports, "-Wl,--export-dynamic-symbol="+ctxt.loader.SymExtname(s))
-			})
-			sort.Strings(exports)
-			argv = append(argv, exports...)
-		}
-	case ctxt.IsAIX():
-		fileName := xcoffCreateExportFile(ctxt)
-		argv = append(argv, "-Wl,-bE:"+fileName)
-	case ctxt.IsWindows() && !slices.Contains(flagExtldflags, wlPrefix+"export-all-symbols"):
-		fileName := peCreateExportFile(ctxt, filepath.Base(outopt))
-		prefix := ""
-		if isMSVC {
-			prefix = "-Wl,-def:"
-		}
-		argv = append(argv, prefix+fileName)
+	// Force global symbols to be exported for dlopen, etc. Per-format
+	// dispatch via exportSymbolDispatcher; ELF/AIX/Windows have impls,
+	// other formats fall through (picker returns nil).
+	st.argv = argv
+	st.altLinker = altLinker
+	st.outopt = outopt
+	if e := pickExportSymbols(ctxt); e != nil {
+		e.exportSymbols(ctxt, st)
 	}
+	argv = st.argv
 
 	const unusedArguments = "-Qunused-arguments"
 	if linkerFlagSupported(ctxt.Arch, argv[0], altLinker, unusedArguments) {

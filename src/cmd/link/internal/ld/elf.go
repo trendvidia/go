@@ -25,6 +25,32 @@ import (
 	"strings"
 )
 
+// elfExportArgs appends ELF dynamic-symbol export flags to st.argv.
+//
+// Two modes:
+//   - Coarse (-rdynamic): used when the linker doesn't accept the
+//     granular -Wl,--export-dynamic-symbol=NAME option, or when
+//     dynamic-Go / c-shared builds need every symbol exported anyway.
+//   - Granular: emit one -Wl,--export-dynamic-symbol=NAME per
+//     cgo-exported symbol, sorted for build reproducibility.
+//
+// linkerFlagSupported probes argv[0] (the linker path) and altLinker;
+// both come from st. Used by ELF formats only — callers should
+// dispatch via exportSymbolDispatcher rather than invoking this
+// directly.
+func elfExportArgs(ctxt *Link, st *hostlinkState) {
+	if ctxt.DynlinkingGo() || ctxt.BuildMode == BuildModeCShared || !linkerFlagSupported(ctxt.Arch, st.argv[0], st.altLinker, "-Wl,--export-dynamic-symbol=main") {
+		st.argv = append(st.argv, "-rdynamic")
+		return
+	}
+	var exports []string
+	ctxt.loader.ForAllCgoExportDynamic(func(s loader.Sym) {
+		exports = append(exports, "-Wl,--export-dynamic-symbol="+ctxt.loader.SymExtname(s))
+	})
+	slices.Sort(exports)
+	st.argv = append(st.argv, exports...)
+}
+
 // ldelf loads an ELF host object as part of ldobj's format dispatch.
 func ldelf(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 	textp, flags, err := loadelf.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn, ehdr.Flags)

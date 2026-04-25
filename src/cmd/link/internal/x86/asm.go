@@ -449,3 +449,26 @@ func addpltsym(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loade
 		ldr.Errorf(s, "addpltsym: unsupported binary format")
 	}
 }
+
+// loadlibSpecialSymbols marks _GLOBAL_OFFSET_TABLE_ as SDYNIMPORT for
+// 386 PIC builds. Wired as Arch.LoadlibSpecialSymbols. The
+// non-Hwindows guard reflects that PE/COFF on 386 doesn't use the
+// ELF/Mach-O GOT marker convention; the BuildMode/IsELF disjunction
+// matches the original lib.go condition: any PIC-style build (CShared,
+// PIE, DynlinkingGo, or CArchive-on-ELF) needs the GOT symbol marked.
+func loadlibSpecialSymbols(ctxt *ld.Link, ldr *loader.Loader) {
+	if ctxt.HeadType == objabi.Hwindows {
+		return
+	}
+	pic := (ctxt.BuildMode == ld.BuildModeCArchive && ctxt.IsELF) ||
+		ctxt.BuildMode == ld.BuildModeCShared ||
+		ctxt.BuildMode == ld.BuildModePIE ||
+		ctxt.DynlinkingGo()
+	if !pic {
+		return
+	}
+	got := ldr.LookupOrCreateSym("_GLOBAL_OFFSET_TABLE_", 0)
+	sb := ldr.MakeSymbolUpdater(got)
+	sb.SetType(sym.SDYNIMPORT)
+	ldr.SetAttrReachable(got, true)
+}

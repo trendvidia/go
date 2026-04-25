@@ -58,6 +58,8 @@ func Init() (*sys.Arch, ld.Arch) {
 		Machoreloc1:      machoreloc1,
 		PEreloc1:         pereloc1,
 
+		LoadlibSpecialSymbols: loadlibSpecialSymbols,
+
 		ELF: ld.ELFArch{
 			Linuxdynld:     "/lib/ld-linux.so.2",
 			LinuxdynldMusl: "/lib/ld-musl-i386.so.1",

@@ -261,6 +261,16 @@ type Arch struct {
 	// at the call site. nil = no per-arch action (default).
 	AddressSpecialSymbols func(*Link, *loader.Loader)
 
+	// LoadlibSpecialSymbols runs late in loadlib(), after Moduledata is
+	// established but before address layout. The place for arch-specific
+	// dynamic-symbol marker setup (e.g., 386's _GLOBAL_OFFSET_TABLE_
+	// SDYNIMPORT marker for PIC builds). Distinct from
+	// AddressSpecialSymbols because the call sites are temporally
+	// different — Loadlib runs pre-layout, Address post-layout. Format
+	// and BuildMode prerequisites are checked inside the hook body.
+	// nil = no per-arch action (default).
+	LoadlibSpecialSymbols func(*Link, *loader.Loader)
+
 	// Generate additional symbols for the native symbol table just prior to
 	// code generation.
 	GenSymsLate func(*Link, *loader.Loader)
@@ -941,15 +951,11 @@ func (ctxt *Link) linksetup() {
 	ctxt.loader.SetAttrReachable(moduledata, true)
 	ctxt.Moduledata = moduledata
 
-	// phase2: arch×format — needs matrix dispatch (Arch386 + non-Hwindows
-	// gate, plus BuildMode×IsELF in the inner condition).
-	if ctxt.Arch == sys.Arch386 && ctxt.HeadType != objabi.Hwindows {
-		if (ctxt.BuildMode == BuildModeCArchive && ctxt.IsELF) || ctxt.BuildMode == BuildModeCShared || ctxt.BuildMode == BuildModePIE || ctxt.DynlinkingGo() {
-			got := ctxt.loader.LookupOrCreateSym("_GLOBAL_OFFSET_TABLE_", 0)
-			sb := ctxt.loader.MakeSymbolUpdater(got)
-			sb.SetType(sym.SDYNIMPORT)
-			ctxt.loader.SetAttrReachable(got, true)
-		}
+	// Per-arch loadlib hook for arch-specific dynamic-symbol markers
+	// (currently only 386's _GLOBAL_OFFSET_TABLE_ for PIC builds).
+	// Format/BuildMode gating lives inside the hook body.
+	if thearch.LoadlibSpecialSymbols != nil {
+		thearch.LoadlibSpecialSymbols(ctxt, ctxt.loader)
 	}
 
 	// DWARF-gen and other phases require that the unit Textp slices

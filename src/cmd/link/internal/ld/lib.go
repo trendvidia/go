@@ -1563,10 +1563,15 @@ func (ctxt *Link) hostlink() {
 		return argv
 	}
 
-	// phase2: BuildMode×HeadType — keep inline (Phase-2 boundary). Each
-	// arm extracts per-HeadType case bodies but the outer BuildMode
-	// switch stays as a structured dispatch; combining the two into a
-	// (BuildMode, HeadType) matrix dispatch is Phase 3 territory.
+	// phase3-final: BuildMode×HeadType — kept inline. Audited at the
+	// end of Phase 3 after the Darwin/AMD64 -no_pie emission moved into
+	// pieFlagDispatcher. The residue is short: each arm is 1–3 lines,
+	// arms interlock with shared predicates (UseRelro, *flagAslr,
+	// *flagRace) and the Hwindows ASLR mutation, and the discriminator
+	// is a small fixed set of HeadTypes. Extracting per-format
+	// dispatchers would relocate the switch into wrapper types without
+	// reducing branching, and would break up the visible interaction
+	// between flag state and emitted args. Keep as a structured switch.
 	switch ctxt.BuildMode {
 	case BuildModeExe:
 		if d := pickPieFlags(ctxt); d != nil {

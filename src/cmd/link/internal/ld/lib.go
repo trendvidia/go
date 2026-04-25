@@ -245,6 +245,14 @@ type Arch struct {
 	PEreloc1       func(*sys.Arch, *OutBuf, *loader.Loader, loader.Sym, loader.ExtReloc, int64) bool
 	Xcoffreloc1    func(*sys.Arch, *OutBuf, *loader.Loader, loader.Sym, loader.ExtReloc, int64) bool
 
+	// SplitTextSections reports whether text sections should be split for
+	// trampoline-bounded external linking. nil = never split (default for
+	// archs whose direct-call range covers any reasonable text size). Set
+	// by ARM/ARM64/PPC64 obj.go where the call-target offset field is
+	// narrow enough that the system linker may need to insert call stubs.
+	// See data.go for the full rationale.
+	SplitTextSections func(*Link) bool
+
 	// Generate additional symbols for the native symbol table just prior to
 	// code generation.
 	GenSymsLate func(*Link, *loader.Loader)

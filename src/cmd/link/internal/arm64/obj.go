@@ -59,6 +59,10 @@ func Init() (*sys.Arch, ld.Arch) {
 		PEreloc1:         pereloc1,
 		Trampoline:       trampoline,
 
+		// Only Darwin/ARM64 needs splitting; Linux/ARM64 is the no-split
+		// case that motivates the per-arch hook taking a *Link.
+		SplitTextSections: func(ctxt *ld.Link) bool { return ctxt.IsExternal() && ctxt.IsDarwin() },
+
 		ELF: ld.ELFArch{
 			Androiddynld:   "/system/bin/linker64",
 			Linuxdynld:     "/lib/ld-linux-aarch64.so.1",

@@ -59,6 +59,8 @@ func Init() (*sys.Arch, ld.Arch) {
 		Machoreloc1:      machoreloc1,
 		PEreloc1:         pereloc1,
 
+		SplitTextSections: func(ctxt *ld.Link) bool { return ctxt.IsExternal() },
+
 		ELF: ld.ELFArch{
 			Linuxdynld:     "/lib/ld-linux.so.3", // 2 for OABI, 3 for EABI
 			LinuxdynldMusl: "/lib/ld-musl-arm.so.1",

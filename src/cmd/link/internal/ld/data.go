@@ -2853,11 +2853,13 @@ func resetAddress(ctxt *Link, s loader.Sym) {
 // (e.g. will direct call from X to Y need a trampoline) and similar
 // machinery in the external linker; see #58425 for more on the
 // history here.
+//
+// Per-arch policy lives on Arch.SplitTextSections; archs that never
+// need splitting leave the hook nil. The format-axis component of the
+// predicate (Darwin gating for ARM64) lives inside the arch-specific
+// hook body.
 func splitTextSections(ctxt *Link) bool {
-	// phase2: arch×format — needs matrix dispatch (ARM/PPC64 unconditional
-	// plus ARM64×Hdarwin). The named-helper form is fine for now; Phase 3's
-	// arch×format dispatch can absorb it.
-	return (ctxt.IsARM() || ctxt.IsPPC64() || (ctxt.IsARM64() && ctxt.IsDarwin())) && ctxt.IsExternal()
+	return thearch.SplitTextSections != nil && thearch.SplitTextSections(ctxt)
 }
 
 // On Wasm, we reserve 4096 bytes for zero page, then 8192 bytes for wasm_exec.js

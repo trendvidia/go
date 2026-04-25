@@ -30,18 +30,34 @@ import (
 // to orig instead. The indirection is only valid in expression
 // contexts that execute at runtime.
 func GlobalPtrLsym(orig *obj.LSym) *obj.LSym {
-	name := "go.globalptr." + orig.Name
+	return slotLsym("go.globalptr.", orig)
+}
+
+// FuncPtrLsym returns the linker symbol for the go.funcptr.<orig.Name>
+// slot — same shape as GlobalPtrLsym but for code-pointer indirection
+// (closure code pointers, function values, method-value wrappers).
+//
+// Two distinct namespaces (go.globalptr vs go.funcptr) so the runtime
+// and linker can separately enumerate data slots and code slots — Close
+// converts only the funcptr table to panic-on-call stubs at unload,
+// while the globalptr table follows a different invalidation path.
+func FuncPtrLsym(orig *obj.LSym) *obj.LSym {
+	return slotLsym("go.funcptr.", orig)
+}
+
+func slotLsym(prefix string, orig *obj.LSym) *obj.LSym {
+	name := prefix + orig.Name
 	s := base.Ctxt.Lookup(name)
-	globalPtrMu.Lock()
+	slotMu.Lock()
 	if s.Size == 0 {
 		objw.SymPtr(s, 0, orig, 0)
 		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
 	}
-	globalPtrMu.Unlock()
+	slotMu.Unlock()
 	return s
 }
 
-// globalPtrMu serialises slot creation. Without it, two goroutines
+// slotMu serialises slot creation. Without it, two goroutines
 // compiling packages in parallel can both observe Size == 0 and both
 // call objw.Global, producing a redeclaration error from the linker.
-var globalPtrMu sync.Mutex
+var slotMu sync.Mutex

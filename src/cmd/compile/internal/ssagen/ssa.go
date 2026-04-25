@@ -3067,12 +3067,29 @@ func (s *state) exprCheckPtr(n ir.Node, checkPtrOK bool) *ssa.Value {
 		if aux.ABI() != obj.ABIInternal {
 			s.Fatalf("expected ABIInternal: %v", aux.ABI())
 		}
+		if base.Ctxt.Flag_dynlink || base.Ctxt.Flag_shared {
+			// Indirect the captured code pointer through a per-module
+			// go.funcptr.<sym> slot so plugin/host see the same
+			// canonical entry point after first-loader-wins
+			// canonicalisation. See L2.a comment on PEXTERN.
+			slot := staticdata.FuncPtrLsym(aux)
+			slotAddr := s.entryNewValue1A(ssa.OpAddr, types.NewPtr(n.Type()), slot, s.sb)
+			return s.rawLoad(n.Type(), slotAddr)
+		}
 		return s.entryNewValue1A(ssa.OpAddr, n.Type(), aux, s.sb)
 	case ir.ONAME:
 		n := n.(*ir.Name)
 		if n.Class == ir.PFUNC {
 			// "value" of a function is the address of the function's closure
 			sym := staticdata.FuncLinksym(n)
+			if base.Ctxt.Flag_dynlink || base.Ctxt.Flag_shared {
+				// Indirect through go.funcptr.<sym> so values of type
+				// func(...) hold the canonical descriptor address.
+				slot := staticdata.FuncPtrLsym(sym)
+				ptrToFunc := types.NewPtr(n.Type())
+				slotAddr := s.entryNewValue1A(ssa.OpAddr, types.NewPtr(ptrToFunc), slot, s.sb)
+				return s.rawLoad(ptrToFunc, slotAddr)
+			}
 			return s.entryNewValue1A(ssa.OpAddr, types.NewPtr(n.Type()), sym, s.sb)
 		}
 		if s.canSSA(n) {

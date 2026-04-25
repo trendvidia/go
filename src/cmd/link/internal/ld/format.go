@@ -69,3 +69,70 @@ func pickSegmentLayout(ctxt *Link) segmentLayout {
 		return defaultSegmentLayout{}
 	}
 }
+
+// hostlinkState carries the cross-cutting variables that hostlink's
+// per-format argv-extension steps read and write. It exists so that the
+// hostlinkExtender interface can have a uniform single-argument shape
+// even though Macho needs combineDwarf as input and PE needs to write
+// back isMSVC/wlPrefix. Other formats touch only argv.
+//
+// hostlink's downstream code (ASLR flag synthesis, export-dynamic
+// switch, mingw libs, combineDwarf-gated post-link processing) reads
+// these values back as locals after dispatch, so the struct does not
+// extend beyond the argv-assembly step.
+type hostlinkState struct {
+	argv         []string
+	combineDwarf bool
+	isMSVC       bool
+	wlPrefix     string
+}
+
+// hostlinkExtender appends format-specific flags to a hostlink
+// invocation. Implementations mutate st.argv (and, for PE, also
+// st.isMSVC and st.wlPrefix). Linux/FreeBSD/etc. have no per-format
+// extensions and are represented by a nil return from
+// pickHostlinkExtender — callers must guard the dispatch.
+type hostlinkExtender interface {
+	hostlinkArgs(ctxt *Link, st *hostlinkState)
+}
+
+type machoHostlink struct{}
+
+func (machoHostlink) hostlinkArgs(ctxt *Link, st *hostlinkState) {
+	st.argv = machoArgs(ctxt, st.argv, st.combineDwarf)
+}
+
+type openbsdHostlink struct{}
+
+func (openbsdHostlink) hostlinkArgs(ctxt *Link, st *hostlinkState) {
+	st.argv = openbsdArgs(ctxt, st.argv)
+}
+
+type peHostlink struct{}
+
+func (peHostlink) hostlinkArgs(ctxt *Link, st *hostlinkState) {
+	st.argv, st.isMSVC, st.wlPrefix = peArgs(ctxt, st.argv)
+}
+
+type xcoffHostlink struct{}
+
+func (xcoffHostlink) hostlinkArgs(ctxt *Link, st *hostlinkState) {
+	st.argv = xcoffArgs(ctxt, st.argv)
+}
+
+// pickHostlinkExtender returns the per-format extender for ctxt.HeadType
+// or nil if no extension applies (Linux/FreeBSD/Plan9/etc.). Callers
+// must check the result before invoking the method.
+func pickHostlinkExtender(ctxt *Link) hostlinkExtender {
+	switch ctxt.HeadType {
+	case objabi.Hdarwin:
+		return machoHostlink{}
+	case objabi.Hopenbsd:
+		return openbsdHostlink{}
+	case objabi.Hwindows:
+		return peHostlink{}
+	case objabi.Haix:
+		return xcoffHostlink{}
+	}
+	return nil
+}

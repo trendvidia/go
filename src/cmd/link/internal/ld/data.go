@@ -3173,26 +3173,13 @@ func (ctxt *Link) address() []*sym.Segment {
 // layout assigns file offsets and lengths to the segments in order.
 // Returns the file size containing all the segments.
 func (ctxt *Link) layout(order []*sym.Segment) uint64 {
+	layout := pickSegmentLayout(ctxt)
 	var prev *sym.Segment
 	for _, seg := range order {
 		if prev == nil {
 			seg.Fileoff = uint64(HEADR)
 		} else {
-			switch ctxt.HeadType {
-			default:
-				// Assuming the previous segment was
-				// aligned, the following rounding
-				// should ensure that this segment's
-				// VA ≡ Fileoff mod FlagRound.
-				seg.Fileoff = uint64(Rnd(int64(prev.Fileoff+prev.Filelen), *FlagRound))
-				if seg.Vaddr%uint64(*FlagRound) != seg.Fileoff%uint64(*FlagRound) {
-					Exitf("bad segment rounding (Vaddr=%#x Fileoff=%#x FlagRound=%#x)", seg.Vaddr, seg.Fileoff, *FlagRound)
-				}
-			case objabi.Hwindows:
-				seg.Fileoff = peSegmentFileOffset(prev)
-			case objabi.Hplan9:
-				seg.Fileoff = plan9SegmentFileOffset(prev)
-			}
+			seg.Fileoff = layout.segmentFileOffset(seg, prev)
 		}
 		if seg != &Segdata {
 			// Link.address already set Segdata.Filelen to

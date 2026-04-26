@@ -220,25 +220,55 @@ const pluginClosedFuncMsg = "plugin: function value invoked after Plugin.Close"
 // OCFUNC slots (raw code addresses, irrelevant for stub conversion).
 const funcSymSuffix = "·f"
 
-// neutraliseStaticDescriptors rewrites every closure descriptor owned
-// by md (i.e. emitted into md's writable .noptrdata) so its F field
-// points at pluginClosedFuncStub. Called from plugin_close before the
+// neutraliseStaticDescriptors rewrites every closure descriptor that
+// physically lives in md's writable .noptrdata so its F field points
+// at pluginClosedFuncStub. Called from plugin_close before the
 // canonicalSyms cleanup tears down the (name, addr, owner) triples.
 //
-// canonicalSyms is keyed by the slot symbol's suffix (the descriptor's
-// own name including "·f"); an entry's addr is the address of the
-// descriptor itself (since canonicalizeSlots stored *slot, and the
-// slot was initialised by SymPtr to the descriptor symbol). Filtering
-// owner == md keeps us from touching descriptors that md merely
-// references — those belong to other modules whose mappings remain.
+// canonicalSyms is keyed by descriptor name (including the "·f"
+// suffix); an entry's addr is the address of the descriptor itself
+// (canonicalizeSlots stored *slot, and the slot was initialised by
+// SymPtr to a descriptor symbol).
+//
+// Two filters apply:
+//
+//   - owner == md: this module was the first walker to register the
+//     name. Other modules' walks share this entry by reading addr;
+//     a different module's Close handles its own owner=that-module
+//     entries. (Heap holders live elsewhere and are processed via
+//     plugin_close's funcDescriptors slice, not here.)
+//
+//   - addr falls within md's own .noptrdata or .data: the rewrite
+//     target must physically be ours. The canonical addr can land in
+//     another module's address space when ld.so resolved md's slot
+//     to a same-named descriptor over there — typically the host's
+//     RODATA copy of a stdlib descriptor (e.g. reflect.cvtDirect·f),
+//     since the plugin-importing host emits the symbol but, being
+//     non-dynlink, lands it read-only. Writing through such an addr
+//     SIGSEGVs even though owner==md is true. The descriptor lives
+//     in still-mapped memory (host stays loaded) so neutralisation
+//     is also unnecessary: a held call lands in code that is not
+//     being unmapped by this Close.
 //
 // Caller holds canonicalSymsLock.
 func neutraliseStaticDescriptors(md *moduledata, stubPC uintptr) {
+	inMdData := func(addr uintptr) bool {
+		if addr >= md.noptrdata && addr < md.enoptrdata {
+			return true
+		}
+		if addr >= md.data && addr < md.edata {
+			return true
+		}
+		return false
+	}
 	for name, entry := range canonicalSyms {
 		if entry.owner != md {
 			continue
 		}
 		if !stringslite.HasSuffix(name, funcSymSuffix) {
+			continue
+		}
+		if !inMdData(entry.addr) {
 			continue
 		}
 		descF := (*uintptr)(unsafe.Pointer(entry.addr))

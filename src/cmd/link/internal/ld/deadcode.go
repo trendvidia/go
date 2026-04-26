@@ -87,6 +87,26 @@ func (d *deadcodePass) init() {
 	if d.ctxt.BuildMode == BuildModePlugin {
 		names = append(names, objabi.PathToPrefix(*flagPluginPath)+"..inittask", objabi.PathToPrefix(*flagPluginPath)+".main", "go:plugin.tabs")
 
+		if d.ctxt.IsWindows() && d.ctxt.IsInternal() {
+			// On internal-link Windows plugins, gentextPluginDllMain
+			// (cmd/link/internal/amd64/asm.go) emits an auto-generated
+			// DllMain whose body issues an R_CALL to runtime.addmoduledata.
+			// Gentext runs after deadcode, so the call target is invisible
+			// to the flood. Without an explicit root, relocation later fails
+			// as "unreachable sym in relocation".
+			//
+			// External-link plugins go through PrepareAddmoduledata instead,
+			// which marks reachability and appends to Textp on its own — no
+			// deadcode root needed there. Marking it here for external would
+			// also re-introduce the symbol into the reachable graph before
+			// PrepareAddmoduledata's Textp append, producing a duplicate
+			// Textp entry that confuses textaddress (phase error).
+			//
+			// Mark only the ABI0 version (mirroring PrepareAddmoduledata
+			// and gentextPluginDllMain, both of which look it up at ver=0).
+			d.mark(d.ldr.Lookup("runtime.addmoduledata", 0), 0)
+		}
+
 		// We don't keep the go.plugin.exports symbol,
 		// but we do keep the symbols it refers to.
 		exportsIdx := d.ldr.Lookup("go:plugin.exports", 0)

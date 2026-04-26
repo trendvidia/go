@@ -707,6 +707,18 @@ func (f *peFile) addSEH(ctxt *Link) {
 	if Segpdata.Length == 0 {
 		return
 	}
+	// Resync nextSectOffset / nextFileOffset to the segment's actual
+	// Vaddr/Fileoff. addSection rounds each section's size to
+	// PESECTALIGN, but the Segdata Vaddr computation rounds only at
+	// segment boundaries. When the .data and .bss sub-sections both
+	// have non-PESECTALIGN tails (Filelen and Length-Filelen), the
+	// running section offset drifts ahead of Segpdata.Vaddr by one
+	// PESECTALIGN unit and checkSegment below would fail. The drift
+	// is benign for the cumulative counter because gcc lays out the
+	// final DLL itself; force the .pdata section header to match the
+	// segment instead. Same for .xdata.
+	pefile.nextSectOffset = uint32(Segpdata.Vaddr - uint64(PEBASE))
+	pefile.nextFileOffset = uint32(Segpdata.Fileoff)
 	d := pefile.addSection(".pdata", int(Segpdata.Length), int(Segpdata.Length))
 	d.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ
 	if ctxt.LinkMode == LinkExternal {
@@ -719,6 +731,8 @@ func (f *peFile) addSEH(ctxt *Link) {
 	pefile.dataDirectory[pe.IMAGE_DIRECTORY_ENTRY_EXCEPTION].Size = d.virtualSize
 
 	if Segxdata.Length > 0 {
+		pefile.nextSectOffset = uint32(Segxdata.Vaddr - uint64(PEBASE))
+		pefile.nextFileOffset = uint32(Segxdata.Fileoff)
 		d = pefile.addSection(".xdata", int(Segxdata.Length), int(Segxdata.Length))
 		d.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ
 		if ctxt.LinkMode == LinkExternal {

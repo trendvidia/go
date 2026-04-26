@@ -1859,6 +1859,25 @@ func (ctxt *Link) hostlink() {
 		ctxt.Logf("%s", out)
 	}
 
+	// On Windows plugin hosts (cgo, so external link), gcc/ld writes
+	// the import library via -Wl,--out-implib. Some mingw-w64 ld
+	// versions emit an unindexed archive; the plugin link then fails
+	// with "archive has no index; run ranlib to add one". Run ranlib
+	// explicitly so the import library is usable. Best-effort: if
+	// ranlib isn't found or fails, leave the archive as-is.
+	if ctxt.HeadType == objabi.Hwindows && ctxt.canUsePlugins &&
+		ctxt.BuildMode != BuildModePlugin {
+		implib := *flagOutfile + ".a"
+		if _, err := os.Stat(implib); err == nil {
+			if rl := ctxt.findExtLinkTool("ranlib"); rl != "" {
+				rcmd := exec.Command(rl, implib)
+				if rout, rerr := rcmd.CombinedOutput(); rerr != nil {
+					ctxt.Logf("ranlib %s: %v\n%s", implib, rerr, rout)
+				}
+			}
+		}
+	}
+
 	// Helper for updating a Macho binary in some way (shared between
 	// dwarf combining and UUID update).
 	updateMachoOutFile := func(op string, updateFunc machoUpdateFunc) {

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -168,6 +169,20 @@ func peGenerateImportLibrary(ctxt *Link) {
 	}
 	if err := f.Close(); err != nil {
 		Exitf("error closing import library %s: %v", implib, err)
+	}
+
+	// mingw-w64 ld (BFD) does not accept the bare "first linker
+	// member" symbol index we emit above — it reports "archive has
+	// no index; run ranlib to add one" when a plugin tries to link
+	// against it. Run ranlib here so the archive is usable as-is.
+	// Best-effort: if ranlib isn't available or fails, leave the
+	// archive in place and the plugin link will surface the original
+	// error.
+	if rl := ctxt.findExtLinkTool("ranlib"); rl != "" {
+		rcmd := exec.Command(rl, implib)
+		if rout, rerr := rcmd.CombinedOutput(); rerr != nil {
+			ctxt.Logf("ranlib %s: %v\n%s", implib, rerr, rout)
+		}
 	}
 }
 

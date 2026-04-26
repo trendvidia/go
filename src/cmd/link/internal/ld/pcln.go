@@ -122,6 +122,21 @@ func emitPcln(ctxt *Link, s loader.Sym, container loader.Bitmap) bool {
 		}
 	}
 
+	// On Windows plugin builds, peLoadImportLibrary converts host-
+	// provided functions to SDYNIMPORT (later changed to SNOPTRDATA/
+	// SDATA via initdynimport's external-link branch, or to SWINDOWS
+	// via the internal branch). loader.AssignTextSymbolOrder
+	// repopulates Textp from the on-disk symbol type, so converted
+	// functions re-appear in ctxt.Textp. Skip them — their
+	// FuncInfo/funcdata aux still references plugin-local metadata
+	// whose R_ADDROFF targets (gcbits, type symbols) are owned by
+	// the host and never allocated in the plugin DLL, and their
+	// SymValue holds an IAT slot offset rather than a text address,
+	// which crashes findfunctab's bucket-index math.
+	if !ctxt.loader.SymType(s).IsText() {
+		return false
+	}
+
 	// We want to generate func table entries only for the "lowest
 	// level" symbols, not containers of subsymbols.
 	return !container.Has(s)
@@ -620,7 +635,18 @@ func (state *pclntab) generateFuncdata(ctxt *Link, funcs []loader.Sym, inlsyms m
 			// .windynamic and don't have their own section.
 			// Write 0 for funcdata entries that reference imported symbols.
 			// The runtime treats 0 as "no funcdata" for this index.
-			if ldr.SymType(rs) == sym.SWINDOWS || ldr.SymType(rs) == sym.SDYNIMPORT {
+			//
+			// Same treatment for unreachable targets and for targets
+			// with no section: on Windows plugin DLL builds, plugin-
+			// local funcdata (e.g. sync.poolRaceAddr.stkobj) often
+			// references content-addressable runtime symbols
+			// (runtime.gcbits.*, type descriptors) that are owned by
+			// the host and never allocated in the plugin DLL. The
+			// .stkobj's funcdata bytes are unused at runtime once the
+			// owning function is converted to SDYNIMPORT, so writing
+			// 0 here is safe.
+			if ldr.SymType(rs) == sym.SWINDOWS || ldr.SymType(rs) == sym.SDYNIMPORT ||
+				!ldr.AttrReachable(rs) || ldr.SymSect(rs) == nil {
 				ctxt.Target.Arch.ByteOrder.PutUint32(data[r.Off():], 0)
 				return
 			}

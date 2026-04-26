@@ -597,9 +597,12 @@ func (ctxt *Link) loadlib() {
 
 	iscgo = ctxt.LibraryByPkg["runtime/cgo"] != nil
 
-	// Plugins a require cgo support to function. Similarly, plugins may require additional
-	// internal linker support on some platforms which may not be implemented.
-	ctxt.canUsePlugins = ctxt.LibraryByPkg["plugin"] != nil && iscgo &&
+	// Plugins require cgo support to function on most platforms. On Windows,
+	// plugin loading uses syscall (LoadLibrary/GetProcAddress) and does not
+	// require cgo. Similarly, plugins may require additional internal linker
+	// support on some platforms which may not be implemented.
+	ctxt.canUsePlugins = ctxt.LibraryByPkg["plugin"] != nil &&
+		(iscgo || buildcfg.GOOS == "windows") &&
 		platform.BuildModeSupported("gc", "plugin", buildcfg.GOOS, buildcfg.GOARCH)
 
 	// We now have enough information to determine the link mode.
@@ -625,6 +628,17 @@ func (ctxt *Link) loadlib() {
 
 	// Add non-package symbols and references of externally defined symbols.
 	ctxt.loader.LoadSyms(ctxt.Arch)
+
+	// On Windows, when building a plugin with -pluginimplib, override
+	// host-provided symbols with SDYNIMPORT. This must happen after LoadSyms
+	// (so symbols exist) but before deadcode (so the runtime's dependency
+	// tree isn't traversed). The result: host-provided symbols are treated
+	// as external imports, and the runtime is not included in the plugin DLL.
+	if buildcfg.GOOS == "windows" && ctxt.BuildMode == BuildModePlugin && *flagPluginImplib != "" {
+		peLoadImportLibrary(ctxt, *flagPluginImplib)
+		// Remove converted symbols from Textp.
+		ctxt.Textp = filterConvertedSyms(ctxt)
+	}
 
 	// Load symbols from shared libraries, after all Go object symbols are loaded.
 	for _, lib := range ctxt.Library {
@@ -1626,6 +1640,17 @@ func (ctxt *Link) hostlink() {
 	case BuildModePlugin:
 		if ctxt.HeadType == objabi.Hdarwin {
 			argv = append(argv, "-dynamiclib")
+		} else if ctxt.HeadType == objabi.Hwindows {
+			argv = append(argv, "-shared")
+			argv = addASLRargs(argv, *flagAslr)
+			// Export all symbols from the plugin DLL so the host can
+			// resolve them via GetProcAddress.
+			argv = append(argv, "-Wl,--export-all-symbols")
+			// Link against the host executable's import library so
+			// the plugin shares the host's Go runtime.
+			if *flagPluginImplib != "" {
+				argv = append(argv, *flagPluginImplib)
+			}
 		} else {
 			if ctxt.UseRelro() {
 				argv = append(argv, "-Wl,-z,relro")

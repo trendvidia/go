@@ -41,6 +41,21 @@ import (
 // records which mode is in effect; here we only need to know the
 // MSVC-vs-MinGW split via st.isMSVC.
 func peExportArgs(ctxt *Link, st *hostlinkState) {
+	if ctxt.BuildMode == BuildModePlugin {
+		// Plugin DLLs don't export a per-symbol .def file; the host
+		// controls export, and the plugin links against the host
+		// import library at -pluginimplib time.
+		return
+	}
+	if ctxt.canUsePlugins {
+		// Plugin host: export every symbol so plugin DLLs can link
+		// against the host's runtime, and emit an import library that
+		// plugin builds will consume via -pluginimplib.
+		st.argv = append(st.argv, "-Wl,--export-all-symbols")
+		implib := *flagOutfile + ".a"
+		st.argv = append(st.argv, "-Wl,--out-implib,"+implib)
+		return
+	}
 	if slices.Contains(flagExtldflags, st.wlPrefix+"export-all-symbols") {
 		return
 	}
@@ -737,7 +752,14 @@ func (f *peFile) addInitArray(ctxt *Link) *peSection {
 	ctxt.Out.SeekSet(int64(sect.pointerToRawData))
 	sect.checkOffset(ctxt.Out.Offset())
 
-	init_entry := ctxt.loader.Lookup(*flagEntrySymbol, 0)
+	// For plugin mode, the entry symbol is empty; use the addmoduledata
+	// init function instead, which registers the plugin's module data
+	// with the host's runtime.
+	entryName := *flagEntrySymbol
+	if entryName == "" && ctxt.BuildMode == BuildModePlugin {
+		entryName = "go:link.addmoduledata"
+	}
+	init_entry := ctxt.loader.Lookup(entryName, 0)
 	addr := uint64(ctxt.loader.SymValue(init_entry)) - ctxt.loader.SymSect(init_entry).Vaddr
 	if pe64 {
 		ctxt.Out.Write64(addr)
@@ -1108,9 +1130,12 @@ func (f *peFile) writeFileHeader(ctxt *Link) {
 
 	if ctxt.LinkMode != LinkExternal {
 		fh.Characteristics = pe.IMAGE_FILE_EXECUTABLE_IMAGE
+		if ctxt.BuildMode == BuildModePlugin || ctxt.BuildMode == BuildModeCShared {
+			fh.Characteristics |= pe.IMAGE_FILE_DLL
+		}
 		switch ctxt.Arch.Family {
 		case sys.AMD64, sys.I386:
-			if ctxt.BuildMode != BuildModePIE {
+			if ctxt.BuildMode != BuildModePIE && ctxt.BuildMode != BuildModePlugin {
 				fh.Characteristics |= pe.IMAGE_FILE_RELOCS_STRIPPED
 			}
 		}
@@ -1155,8 +1180,19 @@ func (f *peFile) writeOptionalHeader(ctxt *Link) {
 	oh64.SizeOfUninitializedData = 0
 	oh.SizeOfUninitializedData = 0
 	if ctxt.LinkMode != LinkExternal {
-		oh64.AddressOfEntryPoint = uint32(Entryvalue(ctxt) - PEBASE)
-		oh.AddressOfEntryPoint = uint32(Entryvalue(ctxt) - PEBASE)
+		if ctxt.BuildMode == BuildModePlugin {
+			// Plugin DLLs use go:link.plugindllmain as DLL entry point.
+			// It wraps go:link.addmoduledata with a proper DllMain that
+			// returns TRUE.
+			dllmain := ctxt.loader.Lookup("go:link.plugindllmain", 0)
+			if dllmain != 0 && ctxt.loader.SymValue(dllmain) != 0 {
+				oh64.AddressOfEntryPoint = uint32(ctxt.loader.SymValue(dllmain) - PEBASE)
+				oh.AddressOfEntryPoint = uint32(ctxt.loader.SymValue(dllmain) - PEBASE)
+			}
+		} else {
+			oh64.AddressOfEntryPoint = uint32(Entryvalue(ctxt) - PEBASE)
+			oh.AddressOfEntryPoint = uint32(Entryvalue(ctxt) - PEBASE)
+		}
 	}
 	oh64.BaseOfCode = f.textSect.virtualAddress
 	oh.BaseOfCode = f.textSect.virtualAddress
@@ -1434,6 +1470,11 @@ func initdynimport(ctxt *Link) *Dll {
 				sb := ldr.MakeSymbolUpdater(m.s)
 				sb.SetType(sym.SWINDOWS)
 				sb.SetValue(dynamic.Size())
+				// Clear residual data for symbols converted from archive
+				// defs (e.g., Windows plugin host imports). AddInteriorSym
+				// requires zero-length data.
+				sb.SetData(nil)
+				ldr.FreeData(m.s)
 				dynamic.SetSize(dynamic.Size() + int64(ctxt.Arch.PtrSize))
 				dynamic.AddInteriorSym(m.s)
 			}
@@ -1564,15 +1605,38 @@ func addimports(ctxt *Link, datsect *peSection) {
 
 func initdynexport(ctxt *Link) {
 	ldr := ctxt.loader
+	// PE export ordinals are uint16, limiting exports to 65535.
+	// When exporting all symbols for plugin support, we may need more.
+	// The PE format's NumberOfFunctions field is uint32, but ordinals
+	// are uint16, so we cap at MaxUint16.
+	maxExports := math.MaxUint16
+
+	// For Windows plugin support, deduplicate exports by ext name.
+	// When a function has both ABI0 (ver=0) and ABIInternal (ver=1)
+	// versions, export only the ABIInternal version. Plugin code calls
+	// functions using ABIInternal (arguments in registers). Exporting
+	// the ABI0 wrapper (arguments on stack) would cause an ABI mismatch
+	// when the plugin calls through the IAT thunk.
+	seen := make(map[string]loader.Sym)
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
 		if !ldr.AttrReachable(s) || !ldr.AttrCgoExportDynamic(s) {
 			continue
 		}
-		if len(dexport) >= math.MaxUint16 {
-			ctxt.Errorf(s, "pe dynexport table is full")
-			errorexit()
+		name := ldr.SymExtname(s)
+		if prev, ok := seen[name]; ok {
+			// Prefer ABIInternal (higher version) over ABI0.
+			if ldr.SymVersion(s) > ldr.SymVersion(prev) {
+				seen[name] = s
+			}
+			continue
 		}
+		seen[name] = s
+	}
 
+	for _, s := range seen {
+		if len(dexport) >= maxExports {
+			break
+		}
 		dexport = append(dexport, s)
 	}
 
@@ -1775,6 +1839,10 @@ func addPEBaseRelocSym(ldr *loader.Loader, s loader.Sym, rt *peBaseRelocTable) {
 }
 
 func needPEBaseReloc(ctxt *Link) bool {
+	// DLLs (plugins, c-shared) always need base relocations for ASLR.
+	if ctxt.BuildMode == BuildModePlugin || ctxt.BuildMode == BuildModeCShared {
+		return true
+	}
 	// Non-PIE x86 binaries don't need the base relocation table.
 	// Everyone else does.
 	if (ctxt.Arch.Family == sys.I386 || ctxt.Arch.Family == sys.AMD64) && ctxt.BuildMode != BuildModePIE {
@@ -1817,6 +1885,15 @@ func addPEBaseReloc(ctxt *Link) {
 
 func (ctxt *Link) dope() {
 	initdynimport(ctxt)
+	// When building a plugin host or plugin DLL on Windows with internal
+	// linking, export all reachable symbols.
+	// - Host: so the import library can reference them for plugin builds
+	// - Plugin: so the host can find exported symbols via GetProcAddress
+	if ctxt.LinkMode != LinkExternal && ctxt.HeadType == objabi.Hwindows {
+		if hasPluginPkg(ctxt) || ctxt.BuildMode == BuildModePlugin {
+			peExportAllSymbols(ctxt)
+		}
+	}
 	initdynexport(ctxt)
 	writeSEH(ctxt)
 }
@@ -1916,6 +1993,9 @@ func asmbPe(ctxt *Link) {
 	pefile.addSEH(ctxt)
 	pefile.addDWARF()
 
+	// For Windows plugins with internal linking, DllMain (go:link.plugindllmain)
+	// handles init — no .ctors needed. For external linking, .ctors is processed
+	// by the CRT.
 	if ctxt.LinkMode == LinkExternal {
 		pefile.ctorsSect = pefile.addInitArray(ctxt)
 	}
@@ -1933,6 +2013,27 @@ func asmbPe(ctxt *Link) {
 	}
 
 	pewrite(ctxt)
+
+	// Generate import library for plugin support when using internal linking.
+	// Only generate when the binary imports the plugin package.
+	if ctxt.HeadType == objabi.Hwindows && ctxt.BuildMode != BuildModePlugin &&
+		ctxt.LinkMode != LinkExternal && hasPluginPkg(ctxt) {
+		peGenerateImportLibrary(ctxt)
+	}
+}
+
+// hasPluginPkg reports whether the plugin package is part of this link.
+func hasPluginPkg(ctxt *Link) bool {
+	if ctxt.LibraryByPkg["plugin"] != nil {
+		return true
+	}
+	// Also check the library list directly in case the map key differs.
+	for _, lib := range ctxt.Library {
+		if lib.Pkg == "plugin" {
+			return true
+		}
+	}
+	return false
 }
 
 // peCreateExportFile creates a file with exported symbols for Windows .def files.

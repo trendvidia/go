@@ -40,6 +40,9 @@ func writeSEHAMD64(ctxt *Link) {
 	// to deduplicate .xdata entries.
 	uwcache := make(map[string]int64) // aux symbol name --> .xdata offset
 	for _, s := range ctxt.Textp {
+		if st := ldr.SymType(s); st == sym.SDYNIMPORT || st == sym.SWINDOWS {
+			continue
+		}
 		if fi := ldr.FuncInfo(s); !fi.Valid() {
 			continue
 		}

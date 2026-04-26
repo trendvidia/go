@@ -1774,12 +1774,12 @@ TEXT runtime·goexit(SB),NOSPLIT|TOPFRAME|NOFRAME,$0-0
 	BYTE	$0x90	// NOP
 
 // This is called from .init_array and follows the platform, not Go, ABI.
-TEXT runtime·addmoduledata(SB),NOSPLIT,$0-0
-	PUSHQ	R15 // The access to global variables below implicitly uses R15, which is callee-save
+TEXT runtime·addmoduledata(SB),NOSPLIT,$8-0
+	MOVQ	R15, 0(SP) // The access to global variables below implicitly uses R15, which is callee-save
 	MOVQ	runtime·lastmoduledatap(SB), AX
 	MOVQ	DI, moduledata_next(AX)
 	MOVQ	DI, runtime·lastmoduledatap(SB)
-	POPQ	R15
+	MOVQ	0(SP), R15
 	RET
 
 // Initialize special registers then jump to sigpanic.

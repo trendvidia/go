@@ -3416,7 +3416,7 @@ func (r *reader) pkgObjs(target *ir.Package) []*ir.Name {
 			}
 		}
 
-		if base.Ctxt.Flag_dynlink && types.LocalPkg.Name == "main" && types.IsExported(sym.Name) && name.Op() == ir.ONAME {
+		if (base.Ctxt.Flag_dynlink || base.Ctxt.Flag_shared) && types.LocalPkg.Name == "main" && types.IsExported(sym.Name) && name.Op() == ir.ONAME {
 			assert(!sym.OnExportList())
 			target.PluginExports = append(target.PluginExports, name)
 			sym.SetOnExportList(true)

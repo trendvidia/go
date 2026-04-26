@@ -41,6 +41,13 @@ import (
 )
 
 func gentext(ctxt *ld.Link, ldr *loader.Loader) {
+	// On Windows plugins with internal linking, create DllMain directly
+	// (PrepareAddmoduledata is skipped to avoid BL to SWINDOWS symbols).
+	if ctxt.BuildMode == ld.BuildModePlugin && ctxt.IsWindows() && ctxt.IsInternal() {
+		gentextPluginDllMain(ctxt, ldr)
+		return
+	}
+
 	initfunc, addmoduledata := ld.PrepareAddmoduledata(ctxt)
 	if initfunc == nil {
 		return
@@ -63,6 +70,91 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 	initfunc.AddSymRef(ctxt.Arch, addmoduledata, 0, objabi.R_CALL, 4)
 	//    c:	c3                   	retq
 	o(0xc3)
+}
+
+// gentextPluginDllMain generates a DllMain entry point for Windows plugin
+// DLLs with internal linking. It loads the plugin's moduledata, reads
+// runtime.addmoduledata from the IAT, and calls it.
+func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
+	dllmain := ldr.CreateSymForUpdate("go:link.plugindllmain", 0)
+	dllmain.SetType(sym.STEXT)
+	ctxt.Textp = append(ctxt.Textp, dllmain.Sym())
+	ldr.SetAttrReachable(dllmain.Sym(), true)
+
+	dm := func(op ...uint8) {
+		for _, op1 := range op {
+			dllmain.AddUint8(op1)
+		}
+	}
+	// DllMain is called for DLL_PROCESS_ATTACH (1), DLL_THREAD_ATTACH (2),
+	// DLL_THREAD_DETACH (3), and DLL_PROCESS_DETACH (0). We must only
+	// call addmoduledata on DLL_PROCESS_ATTACH. Without this check,
+	// each new OS thread triggers DLL_THREAD_ATTACH → addmoduledata
+	// corrupts the module list → GC crash.
+	//
+	// Layout:
+	//   cmp edx, 1           ; fdwReason == DLL_PROCESS_ATTACH?
+	//   jne skip              ; skip addmoduledata for other reasons
+	//   push rdi
+	//   sub rsp, 0x28
+	//   lea rdi, [rip+moduledata]
+	//   call addmoduledata
+	//   add rsp, 0x28
+	//   pop rdi
+	// skip:
+	//   mov eax, 1            ; return TRUE
+	//   ret
+
+	// cmp edx, 1 (fdwReason == DLL_PROCESS_ATTACH?)
+	dm(0x83, 0xfa, 0x01)
+
+	// Compute the body size so we can emit the correct JNE offset.
+	// The body is: push rdi(1) + sub rsp(4) + lea rdi(7+4=11) + call(5+4=9) + add rsp(4) + pop rdi(1) = 30 bytes
+	// But lea has a 4-byte reloc placeholder and call has a 4-byte reloc, accounted by AddPCRelPlus/AddUint32.
+
+	// jne skip — we'll use a two-byte JNE with a forward jump.
+	// The exact distance depends on the call instruction. We build
+	// the body first, then fix up.
+
+	// Save current size as the JNE instruction location.
+	jnePos := dllmain.Size()
+	dm(0x75, 0x00) // placeholder, will fix below
+
+	// push rdi
+	dm(0x57)
+	// sub rsp, 0x28
+	dm(0x48, 0x83, 0xec, 0x28)
+
+	// lea rdi, [rip + local.pluginmoduledata]
+	dm(0x48, 0x8d, 0x3d)
+	dllmain.AddPCRelPlus(ctxt.Arch, ctxt.Moduledata, 0)
+
+	// Call runtime.addmoduledata via direct call + thunk.
+	amd := ldr.Lookup("runtime.addmoduledata", 0)
+	if amd != 0 {
+		dm(0xe8)
+		dllmain.AddUint32(ctxt.Arch, 0)
+		r, _ := dllmain.AddRel(objabi.R_CALL)
+		r.SetOff(int32(dllmain.Size() - 4))
+		r.SetSiz(4)
+		r.SetSym(amd)
+	}
+
+	// add rsp, 0x28
+	dm(0x48, 0x83, 0xc4, 0x28)
+	// pop rdi
+	dm(0x5f)
+
+	// Patch the JNE displacement (offset from byte after JNE to skip target).
+	bodySize := dllmain.Size() - jnePos - 2 // 2 = size of JNE instruction
+	data := dllmain.Data()
+	data[jnePos+1] = byte(bodySize)
+
+	// skip:
+	// mov eax, 1 (return TRUE)
+	dm(0xb8, 0x01, 0x00, 0x00, 0x00)
+	// ret
+	dm(0xc3)
 }
 
 func adddynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loader.Sym, r loader.Reloc, rIdx int) bool {

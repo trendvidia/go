@@ -62,8 +62,11 @@ func (ctxt *Link) inittasks() {
 
 	// If the runtime is one of the packages we are building,
 	// initialize the runtime_inittasks variable.
+	// Skip for Windows plugins — the runtime is provided by the host
+	// and its init tasks are already SDYNIMPORT.
 	ldr := ctxt.loader
-	if ldr.Lookup("runtime.runtime_inittasks", 0) != 0 {
+	if ldr.Lookup("runtime.runtime_inittasks", 0) != 0 &&
+		!(ctxt.BuildMode == BuildModePlugin && ctxt.IsWindows() && *flagPluginImplib != "") {
 		t := ctxt.inittaskSym([]string{"runtime..inittask"}, "go:runtime.inittasks")
 
 		// This slice header is already defined in runtime/proc.go, so we update it here with new contents.

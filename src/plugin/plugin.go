@@ -25,9 +25,9 @@
 // However, the plugin mechanism has many significant drawbacks that
 // should be considered carefully during the design. For example:
 //
-//   - Plugins are currently supported only on Linux, FreeBSD, and
-//     macOS, making them unsuitable for applications intended to be
-//     portable.
+//   - Plugins are currently supported only on Linux, FreeBSD, macOS,
+//     and Windows (amd64, arm64), making them unsuitable for
+//     applications intended to be portable.
 //
 //   - Plugins are poorly supported by the Go race detector. Even simple
 //     race conditions may not be automatically detected. See

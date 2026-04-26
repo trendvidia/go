@@ -220,6 +220,12 @@ func PrepareAddmoduledata(ctxt *Link) (*loader.SymbolBuilder, loader.Sym) {
 	if !ctxt.DynlinkingGo() {
 		return nil, 0
 	}
+	// On Windows plugins with internal linking, DllMain handles module
+	// registration directly via IAT. Skip creating go:link.addmoduledata
+	// which would try to BL to the SWINDOWS runtime.addmoduledata (out of range).
+	if ctxt.BuildMode == BuildModePlugin && ctxt.IsWindows() && ctxt.IsInternal() {
+		return nil, 0
+	}
 	amd := ctxt.loader.LookupOrCreateSym("runtime.addmoduledata", 0)
 	if ctxt.loader.SymType(amd).IsText() && ctxt.BuildMode != BuildModePlugin {
 		// we're linking a module containing the runtime -> no need for

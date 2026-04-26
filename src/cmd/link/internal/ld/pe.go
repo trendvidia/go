@@ -1448,8 +1448,27 @@ func initdynimport(ctxt *Link) *Dll {
 		for d := dr; d != nil; d = d.next {
 			for m = d.ms; m != nil; m = m.next {
 				sb := ldr.MakeSymbolUpdater(m.s)
-				sb.SetType(sym.SDATA)
+				// Plugin-host imports converted by peLoadImportLibrary
+				// were originally STEXT (function symbols); their IAT
+				// slot holds a code pointer that the GC must not
+				// scan. Route them to SNOPTRDATA so dodata's gcdata
+				// emission does not require Go type information for
+				// what is really a function pointer. Natural cgo data
+				// imports keep SDATA + their compiler-attached type.
+				fi := ldr.FuncInfo(m.s)
+				if fi.Valid() {
+					sb.SetType(sym.SNOPTRDATA)
+				} else {
+					sb.SetType(sym.SDATA)
+				}
 				sb.Grow(int64(ctxt.Arch.PtrSize))
+				// Match Size to the slot's data length. Natural cgo
+				// SDYNIMPORTs arrive here with Size already == PtrSize,
+				// so the call is idempotent; for plugin-host imports
+				// converted via peLoadImportLibrary, Size was reset to
+				// 0 at conversion time, and dodataSect would otherwise
+				// fail with "initialize bounds (0 < N)".
+				sb.SetSize(int64(ctxt.Arch.PtrSize))
 				dynName := sb.Extname()
 				// only windows/386 requires stdcall decoration
 				if ctxt.Is386() && m.argsize >= 0 {

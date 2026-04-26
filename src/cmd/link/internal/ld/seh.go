@@ -40,7 +40,13 @@ func writeSEHAMD64(ctxt *Link) {
 	// to deduplicate .xdata entries.
 	uwcache := make(map[string]int64) // aux symbol name --> .xdata offset
 	for _, s := range ctxt.Textp {
-		if st := ldr.SymType(s); st == sym.SDYNIMPORT || st == sym.SWINDOWS {
+		st := ldr.SymType(s)
+		// Skip non-text symbols. On Windows external link, plugin host
+		// imports flow STEXT → SDYNIMPORT (peLoadImportLibrary) →
+		// SDATA (initdynimport's external branch) while keeping their
+		// FuncInfo from the STEXT phase, so the !fi.Valid() check
+		// alone is not sufficient to filter them out.
+		if !st.IsText() {
 			continue
 		}
 		if fi := ldr.FuncInfo(s); !fi.Valid() {

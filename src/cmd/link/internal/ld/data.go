@@ -2251,7 +2251,17 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 		ldr.SetSymSect(ldr.LookupOrCreateSym("runtime.types", 0), sect)
 		ldr.SetSymSect(ldr.LookupOrCreateSym("runtime.etypes", 0), sect)
 	}
-	for _, symn := range sym.ReadOnly {
+	for i, symn := range sym.ReadOnly {
+		if i == 0 && symn == sym.STYPE && !ctxt.UseRelro() && ctxt.HeadType != objabi.Haix {
+			// Skip forward so that no type reference uses a zero
+			// offset relative to runtime.types — the runtime treats
+			// nameOff == 0 / typeOff == 0 as a "no name / no type"
+			// sentinel (see runtime/type.go's resolveNameOff). The
+			// relro path below has the matching skip; the non-relro
+			// path needs it too for plugin builds and other small
+			// programs whose .rodata starts directly with STYPE.
+			state.datsize++
+		}
 		symnStartValue := state.datsize
 		if len(state.data[symn]) != 0 {
 			symnStartValue = aligndatsize(state, symnStartValue, state.data[symn][0])

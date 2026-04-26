@@ -9,10 +9,22 @@ import (
 	"log"
 	"path/filepath"
 	"plugin"
+	"runtime"
 	"strings"
 
 	"testplugin/common"
 )
+
+// pluginExt is the file extension used for plugin shared libraries on
+// the current platform. The build side of the test (plugin_test.go)
+// has the same logic; this fixture is run as a standalone executable,
+// so it computes the suffix at runtime.
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
 
 func init() {
 	common.X *= 5
@@ -22,7 +34,7 @@ func init() {
 // the command line do not have overlapping symbols. That is,
 // unnamed1.so/FuncInt and unnamed2.so/FuncInt should be distinct functions.
 func testUnnamed() {
-	p, err := plugin.Open("unnamed1.so")
+	p, err := plugin.Open("unnamed1" + pluginExt)
 	if err != nil {
 		log.Fatalf(`plugin.Open("unnamed1.so"): %v`, err)
 	}
@@ -34,7 +46,7 @@ func testUnnamed() {
 		log.Fatalf("unnamed1.so: FuncInt()=%d, want %d", got, want)
 	}
 
-	p, err = plugin.Open("unnamed2.so")
+	p, err = plugin.Open("unnamed2" + pluginExt)
 	if err != nil {
 		log.Fatalf(`plugin.Open("unnamed2.so"): %v`, err)
 	}
@@ -52,7 +64,7 @@ func main() {
 		log.Fatalf("before plugin load common.X=%d, want %d", got, want)
 	}
 
-	p, err := plugin.Open("plugin1.so")
+	p, err := plugin.Open("plugin1" + pluginExt)
 	if err != nil {
 		log.Fatalf("plugin.Open failed: %v", err)
 	}
@@ -82,7 +94,7 @@ func main() {
 	// the already loaded plugin. It also depends on common. Test
 	// that we can load the different plugin, it is actually
 	// different, and that it sees the same common package.
-	subpPath, err := filepath.Abs("sub/plugin1.so")
+	subpPath, err := filepath.Abs("sub/plugin1" + pluginExt)
 	if err != nil {
 		log.Fatalf("filepath.Abs(%q) failed: %v", subpPath, err)
 	}
@@ -126,7 +138,7 @@ func main() {
 		log.Fatalf(`plugin1.F()=%d, want 17`, gotf)
 	}
 
-	p2, err := plugin.Open("plugin2.so")
+	p2, err := plugin.Open("plugin2" + pluginExt)
 	if err != nil {
 		log.Fatalf("plugin.Open failed: %v", err)
 	}
@@ -136,7 +148,7 @@ func main() {
 		log.Fatalf("after loading plugin2, common.X=%d, want %d", got, want)
 	}
 
-	_, err = plugin.Open("plugin2-dup.so")
+	_, err = plugin.Open("plugin2-dup" + pluginExt)
 	if err == nil {
 		log.Fatal(`plugin.Open("plugin2-dup.so"): duplicate open should have failed`)
 	}
@@ -144,7 +156,7 @@ func main() {
 		log.Fatal(`plugin.Open("plugin2.so"): error does not mention "already loaded"`)
 	}
 
-	_, err = plugin.Open("plugin-mismatch.so")
+	_, err = plugin.Open("plugin-mismatch" + pluginExt)
 	if err == nil {
 		log.Fatal(`plugin.Open("plugin-mismatch.so"): should have failed`)
 	}
@@ -152,11 +164,11 @@ func main() {
 		log.Fatalf(`plugin.Open("plugin-mismatch.so"): error does not mention "different version": %v`, s)
 	}
 
-	_, err = plugin.Open("plugin2-dup.so")
+	_, err = plugin.Open("plugin2-dup" + pluginExt)
 	if err == nil {
 		log.Fatal(`plugin.Open("plugin2-dup.so"): duplicate open after bad plugin should have failed`)
 	}
-	_, err = plugin.Open("plugin2.so")
+	_, err = plugin.Open("plugin2" + pluginExt)
 	if err != nil {
 		log.Fatalf(`plugin.Open("plugin2.so"): second open with same name failed: %v`, err)
 	}

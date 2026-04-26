@@ -629,12 +629,18 @@ func (ctxt *Link) loadlib() {
 	// Add non-package symbols and references of externally defined symbols.
 	ctxt.loader.LoadSyms(ctxt.Arch)
 
-	// On Windows, when building a plugin with -pluginimplib, override
-	// host-provided symbols with SDYNIMPORT. This must happen after LoadSyms
-	// (so symbols exist) but before deadcode (so the runtime's dependency
-	// tree isn't traversed). The result: host-provided symbols are treated
-	// as external imports, and the runtime is not included in the plugin DLL.
-	if buildcfg.GOOS == "windows" && ctxt.BuildMode == BuildModePlugin && *flagPluginImplib != "" {
+	// On Windows internal-link plugin builds, override host-provided
+	// symbols with SDYNIMPORT so the plugin DLL imports them from the
+	// host at runtime (no external linker required). Must run after
+	// LoadSyms so the symbols exist, and before deadcode so we don't
+	// drag the runtime's dependency tree into the plugin.
+	//
+	// External-link plugins go through gcc/ld with host.exe.a as a
+	// positional input — ld resolves host symbols itself, so running
+	// peLoadImportLibrary would just install a redundant -l<host>
+	// flag (peimporteddlls) that gcc cannot satisfy.
+	if buildcfg.GOOS == "windows" && ctxt.BuildMode == BuildModePlugin &&
+		*flagPluginImplib != "" && ctxt.LinkMode == LinkInternal {
 		peLoadImportLibrary(ctxt, *flagPluginImplib)
 		// Remove converted symbols from Textp.
 		ctxt.Textp = filterConvertedSyms(ctxt)

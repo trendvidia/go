@@ -333,6 +333,24 @@ func writeArHeader(f io.Writer, name string, size int) {
 // registers all symbols in it as dynamic imports from the specified DLL/exe.
 // This allows the internal linker to produce a plugin DLL that imports
 // runtime symbols from the host executable, without needing an external linker.
+//
+// The archive's first member is the System V/GNU symbol index ("/"):
+//
+//	numSyms                  (4 bytes, big-endian)
+//	numSyms x 4-byte offsets (big-endian member offsets - unused here)
+//	numSyms null-terminated symbol names
+//
+// Both Go's peGenerateImportLibrary and mingw `ld --out-implib` produce a
+// "/" first member in this format. Per-symbol member contents differ by
+// toolchain (Go writes IMPORT_OBJECT_HEADER short imports; mingw 2.46+
+// writes a compact format) but the symbol index alone names every symbol
+// the host exports, so we don't need to parse the per-member contents.
+//
+// mingw also injects helper names into the symbol index - `.idata$4`,
+// `.idata$5`, `.idata$6`, and `__imp_<sym>`. They all match peSkipSymName
+// ("." or "_" prefix) and fall out below, leaving just bare exports. The
+// DLL name is implicit: import libraries are named "<dll>.a", so the
+// basename minus ".a" is the DLL name.
 func peLoadImportLibrary(ctxt *Link, implib string) {
 	// Resolve relative paths since the linker may run from a different directory.
 	if !filepath.IsAbs(implib) {
@@ -347,70 +365,58 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 	}
 	defer f.Close()
 
-	// Read and verify ar magic.
 	var magic [8]byte
-	if _, err := f.Read(magic[:]); err != nil || string(magic[:]) != "!<arch>\n" {
+	if _, err := io.ReadFull(f, magic[:]); err != nil || string(magic[:]) != "!<arch>\n" {
 		Exitf("%s: not a valid ar archive", implib)
+	}
+
+	var arHdr [60]byte
+	if _, err := io.ReadFull(f, arHdr[:]); err != nil {
+		Exitf("%s: missing first archive member", implib)
+	}
+	memberName := strings.TrimSpace(string(arHdr[0:16]))
+	if memberName != "/" {
+		Exitf("%s: first archive member is %q, expected \"/\" symbol index", implib, memberName)
+	}
+	sizeStr := strings.TrimSpace(string(arHdr[48:58]))
+	var size int
+	if _, err := fmt.Sscanf(sizeStr, "%d", &size); err != nil || size < 4 {
+		Exitf("%s: bad symbol-index size %q", implib, sizeStr)
+	}
+	data := make([]byte, size)
+	if _, err := io.ReadFull(f, data); err != nil {
+		Exitf("%s: short read of symbol index", implib)
+	}
+
+	numSyms := int(binary.BigEndian.Uint32(data[0:4]))
+	nameOffset := 4 + numSyms*4
+	if nameOffset > len(data) {
+		Exitf("%s: corrupt symbol index (numSyms=%d, size=%d)", implib, numSyms, size)
+	}
+	names := data[nameOffset:]
+
+	dllName := strings.TrimSuffix(filepath.Base(implib), ".a")
+	if dllName == "" {
+		Exitf("%s: cannot derive DLL name from import library path", implib)
 	}
 
 	ldr := ctxt.loader
 	importCount := 0
+	seen := make(map[string]bool)
 
-	// Parse ar members looking for short import objects.
-	for {
-		// Read ar header (60 bytes).
-		var arHdr [60]byte
-		if _, err := f.Read(arHdr[:]); err != nil {
-			break // EOF
-		}
-
-		// Parse size from ar header (bytes 48-57).
-		sizeStr := strings.TrimSpace(string(arHdr[48:58]))
-		var size int
-		if _, err := fmt.Sscanf(sizeStr, "%d", &size); err != nil || size <= 0 {
+	cursor := 0
+	for i := 0; i < numSyms && cursor < len(names); i++ {
+		nul := bytes.IndexByte(names[cursor:], 0)
+		if nul < 0 {
 			break
 		}
+		symName := string(names[cursor : cursor+nul])
+		cursor += nul + 1
 
-		// Read member data.
-		data := make([]byte, size)
-		if _, err := f.Read(data); err != nil {
-			break
-		}
-
-		// Skip padding byte for odd-sized members.
-		if size%2 != 0 {
-			f.Read(make([]byte, 1))
-		}
-
-		// Check for short import object signature:
-		// Sig1 = 0x0000, Sig2 = 0xFFFF
-		if len(data) < 20 {
+		if seen[symName] {
 			continue
 		}
-		sig1 := binary.LittleEndian.Uint16(data[0:2])
-		sig2 := binary.LittleEndian.Uint16(data[2:4])
-		if sig1 != 0x0000 || sig2 != 0xFFFF {
-			continue // Not a short import object (e.g., linker member)
-		}
-
-		// Parse the short import object.
-		// After the 20-byte header: null-terminated symbol name, then null-terminated DLL name.
-		strData := data[20:]
-		nullIdx := bytes.IndexByte(strData, 0)
-		if nullIdx < 0 {
-			continue
-		}
-		symName := string(strData[:nullIdx])
-		strData = strData[nullIdx+1:]
-		nullIdx = bytes.IndexByte(strData, 0)
-		if nullIdx < 0 {
-			continue
-		}
-		dllName := string(strData[:nullIdx])
-
-		if symName == "" || dllName == "" {
-			continue
-		}
+		seen[symName] = true
 
 		if peSkipSymName(symName) {
 			continue
@@ -438,7 +444,6 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		//
 		// Must convert BOTH ABI versions (ABI0 and ABIInternal) for
 		// functions.
-		found := false
 		for _, ver := range []int{0, 1} {
 			s := ldr.Lookup(symName, ver)
 			if s == 0 {
@@ -468,10 +473,6 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			// Mark reachable so initdynimport creates IAT entries.
 			ldr.SetAttrReachable(s, true)
 			importCount++
-			found = true
-		}
-		if !found {
-			continue // Not referenced by plugin
 		}
 	}
 	if ctxt.Debugvlog > 0 {

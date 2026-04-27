@@ -274,7 +274,22 @@ var peSharedRuntimeData = map[string]bool{
 // Only call on Windows under -dynlink. Other heads/modes have their own
 // GOT machinery (ELF/Darwin via lib.go:AddGotSym).
 func peGotRedirect(arch *sys.Arch, ldr *loader.Loader, targ loader.Sym) loader.Sym {
-	name := "__imp_" + ldr.SymName(targ)
+	// For host-shared symbols (SHOSTOBJ), peLoadImportLibrary created
+	// `__imp_<host-export-name>` as the SHOSTOBJ companion — keyed on the
+	// MANGLED export name (e.g. `__imp_runtime.findfunc.abi0`), not the
+	// plugin-internal name (`runtime.findfunc` v=0). Match that key so
+	// the GOT redirect lands on the OS-loader-populated IAT slot instead
+	// of synthesizing a plugin-local SDATA pointer to the plugin's own
+	// JMP thunk — which would orphan host-shared functions like
+	// `runtime.findfunc` whose callers receive PCs that the host's
+	// findfunc cannot resolve.
+	internalName := ldr.SymName(targ)
+	name := "__imp_" + internalName
+	if ldr.SymType(targ) == sym.SHOSTOBJ {
+		if ext := ldr.SymExtname(targ); ext != "" && ext != internalName {
+			name = "__imp_" + ext
+		}
+	}
 	if s := ldr.Lookup(name, 0); s != 0 {
 		st := ldr.SymType(s)
 		if st == sym.SHOSTOBJ || st == sym.SNOPTRDATA {

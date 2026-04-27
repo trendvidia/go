@@ -243,7 +243,13 @@ func PrepareAddmoduledata(ctxt *Link) (*loader.SymbolBuilder, loader.Sym) {
 	initfunc.SetType(sym.STEXT)
 
 	// Add the init func and/or addmoduledata to Textp.
-	if ctxt.BuildMode == BuildModePlugin {
+	//
+	// On external-link Windows plugins, peLoadImportLibrary converted
+	// runtime.addmoduledata to SHOSTOBJ before this point so the partial
+	// PE emits it as an undefined extern. Don't append non-Text amd to
+	// Textp — filterConvertedSyms already excluded it once and the
+	// later writeSymbols loop iterates all reachable SHOSTOBJs anyway.
+	if ctxt.BuildMode == BuildModePlugin && ctxt.loader.SymType(amd).IsText() {
 		ctxt.Textp = append(ctxt.Textp, amd)
 	}
 	ctxt.Textp = append(ctxt.Textp, initfunc.Sym())

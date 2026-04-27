@@ -629,18 +629,29 @@ func (ctxt *Link) loadlib() {
 	// Add non-package symbols and references of externally defined symbols.
 	ctxt.loader.LoadSyms(ctxt.Arch)
 
-	// On Windows internal-link plugin builds, override host-provided
-	// symbols with SDYNIMPORT so the plugin DLL imports them from the
-	// host at runtime (no external linker required). Must run after
-	// LoadSyms so the symbols exist, and before deadcode so we don't
-	// drag the runtime's dependency tree into the plugin.
+	// On Windows plugin builds, convert host-provided symbols listed in
+	// the import library so the plugin's references land in the host's
+	// runtime (not the plugin's local copy). Must run after LoadSyms so
+	// the symbols exist, and before deadcode so we don't drag the
+	// runtime's dependency tree into the plugin.
 	//
-	// External-link plugins go through gcc/ld with host.exe.a as a
-	// positional input — ld resolves host symbols itself, so running
-	// peLoadImportLibrary would just install a redundant -l<host>
-	// flag (peimporteddlls) that gcc cannot satisfy.
+	// Internal link: convert to SDYNIMPORT and let the internal linker
+	// build IAT entries. External link: convert TEXT functions (ABI0
+	// only) to SHOSTOBJ so the partial PE emits them as undefined
+	// externs; gcc/ld then resolves them through host.exe.a (passed
+	// positionally). Without this, the Go linker resolves R_CALL from
+	// gentext's synthetic go:link.addmoduledata to go.o's local STEXT
+	// runtime.addmoduledata, the plugin's local lastmoduledatap is
+	// updated instead of the host's, and plugin.lastmoduleinit faults
+	// with "no plugin module data".
+	//
+	// External-link plugin-host imports use SHOSTOBJ rather than
+	// SDYNIMPORT so they bypass initdynimport's IAT-data-slot transform
+	// and don't appear in `dr` (the DLL list peimporteddlls walks to
+	// emit `-l<dll>` flags). host.exe.a is consumed via the positional
+	// pluginimplib input; a `-lhost.exe` flag would be unresolvable.
 	if buildcfg.GOOS == "windows" && ctxt.BuildMode == BuildModePlugin &&
-		*flagPluginImplib != "" && ctxt.LinkMode == LinkInternal {
+		*flagPluginImplib != "" {
 		peLoadImportLibrary(ctxt, *flagPluginImplib)
 		// Remove converted symbols from Textp.
 		ctxt.Textp = filterConvertedSyms(ctxt)
@@ -1652,11 +1663,12 @@ func (ctxt *Link) hostlink() {
 			// Export all symbols from the plugin DLL so the host can
 			// resolve them via GetProcAddress.
 			argv = append(argv, "-Wl,--export-all-symbols")
-			// Link against the host executable's import library so
-			// the plugin shares the host's Go runtime.
-			if *flagPluginImplib != "" {
-				argv = append(argv, *flagPluginImplib)
-			}
+			// host.exe.a is appended AFTER go.o (below), not here. ld
+			// scans archive symbol indexes only when an undefined ref
+			// is open, so positioning the import library before go.o
+			// causes ld to pass over it without pulling members for
+			// host imports (runtime.addmoduledata, etc.) that go.o
+			// emits as undefined externs after peLoadImportLibrary.
 		} else {
 			if ctxt.UseRelro() {
 				argv = append(argv, "-Wl,-z,relro")
@@ -1727,6 +1739,18 @@ func (ctxt *Link) hostlink() {
 	argv = append(argv, godotopath)
 	argv = append(argv, hostObjCopyPaths...)
 	argv = xcoffCrtArgs(ctxt, argv)
+
+	// Windows plugin host import library. Must come AFTER go.o and the
+	// cgo runtime objects so ld pulls members for any undefined extern
+	// they emit (e.g., runtime.addmoduledata after peLoadImportLibrary
+	// converts the local STEXT to SHOSTOBJ for external link). With the
+	// archive positioned before the objects, ld's archive-scan finishes
+	// before any reference is open and the members are skipped, leaving
+	// the externs unresolved.
+	if buildcfg.GOOS == "windows" && ctxt.BuildMode == BuildModePlugin &&
+		*flagPluginImplib != "" {
+		argv = append(argv, *flagPluginImplib)
+	}
 
 	if ctxt.linkShared {
 		seenDirs := make(map[string]bool)

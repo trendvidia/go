@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -171,19 +170,17 @@ func peGenerateImportLibrary(ctxt *Link) {
 		Exitf("error closing import library %s: %v", implib, err)
 	}
 
-	// mingw-w64 ld (BFD) does not accept the bare "first linker
-	// member" symbol index we emit above — it reports "archive has
-	// no index; run ranlib to add one" when a plugin tries to link
-	// against it. Run ranlib here so the archive is usable as-is.
-	// Best-effort: if ranlib isn't available or fails, leave the
-	// archive in place and the plugin link will surface the original
-	// error.
-	if rl := ctxt.findExtLinkTool("ranlib"); rl != "" {
-		rcmd := exec.Command(rl, implib)
-		if rout, rerr := rcmd.CombinedOutput(); rerr != nil {
-			ctxt.Logf("ranlib %s: %v\n%s", implib, rerr, rout)
-		}
-	}
+	// Do NOT run ranlib on this archive. mingw-w64 ranlib (binutils 2.46)
+	// rewrites IMPORT_OBJECT_HEADER short-import members into BFD's
+	// internal compact format. Mingw ld can scan that format for
+	// auto-import detection but cannot pull stubs from it once
+	// references are open — which is exactly what the external-link
+	// plugin path needs after peLoadImportLibrary turns runtime
+	// functions into SHOSTOBJ. The "/" symbol index we wrote above
+	// already gives mingw ld and our own peLoadImportLibrary parser
+	// what they need; ranlib was previously added when our writeArHeader
+	// produced "//" instead of "/" (ar member-name suffix bug, fixed in
+	// writeArHeader). Without that bug ranlib is unnecessary and harmful.
 }
 
 // writeFirstLinkerMember writes the "/" archive member that serves as the
@@ -310,8 +307,15 @@ func writeArHeader(f io.Writer, name string, size int) {
 	// Format: name/16 + mtime/12 + uid/6 + gid/6 + mode/8 + size/10 + magic/2
 	var hdr [60]byte
 
-	// Name field (16 bytes, space-padded).
-	copy(hdr[0:16], fmt.Sprintf("%-16s", name+"/"))
+	// Name field (16 bytes, space-padded). Per ar(5), "/" and "//" are
+	// special names (symbol index and extended-name table); they are
+	// emitted verbatim without the trailing "/" suffix. Regular member
+	// names get the trailing "/" used as a name terminator.
+	arName := name
+	if name != "/" && name != "//" {
+		arName = name + "/"
+	}
+	copy(hdr[0:16], fmt.Sprintf("%-16s", arName))
 	// Timestamp (12 bytes).
 	copy(hdr[16:28], "0           ")
 	// UID (6 bytes).
@@ -435,22 +439,44 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			continue
 		}
 
-		// Convert to SDYNIMPORT. Only convert TEXT (function) symbols.
+		// Internal link converts host imports to SDYNIMPORT so the
+		// internal linker generates IAT entries. External link converts
+		// to SHOSTOBJ so the partial PE emits an undefined external
+		// reference; gcc/ld then resolves it through host.exe.a (passed
+		// positionally on the gcc command line).
+		//
+		// Both modes must convert TEXT (function) symbols so the Go
+		// linker's R_CALL/R_PCREL relocations to runtime functions
+		// (e.g., go:link.addmoduledata's call to runtime.addmoduledata)
+		// land in the host's runtime, not the plugin's local copy.
+		//
 		// On amd64, DATA symbols cannot be imported via IAT because the
 		// compiler generates direct memory access (LEA/MOV [rip+disp32])
 		// with no indirection. Unlike arm64 (which has ADRP+ADD→LDR
 		// rewriting for SWINDOWS data), amd64 has no equivalent.
 		// DATA symbols remain as local copies in the plugin DLL.
 		//
-		// Must convert BOTH ABI versions (ABI0 and ABIInternal) for
-		// functions.
-		for _, ver := range []int{0, 1} {
+		// For internal link, both ABI0 and ABIInternal versions are
+		// converted (the IAT collapses them into one entry by name).
+		// For external link, only ABI0 is converted: ABI0 is what gentext's
+		// synthetic init R_CALLs (`Lookup("runtime.addmoduledata", 0)`)
+		// and what host.exe.a's symbol index lists. ABIInternal at ver=1
+		// is left STEXT; without callers in the plugin, deadcode prunes it.
+		targetType := sym.SDYNIMPORT
+		if ctxt.IsExternal() {
+			targetType = sym.SHOSTOBJ
+		}
+		versions := []int{0, 1}
+		if ctxt.IsExternal() {
+			versions = []int{0}
+		}
+		for _, ver := range versions {
 			s := ldr.Lookup(symName, ver)
 			if s == 0 {
 				continue
 			}
 			st := ldr.SymType(s)
-			if st == sym.SDYNIMPORT {
+			if st == sym.SDYNIMPORT || st == sym.SHOSTOBJ {
 				continue // Already an import (e.g., Windows API)
 			}
 			// Skip DATA/RODATA — no IAT indirection on amd64.
@@ -463,14 +489,18 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 				continue
 			}
 			sb := ldr.MakeSymbolUpdater(s)
-			sb.SetType(sym.SDYNIMPORT)
+			sb.SetType(targetType)
 			sb.SetSize(0)
 			sb.SetData(nil)
 			sb.ResetRelocs()
 			ldr.FreeData(s)
-			ldr.SetSymDynimplib(s, dllName)
-			ldr.SetSymExtname(s, symName)
-			// Mark reachable so initdynimport creates IAT entries.
+			if targetType == sym.SDYNIMPORT {
+				ldr.SetSymDynimplib(s, dllName)
+				ldr.SetSymExtname(s, symName)
+			}
+			// Mark reachable so initdynimport creates IAT entries
+			// (internal) or the COFF writer emits an undefined extern
+			// (external).
 			ldr.SetAttrReachable(s, true)
 			importCount++
 		}
@@ -480,14 +510,17 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 	}
 }
 
-// filterConvertedSyms removes SDYNIMPORT and SWINDOWS symbols from Textp.
-// These are host-provided symbols that were converted from archive defs.
+// filterConvertedSyms removes SDYNIMPORT, SHOSTOBJ, and SWINDOWS symbols
+// from Textp. These are host-provided symbols that were converted from
+// archive defs and no longer have a local body to emit. SHOSTOBJ covers
+// the external-link plugin case where peLoadImportLibrary converts
+// runtime.addmoduledata so the partial PE emits it as an undefined extern.
 func filterConvertedSyms(ctxt *Link) []loader.Sym {
 	ldr := ctxt.loader
 	j := 0
 	for _, s := range ctxt.Textp {
 		st := ldr.SymType(s)
-		if st != sym.SDYNIMPORT && st != sym.SWINDOWS {
+		if st != sym.SDYNIMPORT && st != sym.SHOSTOBJ && st != sym.SWINDOWS {
 			ctxt.Textp[j] = s
 			j++
 		}

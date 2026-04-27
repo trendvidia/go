@@ -171,7 +171,13 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.finqueued":   true,
 	"runtime.userArenaState": true,
 
-	// Module list (paired with lastmoduledatap above).
+	// Module list (paired with lastmoduledatap above). Note:
+	// runtime.firstmoduledata can't go here — mingw ld's
+	// --export-all-symbols skips it (size=0 in the partial PE; the
+	// linker fills bytes via symtab.go without updating the symbol
+	// size), so the OS loader can't resolve a plugin import for it.
+	// We instead route plugin's findfunc / module-list walks into
+	// host's bodies via the broad TEXT conversion below.
 	"runtime.modulesSlice": true,
 
 	// Itab cache (process-wide).
@@ -201,6 +207,15 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.netpollWaiters":   true,
 	"runtime.netpollWakeSig":   true,
 	"runtime.isIdleInSynctest": true,
+
+	// Windows syscall trampoline state. asmstdcallAddr is a function
+	// pointer set by host's runtime.osinit to the address of the
+	// asmstdcall trampoline; runtime.stdcall passes it as `fn` to
+	// asmcgocall. Plugin's runtime.osinit doesn't run, so plugin's
+	// local copy is NULL — leading to `asmcgocall(NULL, ...)` →
+	// landingpad CALL AX with AX=0 fault on first VirtualAlloc/etc.
+	"runtime.asmstdcallAddr":   true,
+	"runtime.asyncPreemptStack": true,
 
 	// Trace ring.
 	"runtime.trace":             true,

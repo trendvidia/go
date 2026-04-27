@@ -165,12 +165,46 @@ func progedit(ctxt *obj.Link, p *obj.Prog, newprog obj.ProgAlloc) {
 	//	MOVQ runtime.tls_g(SB), BX
 	if (isAndroid || ctxt.Headtype == objabi.Hwindows) &&
 		(p.As == AMOVQ || p.As == AMOVL) && p.From.Type == obj.TYPE_REG && p.From.Reg == REG_TLS && p.To.Type == obj.TYPE_REG && REG_AX <= p.To.Reg && p.To.Reg <= REG_R15 {
+		// Plugin (-dynlink) on Windows amd64: route through __imp_runtime.tls_g
+		// instead of runtime.tls_g directly. Otherwise the assembler emits a
+		// direct memory ref (`mov [rip+disp32], BX`) and mingw ld auto-imports
+		// it via pseudo-reloc-v2 — the disp32 fix-up overflows once host and
+		// plugin load >2GB apart in VA space, faulting at load with
+		// "Mingw-w64 runtime failure: 32 bit pseudo relocation … out of range".
+		// __imp_runtime.tls_g is the IAT slot the OS loader populates with
+		// host's address of runtime.tls_g; one extra dereference after the
+		// load yields the TLS slot offset that the gs:[] read consumes.
+		//
+		//	MOVQ __imp_runtime.tls_g(SB), BX  // load IAT slot = host's &tls_g
+		//	MOVQ 0(BX), BX                    // deref: host's tls_g VALUE
+		//	MOVQ 0(BX)(GS*1), BX              // gs:[VALUE] = current G
+		//
+		// Compile-time guard via Flag_dynlink — set by cmd/go for plugin
+		// builds. Host (no -dynlink) keeps the 2-instruction direct form.
+		dynlinkPluginTLS := ctxt.Flag_dynlink && ctxt.Headtype == objabi.Hwindows && ctxt.Arch.Family == sys.AMD64
 		p.From.Type = obj.TYPE_MEM
 		p.From.Name = obj.NAME_EXTERN
 		p.From.Reg = REG_NONE
-		p.From.Sym = ctxt.Lookup("runtime.tls_g")
+		if dynlinkPluginTLS {
+			p.From.Sym = ctxt.Lookup("__imp_runtime.tls_g")
+		} else {
+			p.From.Sym = ctxt.Lookup("runtime.tls_g")
+		}
 		p.From.Index = REG_NONE
 		if ctxt.Headtype == objabi.Hwindows {
+			next := p
+			if dynlinkPluginTLS {
+				// Insert the IAT-slot dereference between the load and the
+				// gs:[] read.
+				deref := obj.Appendp(next, newprog)
+				deref.As = p.As
+				deref.From = obj.Addr{}
+				deref.From.Type = obj.TYPE_MEM
+				deref.From.Reg = p.To.Reg
+				deref.From.Offset = 0
+				deref.To = p.To
+				next = deref
+			}
 			// Windows requires an additional indirection
 			// to retrieve the TLS pointer,
 			// as runtime.tls_g contains the TLS offset from GS or FS.
@@ -178,7 +212,7 @@ func progedit(ctxt *obj.Link, p *obj.Prog, newprog obj.ProgAlloc) {
 			//	MOVQ 0(BX)(GS*1), BX
 			// on 386 add
 			//	MOVQ 0(BX)(FS*1), BX4
-			q := obj.Appendp(p, newprog)
+			q := obj.Appendp(next, newprog)
 			q.As = p.As
 			q.From = obj.Addr{}
 			q.From.Type = obj.TYPE_MEM

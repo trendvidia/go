@@ -75,6 +75,164 @@ var peSectionMarkers = map[string]bool{
 	"runtime.ecovctrs":   true,
 }
 
+// peSharedRuntimeData lists runtime DATA singletons that must resolve to
+// host's instance, not a plugin-local copy. Plugin-local text bodies that
+// dereference these globals would otherwise see uninitialized state and
+// crash on the first heap allocation / goroutine spawn / GC cycle.
+//
+// The compiler emits R_GOTPCREL for every extern data access under
+// -dynlink; peGotRedirect retargets those to a `__imp_X` slot. For names
+// in this map, peLoadImportLibrary creates a SHOSTOBJ `__imp_X` that the
+// OS loader fills with host's address. For names NOT in this map,
+// peGotRedirect synthesizes a plugin-local SNOPTRDATA `__imp_X` holding
+// &X — the plugin reads its own (uninitialized) copy.
+//
+// What belongs here: process-wide runtime singletons whose state must be
+// consistent across host and plugin (allocator, scheduler, goroutine
+// table, GC state, finalizer queue, profiler buckets, netpoll, module
+// list, itab cache, panic/exit lifecycle).
+//
+// What stays local: per-binary identity bits (iscgo, islibrary, isarchive,
+// mainStarted), section boundary markers (covered by peSectionMarkers),
+// and per-binary type descriptors / closure captures.
+var peSharedRuntimeData = map[string]bool{
+	// Memory allocator + page management.
+	"runtime.mheap_":          true,
+	"runtime.memstats":        true,
+	"runtime.MemProfileRate":  true,
+	"runtime.physPageSize":    true,
+	"runtime.physHugePageSize": true,
+	"runtime.persistentChunks": true,
+	"runtime.globalAlloc":     true,
+	"runtime.gcBitsArenas":    true,
+	"runtime.scavenger":       true,
+	"runtime.scavenge":        true,
+	"runtime.zerobase":        true,
+
+	// Scheduler.
+	"runtime.sched":               true,
+	"runtime.allp":                true,
+	"runtime.allpLock":            true,
+	"runtime.allm":                true,
+	"runtime.allocmLock":          true,
+	"runtime.execLock":            true,
+	"runtime.idlepMask":           true,
+	"runtime.timerpMask":          true,
+	"runtime.gomaxprocs":          true,
+	"runtime.newprocs":            true,
+	"runtime.starttime":           true,
+	"runtime.newmHandoff":         true,
+	"runtime.stealOrder":          true,
+	"runtime.computeMaxProcsLock": true,
+	"runtime.numCPUStartup":       true,
+
+	// Goroutine table.
+	"runtime.allgs":     true,
+	"runtime.allgptr":   true,
+	"runtime.allglen":   true,
+	"runtime.allglock":  true,
+
+	// GC state.
+	"runtime.gcController":          true,
+	"runtime.gcphase":               true,
+	"runtime.gcsema":                true,
+	"runtime.gcBlackenEnabled":      true,
+	"runtime.gcCPULimiter":          true,
+	"runtime.work":                  true,
+	"runtime.worldsema":             true,
+	"runtime.casgstatusAlwaysTrack": true,
+	"runtime.useCheckmark":          true,
+	"runtime.sweep":                 true,
+	"runtime.gcBgMarkWorkerCount":   true,
+	"runtime.gcBgMarkWorkerPool":    true,
+	"runtime.gcCleanups":            true,
+	"runtime.gcMarkDoneFlushed":     true,
+	"runtime.gcDebugMarkDone":       true,
+
+	// Lifecycle.
+	"runtime.forcegc":       true,
+	"runtime.forcegcperiod": true,
+	"runtime.freezing":      true,
+	"runtime.exiting":       true,
+	"runtime.panicking":     true,
+	"runtime.paniclk":       true,
+	"runtime.runtimeInitTime": true,
+	"runtime.ticks":         true,
+
+	// Finalizer queue.
+	"runtime.allfin":      true,
+	"runtime.finalizer1":  true,
+	"runtime.finc":        true,
+	"runtime.fing":        true,
+	"runtime.fingStatus":  true,
+	"runtime.finlock":     true,
+	"runtime.finptrmask":  true,
+	"runtime.finq":        true,
+	"runtime.finqueued":   true,
+	"runtime.userArenaState": true,
+
+	// Module list (paired with lastmoduledatap above).
+	"runtime.modulesSlice": true,
+
+	// Itab cache (process-wide).
+	"runtime.itabLock":  true,
+	"runtime.itabTable": true,
+
+	// Profiler state.
+	"runtime.mProfCycle":         true,
+	"runtime.mbuckets":           true,
+	"runtime.xbuckets":           true,
+	"runtime.bbuckets":           true,
+	"runtime.buckhash":           true,
+	"runtime.profBlockLock":      true,
+	"runtime.profInsertLock":     true,
+	"runtime.profMemActiveLock":  true,
+	"runtime.profMemFutureLock":  true,
+	"runtime.blockprofilerate":   true,
+	"runtime.mutexprofilerate":   true,
+	"runtime.profiletimer":       true,
+	"runtime.cpuprof":            true,
+	"runtime.runningPanicDefers": true,
+
+	// Netpoll (Windows).
+	"runtime.iocphandle":       true,
+	"runtime.netpollInited":    true,
+	"runtime.netpollInitLock":  true,
+	"runtime.netpollWaiters":   true,
+	"runtime.netpollWakeSig":   true,
+	"runtime.isIdleInSynctest": true,
+
+	// Trace ring.
+	"runtime.trace":             true,
+	"runtime.traceAdvancer":     true,
+	"runtime.traceAdvanceSema":  true,
+	"runtime.traceShutdownSema": true,
+	"runtime.traceback_cache":   true,
+
+	// Misc process-wide state.
+	"runtime.hashkey":                    true,
+	"runtime.globalRand":                 true,
+	"runtime.heapRandSeed":               true,
+	"runtime.heapRandSeedBitsRemaining":  true,
+	"runtime.crashFD":                    true,
+	"runtime.faketime":                   true,
+	"runtime.haveHighResTimer":           true,
+	"runtime.semtable":                   true,
+	"runtime.poolcleanup":                true,
+	"runtime.cgoHasExtraM":               true,
+	"runtime.extraMInUse":                true,
+	"runtime.extraMLength":               true,
+	"runtime.canonicalSyms":              true,
+	"runtime.deadlock":                   true,
+	"runtime.printBacklog":               true,
+	"runtime.printBacklogIndex":          true,
+	"runtime.suspendLock":                true,
+	"runtime.isWaitingForSuspendG":       true,
+	"runtime.didothers":                  true,
+	"runtime.boringCaches":               true,
+	"runtime.reflectOffs":                true,
+}
+
 // peGotRedirect returns the symbol that an R_GOTPCREL relocation targeting
 // `targ` should be retargeted to on PE. The compiler's -dynlink rewrite
 // emits `MOVQ X@GOT, R15; MOVx (R15), Y` for every extern data access; on
@@ -1154,20 +1312,23 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			// pseudo-reloc fallbacks for any reference the compiler's
 			// rewrite path missed.
 			//
-			// Initial allowlist (extend as TestRunHost reveals more):
-			//   runtime.tls_g          — Windows TLS slot index (Bug 8)
-			//   runtime.writeBarrier   — GC write-barrier state
-			//   ..inittask             — package init lists
-			//   runtime.lastmoduledatap— module list head
+			// Always-share patterns:
+			//   runtime.tls_g           — Windows TLS slot index (Bug 8)
+			//   runtime.writeBarrier    — GC write-barrier state
+			//   runtime.lastmoduledatap — module list tail
+			//   *..inittask             — package init lists
 			//
-			// Internal link adds these as the existing exceptions for
+			// Plus peSharedRuntimeData for the rest of the runtime
+			// singletons (mheap_, sched, gcController, etc.). Internal
+			// link adds the original four as the existing exceptions for
 			// initdynimport's IAT-data-slot transform; external link
-			// shares the same set.
+			// shares the same superset.
 			if !st.IsText() {
 				share := strings.HasSuffix(lookupName, "..inittask") ||
 					lookupName == "runtime.writeBarrier" ||
 					lookupName == "runtime.tls_g" ||
-					lookupName == "runtime.lastmoduledatap"
+					lookupName == "runtime.lastmoduledatap" ||
+					peSharedRuntimeData[lookupName]
 				if !share {
 					continue
 				}

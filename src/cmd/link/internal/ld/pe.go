@@ -984,6 +984,17 @@ func (f *peFile) writeSymbols(ctxt *Link) {
 
 		name := ldr.SymName(s)
 
+		// For host-import undef externs the extname may carry an ABI
+		// suffix (e.g. ".abi0") that peLoadImportLibrary set so mingw ld
+		// resolves to the correct host entry. Without this, an ABI0
+		// call site (arg at (%rsp)) would resolve to the host's
+		// ABIInternal wrapper, whose `mov %rax,(%rsp)` clobbers the
+		// stack arg before tail-calling .abi0 — leading to a crash with
+		// PC=0 on closure dispatch.
+		if t == sym.SHOSTOBJ || t == sym.SUNDEFEXT {
+			name = ldr.SymExtname(s)
+		}
+
 		// Only windows/386 requires underscore prefix on external symbols.
 		if ctxt.Is386() && ctxt.IsExternal() &&
 			(t == sym.SHOSTOBJ || t == sym.SUNDEFEXT || ldr.AttrCgoExport(s) ||
@@ -1649,36 +1660,36 @@ func initdynexport(ctxt *Link) {
 	// are uint16, so we cap at MaxUint16.
 	maxExports := math.MaxUint16
 
-	// For Windows plugin support, deduplicate exports by ext name.
-	// When a function has both ABI0 (ver=0) and ABIInternal (ver=1)
-	// versions, export only the ABIInternal version. Plugin code calls
-	// functions using ABIInternal (arguments in registers). Exporting
-	// the ABI0 wrapper (arguments on stack) would cause an ABI mismatch
-	// when the plugin calls through the IAT thunk.
-	seen := make(map[string]loader.Sym)
+	// For Windows plugin support, export each ABI variant under its
+	// mangleABIName-produced name. A function with both ABI0 (ver=0)
+	// and ABIInternal (ver=1) entries exports as both "X" (the
+	// ABIInternal entry on a non-shared host) and "X.abi0" (the ABI0
+	// body). External-link plugins need the ABI0 export separately:
+	// compiler-emitted call sites for runtime helpers (e.g.
+	// `runtime.systemstack`) use the ABI0 stack-arg shape, and the
+	// host's ABIInternal wrapper does `mov %rax,(%rsp)` — clobbering
+	// the caller's stack arg before tail-calling the .abi0 body.
+	seen := make(map[string]bool)
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
 		if !ldr.AttrReachable(s) || !ldr.AttrCgoExportDynamic(s) {
 			continue
 		}
-		name := ldr.SymExtname(s)
-		if prev, ok := seen[name]; ok {
-			// Prefer ABIInternal (higher version) over ABI0.
-			if ldr.SymVersion(s) > ldr.SymVersion(prev) {
-				seen[name] = s
-			}
+		name := mangleABIName(ctxt, ldr, s, ldr.SymExtname(s))
+		if seen[name] {
 			continue
 		}
-		seen[name] = s
-	}
-
-	for _, s := range seen {
+		seen[name] = true
 		if len(dexport) >= maxExports {
 			break
 		}
 		dexport = append(dexport, s)
 	}
 
-	sort.Slice(dexport, func(i, j int) bool { return ldr.SymExtname(dexport[i]) < ldr.SymExtname(dexport[j]) })
+	sort.Slice(dexport, func(i, j int) bool {
+		iname := mangleABIName(ctxt, ldr, dexport[i], ldr.SymExtname(dexport[i]))
+		jname := mangleABIName(ctxt, ldr, dexport[j], ldr.SymExtname(dexport[j]))
+		return iname < jname
+	})
 }
 
 func addexports(ctxt *Link) {
@@ -1688,7 +1699,7 @@ func addexports(ctxt *Link) {
 	nexport := len(dexport)
 	size := binary.Size(&e) + 10*nexport + len(*flagOutfile) + 1
 	for _, s := range dexport {
-		size += len(ldr.SymExtname(s)) + 1
+		size += len(mangleABIName(ctxt, ldr, s, ldr.SymExtname(s))) + 1
 	}
 
 	if nexport == 0 {
@@ -1732,7 +1743,7 @@ func addexports(ctxt *Link) {
 
 	for _, s := range dexport {
 		out.Write32(uint32(v))
-		v += len(ldr.SymExtname(s)) + 1
+		v += len(mangleABIName(ctxt, ldr, s, ldr.SymExtname(s))) + 1
 	}
 
 	// put EXPORT Ordinal Table
@@ -1744,7 +1755,7 @@ func addexports(ctxt *Link) {
 	out.WriteStringN(*flagOutfile, len(*flagOutfile)+1)
 
 	for _, s := range dexport {
-		name := ldr.SymExtname(s)
+		name := mangleABIName(ctxt, ldr, s, ldr.SymExtname(s))
 		out.WriteStringN(name, len(name)+1)
 	}
 	sect.pad(out, uint32(size))

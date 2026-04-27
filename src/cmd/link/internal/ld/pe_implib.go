@@ -120,9 +120,14 @@ func peGenerateImportLibrary(ctxt *Link) {
 	// so the import library must match. Critical symbols like
 	// runtime.addmoduledata are made reachable by the deadcode pass
 	// (which marks all defined symbols reachable for plugin hosts).
-	// Collect unique symbols by ext name. When both ABI0 and ABIInternal
-	// versions exist for a function, we only need one import library entry
-	// (PE imports are by name, not ABI version).
+	//
+	// Names go through mangleABIName so a function with both ABI variants
+	// produces two distinct entries: "X" (the ABIInternal entry on a
+	// non-shared host) and "X.abi0" (the ABI0 body). External-link
+	// plugins need the ABI0 body separately because compiler-emitted
+	// call sites for runtime helpers like `runtime.systemstack` use the
+	// ABI0 stack-arg shape and cannot tolerate the host's ABIInternal
+	// wrapper, whose `mov %rax,(%rsp)` clobbers the caller's stack arg.
 	seen := make(map[string]bool)
 	var symbols []impLibSymbol
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
@@ -133,7 +138,7 @@ func peGenerateImportLibrary(ctxt *Link) {
 		if !st.IsText() && !st.IsRODATA() && !st.IsData() {
 			continue
 		}
-		name := ldr.SymExtname(s)
+		name := mangleABIName(ctxt, ldr, s, ldr.SymExtname(s))
 		if peSkipSymName(name) || seen[name] {
 			continue
 		}
@@ -810,15 +815,35 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 	importCount := 0
 	seen := make(map[string]bool)
 
+	// Collect all names from the symbol index, then process them in
+	// two passes (ABI-suffixed first, unsuffixed second). Suffixed-
+	// first ordering ensures that when a function appears in host.exe.a
+	// as both "X" (ABIInternal entry) and "X.abi0" (ABI0 body), the
+	// plugin's v=0 sym is converted with the suffixed extname. The
+	// unsuffixed pass then no-ops on the already-SHOSTOBJ sym, so the
+	// COFF undef extern carries `.abi0` and mingw ld binds to host's
+	// ABI0 body instead of the wrapper, whose `mov %rax,(%rsp)`
+	// clobbers the caller's stack arg before tail-calling .abi0.
+	var allNames []string
 	cursor := 0
 	for i := 0; i < numSyms && cursor < len(names); i++ {
 		nul := bytes.IndexByte(names[cursor:], 0)
 		if nul < 0 {
 			break
 		}
-		symName := string(names[cursor : cursor+nul])
+		allNames = append(allNames, string(names[cursor:cursor+nul]))
 		cursor += nul + 1
+	}
+	sort.Slice(allNames, func(i, j int) bool {
+		iSuf := strings.HasSuffix(allNames[i], ".abi0") || strings.HasSuffix(allNames[i], ".abiinternal")
+		jSuf := strings.HasSuffix(allNames[j], ".abi0") || strings.HasSuffix(allNames[j], ".abiinternal")
+		if iSuf != jSuf {
+			return iSuf
+		}
+		return allNames[i] < allNames[j]
+	})
 
+	for _, symName := range allNames {
 		if seen[symName] {
 			continue
 		}
@@ -863,13 +888,33 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		// loads cleanly through the IAT requires compiler changes
 		// outside this session's scope.
 		//
-		// For internal link, both ABI0 and ABIInternal versions are
-		// converted (the IAT collapses them into one entry by name).
-		// For external link, only ABI0 is converted: ABIInternal copies
-		// in the plugin loader are not findable by extname+ver=1 (the
-		// host's symbol index lists extnames, not ABI-mangled forms),
-		// so converting ver=1 here is a no-op.
+		// host.exe.a's symbol-index names are produced by mangleABIName,
+		// so a function with both ABI0 and ABIInternal entries appears
+		// twice: once as "X.abi0" (the ABI0 body) and once as "X" (the
+		// ABIInternal entry, which on a non-shared host is unsuffixed).
+		// Each name maps to exactly one plugin sym version. Route the
+		// lookup based on the suffix and preserve the suffix as the
+		// converted sym's extname so the COFF undef extern (external
+		// link) or IAT-bound name (internal link) matches the host
+		// entry mingw ld will resolve us against.
 		//
+		// Without the suffix routing, ABI0 call sites in the plugin
+		// (e.g. the `mov %rdx,(%rsp); call runtime.systemstack` shape
+		// in `runtime.(*mheap).alloc`) end up bound to the host's
+		// ABIInternal wrapper, whose `mov %rax,(%rsp)` clobbers the
+		// caller's stack arg before tail-calling the ABI0 body —
+		// causing a PC=0 crash inside systemstack's closure dispatch.
+		var ver int = -1
+		lookupName := symName
+		switch {
+		case strings.HasSuffix(symName, ".abi0"):
+			ver = 0
+			lookupName = strings.TrimSuffix(symName, ".abi0")
+		case strings.HasSuffix(symName, ".abiinternal"):
+			ver = 1
+			lookupName = strings.TrimSuffix(symName, ".abiinternal")
+		}
+
 		// External link additionally creates a companion `__imp_X`
 		// SHOSTOBJ symbol per converted X. gentext (and the rest of the
 		// plugin's code) emits IAT-indirect (`ff 15 disp32`) call sites
@@ -882,12 +927,29 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		if ctxt.IsExternal() {
 			targetType = sym.SHOSTOBJ
 		}
-		versions := []int{0, 1}
-		if ctxt.IsExternal() {
-			versions = []int{0}
+		// triedVers controls which plugin sym version(s) to attempt
+		// for this host export name. With a suffix the choice is
+		// unambiguous; without one:
+		//   - external link converts only v=0. Type-descriptor
+		//     R_ADDRs target the ABIInternal method body (v=1) on
+		//     a non-shared host (mangleABIName leaves it unsuffixed);
+		//     converting v=1 here would orphan those relocs ("missing
+		//     section for relocation target ...") because the partial
+		//     PE has no body for a SHOSTOBJ. The plugin keeps its
+		//     local v=1 wrapper, which calls into host's `.abi0` body
+		//     through the converted v=0 sym.
+		//   - internal link converts both versions; the in-binary IAT
+		//     collapses them by name.
+		var triedVers []int
+		if ver >= 0 {
+			triedVers = []int{ver}
+		} else if ctxt.IsExternal() {
+			triedVers = []int{0}
+		} else {
+			triedVers = []int{0, 1}
 		}
-		for _, ver := range versions {
-			s := ldr.Lookup(symName, ver)
+		for _, v := range triedVers {
+			s := ldr.Lookup(lookupName, v)
 			if s == 0 {
 				continue
 			}
@@ -903,8 +965,8 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 				if ctxt.IsExternal() {
 					continue
 				}
-				if !strings.HasSuffix(symName, "..inittask") &&
-					symName != "runtime.writeBarrier" {
+				if !strings.HasSuffix(lookupName, "..inittask") &&
+					lookupName != "runtime.writeBarrier" {
 					continue
 				}
 			}
@@ -916,8 +978,12 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			ldr.FreeData(s)
 			if targetType == sym.SDYNIMPORT {
 				ldr.SetSymDynimplib(s, dllName)
-				ldr.SetSymExtname(s, symName)
 			}
+			// Preserve the host export name (including any ABI suffix)
+			// as the converted sym's extname. writeSymbols and gentext
+			// use SymExtname for SHOSTOBJ/SDYNIMPORT so the plugin
+			// references the right host entry.
+			ldr.SetSymExtname(s, symName)
 			// Mark reachable so initdynimport creates IAT entries
 			// (internal) or the COFF writer emits an undefined extern
 			// (external).
@@ -925,13 +991,6 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			importCount++
 
 			if ctxt.IsExternal() {
-				// Create the companion __imp_X SHOSTOBJ. Call sites that
-				// want IAT-indirect dispatch (gentext today; potentially
-				// other linker-generated sites later) reference this
-				// symbol via R_PCREL. ld emits a real Import Directory
-				// entry from the resolution, sidestepping mingw's
-				// pseudo-reloc auto-import path.
-				//
 				// Don't mark __imp_X reachable here — the deadcode pass
 				// runs after peLoadImportLibrary and would clear the bit.
 				// Whoever adds the reloc to __imp_X (gentext) marks it
@@ -939,6 +998,9 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 				impSym := ldr.LookupOrCreateSym("__imp_"+symName, 0)
 				impSb := ldr.MakeSymbolUpdater(impSym)
 				impSb.SetType(sym.SHOSTOBJ)
+				// External link binds each host name to exactly one
+				// plugin sym; further fallback would set extname twice.
+				break
 			}
 		}
 	}

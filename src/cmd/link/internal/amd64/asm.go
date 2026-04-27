@@ -80,7 +80,11 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 		// SHOSTOBJ created alongside X by peLoadImportLibrary; ld
 		// resolves it to a real Import Directory entry for host.exe
 		// so the OS loader fills the IAT slot at load time.
-		impName := "__imp_" + ldr.SymName(addmoduledata)
+		// Use SymExtname so any ABI suffix that peLoadImportLibrary
+		// recorded (e.g. ".abi0") is preserved on the __imp_ side; the
+		// host's import library writes its stub members with the same
+		// mangled names.
+		impName := "__imp_" + ldr.SymExtname(addmoduledata)
 		impSym := ldr.LookupOrCreateSym(impName, 0)
 		ldr.SetAttrReachable(impSym, true)
 		//    7:	ff 15 00 00 00 00    	call   *0x0(%rip)

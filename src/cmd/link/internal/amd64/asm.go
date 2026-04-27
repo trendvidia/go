@@ -64,6 +64,33 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 	// 			3: R_X86_64_PC32	runtime.firstmoduledata-0x4
 	o(0x48, 0x8d, 0x3d)
 	initfunc.AddPCRelPlus(ctxt.Arch, ctxt.Moduledata, 0)
+	if t := ldr.SymType(addmoduledata); t == sym.SHOSTOBJ || t == sym.SDYNIMPORT {
+		// External-link Windows plugin path. peLoadImportLibrary
+		// converted runtime.addmoduledata to SHOSTOBJ so the partial
+		// PE emits it as an undefined extern. A direct call (e8 rel32)
+		// would resolve via mingw's pseudo-reloc auto-import — a
+		// 32-bit signed delta from the call site to the host symbol
+		// that overflows on 64-bit Windows where host and plugin
+		// live > 2 GB apart in VA space, faulting at load with
+		// "Mingw-w64 runtime failure: 32 bit pseudo relocation … out
+		// of range".
+		//
+		// Emit the call as IAT-indirect (`ff 15 disp32` = `call qword
+		// ptr [rip+__imp_runtime.addmoduledata]`). __imp_X is a
+		// SHOSTOBJ created alongside X by peLoadImportLibrary; ld
+		// resolves it to a real Import Directory entry for host.exe
+		// so the OS loader fills the IAT slot at load time.
+		impName := "__imp_" + ldr.SymName(addmoduledata)
+		impSym := ldr.LookupOrCreateSym(impName, 0)
+		ldr.SetAttrReachable(impSym, true)
+		//    7:	ff 15 00 00 00 00    	call   *0x0(%rip)
+		// 			9: R_X86_64_PC32	__imp_runtime.addmoduledata-0x4
+		o(0xff, 0x15)
+		initfunc.AddPCRelPlus(ctxt.Arch, impSym, 0)
+		//    d:	c3                   	retq
+		o(0xc3)
+		return
+	}
 	//    7:	e8 00 00 00 00       	callq  c <local.dso_init+0xc>
 	// 			8: R_X86_64_PLT32	runtime.addmoduledata-0x4
 	o(0xe8)

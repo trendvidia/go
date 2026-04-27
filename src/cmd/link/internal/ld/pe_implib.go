@@ -37,6 +37,14 @@ func peSkipSymName(name string) bool {
 	return false
 }
 
+// externalLinkPluginImports is the allowlist of host-provided symbols
+// the external-link plugin path converts to SHOSTOBJ. See the long
+// comment in peLoadImportLibrary for why the set is so narrow on
+// external link relative to internal link.
+var externalLinkPluginImports = map[string]bool{
+	"runtime.addmoduledata": true,
+}
+
 // peSectionMarkerSym reports whether name is a linker-defined section
 // boundary symbol. These mark the start/end of PE sections in the
 // moduledata and must never be imported from the host — doing so would
@@ -439,22 +447,53 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			continue
 		}
 
+		// External link narrows the conversion to a small allowlist —
+		// just the symbols that genuinely need cross-DLL dispatch for
+		// plugin registration to work. Converting more (e.g., the full
+		// reachable set the host exports, ~549 symbols) puts ld on the
+		// auto-import path for compiler-emitted prologue calls
+		// (runtime.morestack_noctxt, runtime.gcWriteBarrier1, etc.) —
+		// once any direct ref reaches an SHOSTOBJ provided by host.exe.a,
+		// mingw ld treats the whole archive as an auto-import target,
+		// fills .idata with __imp_X slots without emitting a real
+		// Import Directory entry, and patches call sites via 32-bit
+		// pseudo-relocs that overflow on 64-bit Windows where host and
+		// plugin live > 2 GB apart in VA space.
+		//
+		// runtime.addmoduledata is the only symbol the plugin's local
+		// runtime cannot service: registering moduledata needs to mutate
+		// the host's runtime.lastmoduledatap so plugin.lastmoduleinit
+		// can find it. Everything else (morestack, gcWriteBarrier,
+		// schedinit-time helpers) operates on plugin-local state and
+		// works fine against the plugin's own runtime copy. v3's
+		// "rock-solid" preference for sharing more host state ends up
+		// requiring compiler-side IAT-indirect call emission for the
+		// shared subset — out of scope here.
+		if ctxt.IsExternal() && !externalLinkPluginImports[symName] {
+			continue
+		}
+
 		// Internal link converts host imports to SDYNIMPORT so the
 		// internal linker generates IAT entries. External link converts
 		// to SHOSTOBJ so the partial PE emits an undefined external
 		// reference; gcc/ld then resolves it through host.exe.a (passed
 		// positionally on the gcc command line).
 		//
-		// Both modes must convert TEXT (function) symbols so the Go
-		// linker's R_CALL/R_PCREL relocations to runtime functions
-		// (e.g., go:link.addmoduledata's call to runtime.addmoduledata)
-		// land in the host's runtime, not the plugin's local copy.
+		// Both modes convert TEXT (function) symbols so the Go linker's
+		// R_CALL/R_PCREL relocations to runtime functions (e.g.,
+		// go:link.addmoduledata's call to runtime.addmoduledata) land
+		// in the host's runtime, not the plugin's local copy.
 		//
 		// On amd64, DATA symbols cannot be imported via IAT because the
 		// compiler generates direct memory access (LEA/MOV [rip+disp32])
 		// with no indirection. Unlike arm64 (which has ADRP+ADD→LDR
 		// rewriting for SWINDOWS data), amd64 has no equivalent.
-		// DATA symbols remain as local copies in the plugin DLL.
+		// Internal link converts ..inittask and runtime.writeBarrier as
+		// exceptions because the internal linker handles their access
+		// patterns specially. External link skips DATA entirely and
+		// keeps a local copy in the plugin — handling indirect data
+		// loads cleanly through the IAT requires compiler changes
+		// outside this session's scope.
 		//
 		// For internal link, both ABI0 and ABIInternal versions are
 		// converted (the IAT collapses them into one entry by name).
@@ -462,6 +501,15 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		// synthetic init R_CALLs (`Lookup("runtime.addmoduledata", 0)`)
 		// and what host.exe.a's symbol index lists. ABIInternal at ver=1
 		// is left STEXT; without callers in the plugin, deadcode prunes it.
+		//
+		// External link additionally creates a companion `__imp_X`
+		// SHOSTOBJ symbol per converted X. gentext (and the rest of the
+		// plugin's code) emits IAT-indirect (`ff 15 disp32`) call sites
+		// pointing at __imp_X, which ld resolves to a real Import
+		// Directory entry for host.exe. Without this, ld auto-imports the
+		// undefined extern via mingw's pseudo-reloc mechanism (32-bit
+		// signed delta from patch site to host symbol) which overflows
+		// on 64-bit Windows where host and plugin live > 2 GB apart.
 		targetType := sym.SDYNIMPORT
 		if ctxt.IsExternal() {
 			targetType = sym.SHOSTOBJ
@@ -480,13 +528,17 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 				continue // Already an import (e.g., Windows API)
 			}
 			// Skip DATA/RODATA — no IAT indirection on amd64.
-			// Exceptions:
-			// - ..inittask: prevent double-initialization
-			// - runtime.writeBarrier: share write barrier state with host
-			if !st.IsText() &&
-				!strings.HasSuffix(symName, "..inittask") &&
-				symName != "runtime.writeBarrier" {
-				continue
+			// Internal-link exceptions (..inittask, runtime.writeBarrier)
+			// rely on initdynimport's IAT-data-slot transform, which is
+			// internal-link-only.
+			if !st.IsText() {
+				if ctxt.IsExternal() {
+					continue
+				}
+				if !strings.HasSuffix(symName, "..inittask") &&
+					symName != "runtime.writeBarrier" {
+					continue
+				}
 			}
 			sb := ldr.MakeSymbolUpdater(s)
 			sb.SetType(targetType)
@@ -503,6 +555,23 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			// (external).
 			ldr.SetAttrReachable(s, true)
 			importCount++
+
+			if ctxt.IsExternal() {
+				// Create the companion __imp_X SHOSTOBJ. Call sites that
+				// want IAT-indirect dispatch (gentext today; potentially
+				// other linker-generated sites later) reference this
+				// symbol via R_PCREL. ld emits a real Import Directory
+				// entry from the resolution, sidestepping mingw's
+				// pseudo-reloc auto-import path.
+				//
+				// Don't mark __imp_X reachable here — the deadcode pass
+				// runs after peLoadImportLibrary and would clear the bit.
+				// Whoever adds the reloc to __imp_X (gentext) marks it
+				// reachable at that point.
+				impSym := ldr.LookupOrCreateSym("__imp_"+symName, 0)
+				impSb := ldr.MakeSymbolUpdater(impSym)
+				impSb.SetType(sym.SHOSTOBJ)
+			}
 		}
 	}
 	if ctxt.Debugvlog > 0 {

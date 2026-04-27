@@ -432,6 +432,12 @@ func Main(arch *sys.Arch, theArch Arch) {
 
 		bench.Start("windynrelocsyms")
 		ctxt.windynrelocsyms()
+
+		// Retarget compiler-emitted R_GOTPCREL relocs to the appropriate
+		// `__imp_X`-named slot (Bug 8). Must run before dodata so
+		// synthesized SDATA `__imp_X` symbols get section + SymDynid.
+		bench.Start("peRetargetGotRelocs")
+		peRetargetGotRelocs(ctxt)
 	}
 
 	bench.Start("textaddress")

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"cmd/link/internal/loader"
 	"cmd/link/internal/sym"
@@ -32,6 +33,16 @@ func peSkipSymName(name string) bool {
 		return true
 	}
 	if strings.HasPrefix(name, "type:") || strings.HasPrefix(name, "type..") {
+		return true
+	}
+	// Compiler-auto-generated per-package symbols use a `pkg..symname.N`
+	// pattern (double dot in the middle): interface-switch caches,
+	// type-assert caches, gcprog tables, etc. These are layout-specific
+	// to the binary that generated them — host's and plugin's copies
+	// have unrelated contents. Host-sharing them would convert the
+	// plugin's local copy to SHOSTOBJ and route accesses to host's
+	// unrelated content, breaking the cache semantics. Keep local.
+	if i := strings.Index(name, ".."); i > 0 && i < len(name)-2 {
 		return true
 	}
 	return false
@@ -62,6 +73,98 @@ var peSectionMarkers = map[string]bool{
 	"runtime.gcbss":      true,
 	"runtime.covctrs":    true,
 	"runtime.ecovctrs":   true,
+}
+
+// peGotRedirect returns the symbol that an R_GOTPCREL relocation targeting
+// `targ` should be retargeted to on PE. The compiler's -dynlink rewrite
+// emits `MOVQ X@GOT, R15; MOVx (R15), Y` for every extern data access; on
+// PE we resolve "@GOT" through a `__imp_X`-named slot that holds X's
+// address.
+//
+// Two cases:
+//
+//  1. Host-shared: peLoadImportLibrary already created `__imp_X` as
+//     SHOSTOBJ for symbols imported from the host. mingw ld resolves the
+//     SHOSTOBJ ref through its BFD long-format import library to a real
+//     PE Import Directory entry; the OS loader fills the IAT slot at
+//     load time with the host's address of X. The Go linker just needs
+//     to emit the COFF reloc against `__imp_X`.
+//
+//  2. Plugin-local: there is no IAT slot for plugin-defined symbols.
+//     Synthesize an SDATA `__imp_X` containing &X (R_ADDR), 8 bytes.
+//     mingw ld emits IMAGE_REL_AMD64_ADDR64 → PE base reloc; the OS
+//     loader rebases at load time.
+//
+// `__imp_X` SHOSTOBJ and `__imp_X` SDATA cannot coexist for the same X,
+// but X is either host-shared or plugin-local — mutually exclusive.
+//
+// Only call on Windows under -dynlink. Other heads/modes have their own
+// GOT machinery (ELF/Darwin via lib.go:AddGotSym).
+func peGotRedirect(arch *sys.Arch, ldr *loader.Loader, targ loader.Sym) loader.Sym {
+	name := "__imp_" + ldr.SymName(targ)
+	if s := ldr.Lookup(name, 0); s != 0 {
+		st := ldr.SymType(s)
+		if st == sym.SHOSTOBJ || st == sym.SNOPTRDATA {
+			ldr.SetAttrReachable(s, true)
+			return s
+		}
+	}
+	s := ldr.LookupOrCreateSym(name, 0)
+	sb := ldr.MakeSymbolUpdater(s)
+	// SNOPTRDATA: the slot holds a pointer but it's an IAT-style view
+	// into the host image / OS-loader-rebased address — never a Go heap
+	// pointer the GC should trace. Putting it in noptrdata also keeps
+	// the gcdata pass quiet (it errors on SDATA without Go type info).
+	sb.SetType(sym.SNOPTRDATA)
+	sb.SetSize(0)
+	sb.SetData(nil)
+	sb.AddAddrPlus(arch, targ, 0)
+	ldr.SetAttrReachable(s, true)
+	return s
+}
+
+// peRetargetGotRelocs walks every reachable Textp symbol on Windows and
+// retargets R_GOTPCREL relocs to a `__imp_X`-named slot via peGotRedirect.
+// Runs after Gentext (so all reachable text is known) and before dodata
+// (so synthesized SDATA `__imp_X` symbols get section assignment +
+// SymDynid via writeSymbols).
+//
+// Without this, extreloc would synthesize the slots lazily at reloc-emit
+// time — too late for writeSymbols to give them COFF symbol-table entries.
+//
+// The compiler emits R_GOTPCREL only under -dynlink, which cmd/go now
+// passes for Windows plugin builds. Pre-dynlink builds have no R_GOTPCREL
+// relocs and the pass is a no-op.
+func peRetargetGotRelocs(ctxt *Link) {
+	if !ctxt.IsWindows() || !ctxt.IsAMD64() {
+		return
+	}
+	ldr := ctxt.loader
+	walk := func(s loader.Sym) {
+		relocs := ldr.Relocs(s)
+		var sb *loader.SymbolBuilder
+		for ri := 0; ri < relocs.Count(); ri++ {
+			r := relocs.At(ri)
+			if r.Type() != objabi.R_GOTPCREL {
+				continue
+			}
+			rs := r.Sym()
+			if rs == 0 {
+				continue
+			}
+			redirect := peGotRedirect(ctxt.Arch, ldr, rs)
+			if redirect == rs {
+				continue
+			}
+			if sb == nil {
+				sb = ldr.MakeSymbolUpdater(s)
+			}
+			sb.SetRelocSym(ri, redirect)
+		}
+	}
+	for _, s := range ctxt.Textp {
+		walk(s)
+	}
 }
 
 // impLibSymbol holds info about a symbol to include in the import library.
@@ -581,8 +684,18 @@ func writeBfdTail(w io.Writer, machine uint16, dllName string) {
 	writeCoffObject(w, machine, sections, syms)
 }
 
-// writeBfdStub emits one per-symbol stub COFF object.
-func writeBfdStub(w io.Writer, machine uint16, dllName, symName string, hint uint16) {
+// writeBfdStub emits one per-symbol stub COFF object. For functions
+// (isFunc=true) the stub defines a `.text` thunk `jmp *__imp_X` and
+// publishes `X` at that thunk address — that's how callers reach the
+// host. For data (isFunc=false) the stub only publishes `__imp_X`
+// (the IAT slot) and omits the thunk; emitting a thunk that also
+// publishes `X` would multiply-define `X` against the plugin's own
+// data definition (Bug 8).
+func writeBfdStub(w io.Writer, machine uint16, dllName, symName string, hint uint16, isFunc bool) {
+	if !isFunc {
+		writeBfdDataStub(w, machine, dllName, symName, hint)
+		return
+	}
 	headSym := bfdHeadSym(dllName)
 	impSym := "__imp_" + symName
 
@@ -645,6 +758,61 @@ func writeBfdStub(w io.Writer, machine uint16, dllName, symName string, hint uin
 	writeCoffObject(w, machine, sections, syms)
 }
 
+// writeBfdDataStub emits a per-symbol stub for a DATA import. Unlike the
+// function variant, it has no `.text` thunk and does NOT publish `X` —
+// only `__imp_X` (the IAT slot). The plugin's own data definition for X
+// has been converted to SHOSTOBJ by peLoadImportLibrary so it carries no
+// body; only the host's value is read, via __imp_X.
+func writeBfdDataStub(w io.Writer, machine uint16, dllName, symName string, hint uint16) {
+	headSym := bfdHeadSym(dllName)
+	impSym := "__imp_" + symName
+
+	var hb bytes.Buffer
+	var hintBytes [2]byte
+	binary.LittleEndian.PutUint16(hintBytes[:], hint)
+	hb.Write(hintBytes[:])
+	hb.WriteString(symName)
+	hb.WriteByte(0)
+	if hb.Len()%2 != 0 {
+		hb.WriteByte(0)
+	}
+
+	// Section indices:
+	//   1 = .idata$7    (4-byte ADDR32NB → _head_<dll>_a)
+	//   2 = .idata$5    (8-byte IAT slot, ADDR32NB → .idata$6)
+	//   3 = .idata$4    (8-byte ILT slot, ADDR32NB → .idata$6)
+	//   4 = .idata$6    (hint + name)
+	//
+	// Symbol indices:
+	//   0 = .idata$7    (STATIC section sym)
+	//   1 = .idata$5    (STATIC section sym)
+	//   2 = .idata$4    (STATIC section sym)
+	//   3 = .idata$6    (STATIC section sym)
+	//   4 = __imp_X     (EXTERNAL, defined in .idata$5)
+	//   5 = _head_<dll>_a (EXTERNAL, undefined; resolves to head member)
+	sections := []coffSection{
+		{name: ".idata$7", data: make([]byte, 4), chars: coffCharIData, relocs: []coffReloc{
+			{offset: 0, symIdx: 5, typ: coffRelocAMD64ADDR32NB}, // → _head_<dll>_a
+		}},
+		{name: ".idata$5", data: make([]byte, 8), chars: coffCharIData, relocs: []coffReloc{
+			{offset: 0, symIdx: 3, typ: coffRelocAMD64ADDR32NB}, // → .idata$6
+		}},
+		{name: ".idata$4", data: make([]byte, 8), chars: coffCharIData, relocs: []coffReloc{
+			{offset: 0, symIdx: 3, typ: coffRelocAMD64ADDR32NB}, // → .idata$6
+		}},
+		{name: ".idata$6", data: hb.Bytes(), chars: coffCharHint},
+	}
+	syms := []coffSymbol{
+		{name: ".idata$7", section: 1, class: coffSymClassStatic},
+		{name: ".idata$5", section: 2, class: coffSymClassStatic},
+		{name: ".idata$4", section: 3, class: coffSymClassStatic},
+		{name: ".idata$6", section: 4, class: coffSymClassStatic},
+		{name: impSym, section: 2, class: coffSymClassExternal},
+		{name: headSym, section: 0, class: coffSymClassExternal},
+	}
+	writeCoffObject(w, machine, sections, syms)
+}
+
 // writeBfdArchive writes the System V symbol index and the head/stubs/tail
 // members in BFD long format. The "/" symbol index includes every public
 // symbol X, every __imp_X, plus the head-anchor and iname-anchor names so
@@ -665,10 +833,11 @@ func writeBfdArchive(w io.Writer, symbols []impLibSymbol, dllName string, machin
 
 	stubBufs := make([]bytes.Buffer, len(symbols))
 	for i, s := range symbols {
-		writeBfdStub(&stubBufs[i], machine, dllName, s.name, uint16(i))
+		writeBfdStub(&stubBufs[i], machine, dllName, s.name, uint16(i), s.isFunc)
 	}
 
-	// Build the symbol-index entries.
+	// Build the symbol-index entries. DATA stubs only publish `__imp_X`
+	// (no `.text` thunk, no `X` definition); function stubs publish both.
 	type indexEntry struct {
 		name   string
 		member int // 0 = head, 1 = tail, 2+i = stubs[i]
@@ -677,7 +846,9 @@ func writeBfdArchive(w io.Writer, symbols []impLibSymbol, dllName string, machin
 	entries = append(entries, indexEntry{bfdHeadSym(dllName), 0})
 	entries = append(entries, indexEntry{bfdInameSym(dllName), 1})
 	for i, s := range symbols {
-		entries = append(entries, indexEntry{s.name, 2 + i})
+		if s.isFunc {
+			entries = append(entries, indexEntry{s.name, 2 + i})
+		}
 		entries = append(entries, indexEntry{"__imp_" + s.name, 2 + i})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
@@ -844,6 +1015,15 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 	})
 
 	for _, symName := range allNames {
+		// `__imp_X` entries from the host's BFD long-format archive
+		// publish the IAT slot for X. With the data-stub variant we
+		// emit only `__imp_X` (no `.text` thunk redefining X), so for
+		// data imports the symbol index does NOT contain X by itself.
+		// Recognize the `__imp_` prefix and route the conversion to X
+		// — peSkipSymName would otherwise filter the `__` name out.
+		if strings.HasPrefix(symName, "__imp_") {
+			symName = strings.TrimPrefix(symName, "__imp_")
+		}
 		if seen[symName] {
 			continue
 		}
@@ -957,16 +1137,38 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			if st == sym.SDYNIMPORT || st == sym.SHOSTOBJ {
 				continue // Already an import (e.g., Windows API)
 			}
-			// Skip DATA/RODATA — no IAT indirection on amd64.
-			// Internal-link exceptions (..inittask, runtime.writeBarrier)
-			// rely on initdynimport's IAT-data-slot transform, which is
-			// internal-link-only.
+			// DATA gating. With -dynlink the compiler emits R_GOTPCREL
+			// for every extern data access and peRetargetGotRelocs
+			// retargets those to __imp_X via peGotRedirect. For each
+			// host-shared DATA we convert here, the plugin's references
+			// resolve to host's value through the OS-loader-populated
+			// IAT slot. For data we DON'T convert, peGotRedirect
+			// synthesizes a plugin-local SDATA __imp_X containing &X
+			// (R_ADDR) and the plugin reads its own copy.
+			//
+			// We curate which DATA to share rather than convert all of
+			// host's data exports: most package-level data (type
+			// descriptors, function value descriptors, kindNames-style
+			// arrays) is per-binary-equivalent but not semantically
+			// shared, and converting it would explode the IAT and force
+			// pseudo-reloc fallbacks for any reference the compiler's
+			// rewrite path missed.
+			//
+			// Initial allowlist (extend as TestRunHost reveals more):
+			//   runtime.tls_g          — Windows TLS slot index (Bug 8)
+			//   runtime.writeBarrier   — GC write-barrier state
+			//   ..inittask             — package init lists
+			//   runtime.lastmoduledatap— module list head
+			//
+			// Internal link adds these as the existing exceptions for
+			// initdynimport's IAT-data-slot transform; external link
+			// shares the same set.
 			if !st.IsText() {
-				if ctxt.IsExternal() {
-					continue
-				}
-				if !strings.HasSuffix(lookupName, "..inittask") &&
-					lookupName != "runtime.writeBarrier" {
+				share := strings.HasSuffix(lookupName, "..inittask") ||
+					lookupName == "runtime.writeBarrier" ||
+					lookupName == "runtime.tls_g" ||
+					lookupName == "runtime.lastmoduledatap"
+				if !share {
 					continue
 				}
 			}

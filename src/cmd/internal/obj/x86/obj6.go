@@ -310,7 +310,7 @@ func progedit(ctxt *obj.Link, p *obj.Prog, newprog obj.ProgAlloc) {
 		}
 	}
 
-	if ctxt.Flag_dynlink && ctxt.Headtype != objabi.Hwindows {
+	if ctxt.Flag_dynlink {
 		rewriteToUseGot(ctxt, p, newprog)
 	}
 

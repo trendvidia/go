@@ -83,8 +83,18 @@ type impLibSymbol struct {
 // host's exported symbols without requiring an external linker (cgo) for
 // the host build.
 //
-// The import library uses the "short import" object format as described in
-// the PE/COFF specification (Import Library Format).
+// On amd64 the archive uses BFD long format: per-symbol stub objects with
+// a .text thunk plus .idata$2/$4/$5/$6/$7 contributions, anchored by a
+// head and tail object. This is the format mingw ld extracts Import
+// Directory entries from (mingw ld 2.46 does NOT generate Import Directory
+// entries from IMPORT_OBJECT_HEADER short-import archives; it auto-imports
+// via 32-bit pseudo-relocs that overflow on 64-bit Windows).
+//
+// On i386/arm64 the archive falls back to the IMPORT_OBJECT_HEADER short
+// format. peLoadImportLibrary (the internal-link path) only consumes the
+// "/" symbol index, so internal-link plugins work on every arch regardless
+// of which member format the archive contains. External-link plugins on
+// non-amd64 are out of scope here.
 //
 // This function collects exportable symbols directly from the loader,
 // independent of the dexport slice used by the PE export table.
@@ -159,16 +169,19 @@ func peGenerateImportLibrary(ctxt *Link) {
 	}
 
 	w := bufio.NewWriter(f)
-
-	// Write ar archive header.
 	w.WriteString("!<arch>\n")
 
-	// Write first linker member (symbol directory).
-	writeFirstLinkerMember(w, symbols, dllName, machine)
-
-	// Write individual short import objects.
-	for i, sym := range symbols {
-		writeShortImport(w, sym.name, dllName, machine, sym.isFunc, uint16(i))
+	if machine == pe.IMAGE_FILE_MACHINE_AMD64 {
+		writeBfdArchive(w, symbols, dllName, machine)
+	} else {
+		// Non-amd64 fallback: short-import format. Internal-link
+		// plugins still work because peLoadImportLibrary only reads
+		// the "/" symbol index. External-link plugins on these arches
+		// are not exercised today.
+		writeFirstLinkerMember(w, symbols, dllName, machine)
+		for i, sym := range symbols {
+			writeShortImport(w, sym.name, dllName, machine, sym.isFunc, uint16(i))
+		}
 	}
 
 	if err := w.Flush(); err != nil {
@@ -177,18 +190,6 @@ func peGenerateImportLibrary(ctxt *Link) {
 	if err := f.Close(); err != nil {
 		Exitf("error closing import library %s: %v", implib, err)
 	}
-
-	// Do NOT run ranlib on this archive. mingw-w64 ranlib (binutils 2.46)
-	// rewrites IMPORT_OBJECT_HEADER short-import members into BFD's
-	// internal compact format. Mingw ld can scan that format for
-	// auto-import detection but cannot pull stubs from it once
-	// references are open — which is exactly what the external-link
-	// plugin path needs after peLoadImportLibrary turns runtime
-	// functions into SHOSTOBJ. The "/" symbol index we wrote above
-	// already gives mingw ld and our own peLoadImportLibrary parser
-	// what they need; ranlib was previously added when our writeArHeader
-	// produced "//" instead of "/" (ar member-name suffix bug, fixed in
-	// writeArHeader). Without that bug ranlib is unnecessary and harmful.
 }
 
 // writeFirstLinkerMember writes the "/" archive member that serves as the
@@ -339,6 +340,407 @@ func writeArHeader(f io.Writer, name string, size int) {
 	hdr[59] = '\n'
 
 	f.Write(hdr[:])
+}
+
+// BFD long-format import library writer (amd64 only).
+//
+// Layout per archive (ar):
+//
+//	"/"          — System V symbol index. Maps each public symbol X
+//	               (and its companion __imp_X) to its stub member, plus
+//	               two helpers: the head-anchor "_head_<dll>_a" and the
+//	               iname-anchor "__<dll>_a_iname".
+//	"h.o"        — head COFF object: defines _head_<dll>_a and the 20-byte
+//	               IMAGE_IMPORT_DESCRIPTOR in .idata$2 with three ADDR32NB
+//	               relocs (OriginalFirstThunk → .idata$4, Name → __iname,
+//	               FirstThunk → .idata$5).
+//	"sNNNNN.o"   — one stub per symbol. .text holds an 8-byte indirect-jmp
+//	               thunk (ff 25 disp32 / nop / nop) with REL32 reloc to
+//	               __imp_X; .idata$4/$5 each hold an 8-byte ILT/IAT slot
+//	               with ADDR32NB reloc to .idata$6 (hint+name); .idata$6
+//	               holds the 2-byte hint and the imported symbol name;
+//	               .idata$7 holds a 4-byte ADDR32NB back-ref to the head
+//	               (DLL grouping marker).
+//	"t.o"        — tail COFF object: defines __<dll>_a_iname pointing at
+//	               the DLL-name string in .idata$7, plus 8-byte NULL
+//	               terminators in .idata$4/$5.
+//
+// After link, the .idata$N suffixes coalesce to: $2 (per-DLL Import
+// Descriptors), $4 (ILT), $5 (IAT), $6 (hint/name table), $7 (DLL name
+// strings). Within each suffix, the head sorts before stubs and the tail
+// sorts after, so OriginalFirstThunk/FirstThunk point at the start of
+// this DLL's slot run and the NULL terminators close it.
+//
+// Reference: dlltool's gen_lib_file in binutils/dlltool.c, and the layout
+// of mingw's own libkernel32.a.
+
+const (
+	coffSymClassExternal = 2
+	coffSymClassStatic   = 3
+
+	coffRelocAMD64ADDR32NB = 0x0003
+	coffRelocAMD64REL32    = 0x0004
+
+	// Section characteristics.
+	coffCharText  = 0x60300020 // CODE | EXEC | READ | ALIGN_4
+	coffCharIData = 0xC0300040 // INITIALIZED_DATA | READ | WRITE | ALIGN_4
+	coffCharHint  = 0xC0200040 // INITIALIZED_DATA | READ | WRITE | ALIGN_2
+)
+
+type coffReloc struct {
+	offset uint32
+	symIdx uint32
+	typ    uint16
+}
+
+type coffSection struct {
+	name   string
+	data   []byte
+	relocs []coffReloc
+	chars  uint32
+}
+
+type coffSymbol struct {
+	name    string
+	value   uint32
+	section int16 // 1-based; 0 = undefined
+	typ     uint16
+	class   uint8
+}
+
+// writeCoffObject emits a single COFF object file (one ar member) given
+// section and symbol definitions. Names longer than 8 bytes go into the
+// string table.
+func writeCoffObject(w io.Writer, machine uint16, sections []coffSection, syms []coffSymbol) {
+	var strtab bytes.Buffer
+	strtab.Write([]byte{0, 0, 0, 0}) // size placeholder, filled at the end.
+
+	// nameBytes returns the 8-byte name field, using the string table for
+	// names > 8 chars.
+	nameBytes := func(n string) [8]byte {
+		var b [8]byte
+		if len(n) <= 8 {
+			copy(b[:], n)
+			return b
+		}
+		off := strtab.Len()
+		strtab.WriteString(n)
+		strtab.WriteByte(0)
+		// (zero, offset) encoding.
+		binary.LittleEndian.PutUint32(b[:4], 0)
+		binary.LittleEndian.PutUint32(b[4:], uint32(off))
+		return b
+	}
+
+	nsec := len(sections)
+	pos := uint32(20 + 40*nsec)
+	type sectInfo struct{ rawOff, relocOff uint32 }
+	info := make([]sectInfo, nsec)
+	for i, s := range sections {
+		if len(s.data) > 0 {
+			info[i].rawOff = pos
+			pos += uint32(len(s.data))
+		}
+		if len(s.relocs) > 0 {
+			info[i].relocOff = pos
+			pos += 10 * uint32(len(s.relocs))
+		}
+	}
+	symPtr := pos
+
+	// COFF file header (20 bytes).
+	var fh [20]byte
+	binary.LittleEndian.PutUint16(fh[0:2], machine)
+	binary.LittleEndian.PutUint16(fh[2:4], uint16(nsec))
+	binary.LittleEndian.PutUint32(fh[8:12], symPtr)
+	binary.LittleEndian.PutUint32(fh[12:16], uint32(len(syms)))
+	w.Write(fh[:])
+
+	// Section headers.
+	for i, s := range sections {
+		var sh [40]byte
+		nb := nameBytes(s.name)
+		copy(sh[0:8], nb[:])
+		binary.LittleEndian.PutUint32(sh[16:20], uint32(len(s.data)))
+		binary.LittleEndian.PutUint32(sh[20:24], info[i].rawOff)
+		binary.LittleEndian.PutUint32(sh[24:28], info[i].relocOff)
+		binary.LittleEndian.PutUint16(sh[32:34], uint16(len(s.relocs)))
+		binary.LittleEndian.PutUint32(sh[36:40], s.chars)
+		w.Write(sh[:])
+	}
+
+	// Section data + relocs.
+	for _, s := range sections {
+		if len(s.data) > 0 {
+			w.Write(s.data)
+		}
+		for _, r := range s.relocs {
+			var rb [10]byte
+			binary.LittleEndian.PutUint32(rb[0:4], r.offset)
+			binary.LittleEndian.PutUint32(rb[4:8], r.symIdx)
+			binary.LittleEndian.PutUint16(rb[8:10], r.typ)
+			w.Write(rb[:])
+		}
+	}
+
+	// Symbol table.
+	for _, s := range syms {
+		var sb [18]byte
+		nb := nameBytes(s.name)
+		copy(sb[0:8], nb[:])
+		binary.LittleEndian.PutUint32(sb[8:12], s.value)
+		binary.LittleEndian.PutUint16(sb[12:14], uint16(s.section))
+		binary.LittleEndian.PutUint16(sb[14:16], s.typ)
+		sb[16] = s.class
+		sb[17] = 0
+		w.Write(sb[:])
+	}
+
+	// String table (size header + bytes).
+	binary.LittleEndian.PutUint32(strtab.Bytes()[0:4], uint32(strtab.Len()))
+	w.Write(strtab.Bytes())
+}
+
+// bfdMunge replaces non-alphanumeric characters in s with '_' so the
+// result is a valid C identifier (matches dlltool convention).
+func bfdMunge(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+			b.WriteByte(c)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+func bfdHeadSym(dllName string) string  { return "_head_" + bfdMunge(dllName) + "_a" }
+func bfdInameSym(dllName string) string { return "__" + bfdMunge(dllName) + "_a_iname" }
+
+// writeBfdHead emits the head COFF object for the BFD long-format archive.
+func writeBfdHead(w io.Writer, machine uint16, dllName string) {
+	headSym := bfdHeadSym(dllName)
+	inameSym := bfdInameSym(dllName)
+
+	// Section indices (1-based for COFF):
+	//   1 = .idata$2  (Import Descriptor, 20 bytes)
+	//   2 = .idata$5  (anchor for FirstThunk; empty)
+	//   3 = .idata$4  (anchor for OriginalFirstThunk; empty)
+	//
+	// Symbol indices (0-based for relocs):
+	//   0 = .idata$2
+	//   1 = .idata$5
+	//   2 = .idata$4
+	//   3 = _head_<dll>_a (defined at .idata$2 offset 0)
+	//   4 = __<dll>_a_iname (undefined; defined in tail object)
+
+	sections := []coffSection{
+		{name: ".idata$2", data: make([]byte, 20), chars: coffCharIData, relocs: []coffReloc{
+			{offset: 0, symIdx: 2, typ: coffRelocAMD64ADDR32NB},  // OriginalFirstThunk → .idata$4
+			{offset: 12, symIdx: 4, typ: coffRelocAMD64ADDR32NB}, // Name → __<dll>_a_iname
+			{offset: 16, symIdx: 1, typ: coffRelocAMD64ADDR32NB}, // FirstThunk → .idata$5
+		}},
+		{name: ".idata$5", chars: coffCharIData},
+		{name: ".idata$4", chars: coffCharIData},
+	}
+	syms := []coffSymbol{
+		{name: ".idata$2", section: 1, class: coffSymClassStatic},
+		{name: ".idata$5", section: 2, class: coffSymClassStatic},
+		{name: ".idata$4", section: 3, class: coffSymClassStatic},
+		{name: headSym, section: 1, class: coffSymClassExternal},
+		{name: inameSym, section: 0, class: coffSymClassExternal},
+	}
+	writeCoffObject(w, machine, sections, syms)
+}
+
+// writeBfdTail emits the tail COFF object for the BFD long-format archive.
+func writeBfdTail(w io.Writer, machine uint16, dllName string) {
+	inameSym := bfdInameSym(dllName)
+
+	// .idata$7 holds the DLL name string. Pad to even length so following
+	// content stays 2-byte aligned.
+	dllStr := append([]byte(dllName), 0)
+	if len(dllStr)%2 != 0 {
+		dllStr = append(dllStr, 0)
+	}
+
+	// Section indices:
+	//   1 = .idata$4 (8-byte NULL ILT terminator)
+	//   2 = .idata$5 (8-byte NULL IAT terminator)
+	//   3 = .idata$7 (DLL name string)
+	sections := []coffSection{
+		{name: ".idata$4", data: make([]byte, 8), chars: coffCharIData},
+		{name: ".idata$5", data: make([]byte, 8), chars: coffCharIData},
+		{name: ".idata$7", data: dllStr, chars: coffCharIData},
+	}
+	syms := []coffSymbol{
+		{name: ".idata$4", section: 1, class: coffSymClassStatic},
+		{name: ".idata$5", section: 2, class: coffSymClassStatic},
+		{name: ".idata$7", section: 3, class: coffSymClassStatic},
+		{name: inameSym, section: 3, class: coffSymClassExternal},
+	}
+	writeCoffObject(w, machine, sections, syms)
+}
+
+// writeBfdStub emits one per-symbol stub COFF object.
+func writeBfdStub(w io.Writer, machine uint16, dllName, symName string, hint uint16) {
+	headSym := bfdHeadSym(dllName)
+	impSym := "__imp_" + symName
+
+	// .text: jmp *0x0(%rip); nop; nop  (8 bytes)
+	// The REL32 reloc at offset 2 patches disp32 to point at __imp_X.
+	text := []byte{0xff, 0x25, 0, 0, 0, 0, 0x90, 0x90}
+
+	// .idata$6: 2-byte hint + name + null + 2-byte align pad.
+	var hb bytes.Buffer
+	var hintBytes [2]byte
+	binary.LittleEndian.PutUint16(hintBytes[:], hint)
+	hb.Write(hintBytes[:])
+	hb.WriteString(symName)
+	hb.WriteByte(0)
+	if hb.Len()%2 != 0 {
+		hb.WriteByte(0)
+	}
+
+	// Section indices:
+	//   1 = .text       (thunk)
+	//   2 = .idata$7    (4-byte ADDR32NB → _head_<dll>_a)
+	//   3 = .idata$5    (8-byte IAT slot, ADDR32NB → .idata$6)
+	//   4 = .idata$4    (8-byte ILT slot, ADDR32NB → .idata$6)
+	//   5 = .idata$6    (hint + name)
+	//
+	// Symbol indices:
+	//   0 = .text       (STATIC section sym)
+	//   1 = .idata$7    (STATIC section sym)
+	//   2 = .idata$5    (STATIC section sym)
+	//   3 = .idata$4    (STATIC section sym)
+	//   4 = .idata$6    (STATIC section sym)
+	//   5 = X           (EXTERNAL, defined in .text)
+	//   6 = __imp_X     (EXTERNAL, defined in .idata$5)
+	//   7 = _head_<dll>_a (EXTERNAL, undefined; resolves to head member)
+	sections := []coffSection{
+		{name: ".text", data: text, chars: coffCharText, relocs: []coffReloc{
+			{offset: 2, symIdx: 6, typ: coffRelocAMD64REL32}, // → __imp_X
+		}},
+		{name: ".idata$7", data: make([]byte, 4), chars: coffCharIData, relocs: []coffReloc{
+			{offset: 0, symIdx: 7, typ: coffRelocAMD64ADDR32NB}, // → _head_<dll>_a
+		}},
+		{name: ".idata$5", data: make([]byte, 8), chars: coffCharIData, relocs: []coffReloc{
+			{offset: 0, symIdx: 4, typ: coffRelocAMD64ADDR32NB}, // → .idata$6
+		}},
+		{name: ".idata$4", data: make([]byte, 8), chars: coffCharIData, relocs: []coffReloc{
+			{offset: 0, symIdx: 4, typ: coffRelocAMD64ADDR32NB}, // → .idata$6
+		}},
+		{name: ".idata$6", data: hb.Bytes(), chars: coffCharHint},
+	}
+	syms := []coffSymbol{
+		{name: ".text", section: 1, class: coffSymClassStatic},
+		{name: ".idata$7", section: 2, class: coffSymClassStatic},
+		{name: ".idata$5", section: 3, class: coffSymClassStatic},
+		{name: ".idata$4", section: 4, class: coffSymClassStatic},
+		{name: ".idata$6", section: 5, class: coffSymClassStatic},
+		{name: symName, section: 1, class: coffSymClassExternal},
+		{name: impSym, section: 3, class: coffSymClassExternal},
+		{name: headSym, section: 0, class: coffSymClassExternal},
+	}
+	writeCoffObject(w, machine, sections, syms)
+}
+
+// writeBfdArchive writes the System V symbol index and the head/stubs/tail
+// members in BFD long format. The "/" symbol index includes every public
+// symbol X, every __imp_X, plus the head-anchor and iname-anchor names so
+// ld can pull the right member for any forward reference.
+//
+// Member name choice: short ASCII names ("h.o", "sNNNNN.o", "t.o"). All fit
+// in ar(5)'s 15-char inline name field, so no extended name table ("//") is
+// required. ld's SORT(*) on input section name groups members by archive,
+// and within an archive sorts by member name (h < s < t), so the head
+// sorts before the stubs and the tail sorts after, putting the IAT/ILT
+// terminator at the end of the slot run.
+func writeBfdArchive(w io.Writer, symbols []impLibSymbol, dllName string, machine uint16) {
+	// Pre-build all member object bytes so member sizes (and therefore
+	// archive offsets) are known before the "/" symbol index is written.
+	var headBuf, tailBuf bytes.Buffer
+	writeBfdHead(&headBuf, machine, dllName)
+	writeBfdTail(&tailBuf, machine, dllName)
+
+	stubBufs := make([]bytes.Buffer, len(symbols))
+	for i, s := range symbols {
+		writeBfdStub(&stubBufs[i], machine, dllName, s.name, uint16(i))
+	}
+
+	// Build the symbol-index entries.
+	type indexEntry struct {
+		name   string
+		member int // 0 = head, 1 = tail, 2+i = stubs[i]
+	}
+	entries := make([]indexEntry, 0, 2+2*len(symbols))
+	entries = append(entries, indexEntry{bfdHeadSym(dllName), 0})
+	entries = append(entries, indexEntry{bfdInameSym(dllName), 1})
+	for i, s := range symbols {
+		entries = append(entries, indexEntry{s.name, 2 + i})
+		entries = append(entries, indexEntry{"__imp_" + s.name, 2 + i})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
+
+	// Compute member offsets in the archive.
+	numEntries := len(entries)
+	var nameBytesSize int
+	for _, e := range entries {
+		nameBytesSize += len(e.name) + 1
+	}
+	linkerSize := 4 + numEntries*4 + nameBytesSize
+	linkerPad := linkerSize % 2
+
+	memberOffsets := make([]int, 2+len(symbols))
+	pos := 8 + 60 + linkerSize + linkerPad // 8 = "!<arch>\n", 60 = ar header
+	for i := range memberOffsets {
+		memberOffsets[i] = pos
+		var sz int
+		switch {
+		case i == 0:
+			sz = headBuf.Len()
+		case i == 1:
+			sz = tailBuf.Len()
+		default:
+			sz = stubBufs[i-2].Len()
+		}
+		pos += 60 + sz
+		if sz%2 != 0 {
+			pos++
+		}
+	}
+
+	// Write "/" symbol index.
+	writeArHeader(w, "/", linkerSize)
+	binary.Write(w, binary.BigEndian, uint32(numEntries))
+	for _, e := range entries {
+		binary.Write(w, binary.BigEndian, uint32(memberOffsets[e.member]))
+	}
+	for _, e := range entries {
+		io.WriteString(w, e.name)
+		w.Write([]byte{0})
+	}
+	if linkerPad != 0 {
+		w.Write([]byte{'\n'})
+	}
+
+	// Write members.
+	writeBfdMember(w, "h.o", headBuf.Bytes())
+	writeBfdMember(w, "t.o", tailBuf.Bytes())
+	for i := range symbols {
+		writeBfdMember(w, fmt.Sprintf("s%05d.o", i), stubBufs[i].Bytes())
+	}
+}
+
+func writeBfdMember(w io.Writer, name string, data []byte) {
+	writeArHeader(w, name, len(data))
+	w.Write(data)
+	if len(data)%2 != 0 {
+		w.Write([]byte{'\n'})
+	}
 }
 
 // peLoadImportLibrary reads a MinGW-compatible import library (.a) and

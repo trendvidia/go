@@ -37,14 +37,6 @@ func peSkipSymName(name string) bool {
 	return false
 }
 
-// externalLinkPluginImports is the allowlist of host-provided symbols
-// the external-link plugin path converts to SHOSTOBJ. See the long
-// comment in peLoadImportLibrary for why the set is so narrow on
-// external link relative to internal link.
-var externalLinkPluginImports = map[string]bool{
-	"runtime.addmoduledata": true,
-}
-
 // peSectionMarkerSym reports whether name is a linker-defined section
 // boundary symbol. These mark the start/end of PE sections in the
 // moduledata and must never be imported from the host — doing so would
@@ -849,32 +841,6 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			continue
 		}
 
-		// External link narrows the conversion to a small allowlist —
-		// just the symbols that genuinely need cross-DLL dispatch for
-		// plugin registration to work. Converting more (e.g., the full
-		// reachable set the host exports, ~549 symbols) puts ld on the
-		// auto-import path for compiler-emitted prologue calls
-		// (runtime.morestack_noctxt, runtime.gcWriteBarrier1, etc.) —
-		// once any direct ref reaches an SHOSTOBJ provided by host.exe.a,
-		// mingw ld treats the whole archive as an auto-import target,
-		// fills .idata with __imp_X slots without emitting a real
-		// Import Directory entry, and patches call sites via 32-bit
-		// pseudo-relocs that overflow on 64-bit Windows where host and
-		// plugin live > 2 GB apart in VA space.
-		//
-		// runtime.addmoduledata is the only symbol the plugin's local
-		// runtime cannot service: registering moduledata needs to mutate
-		// the host's runtime.lastmoduledatap so plugin.lastmoduleinit
-		// can find it. Everything else (morestack, gcWriteBarrier,
-		// schedinit-time helpers) operates on plugin-local state and
-		// works fine against the plugin's own runtime copy. v3's
-		// "rock-solid" preference for sharing more host state ends up
-		// requiring compiler-side IAT-indirect call emission for the
-		// shared subset — out of scope here.
-		if ctxt.IsExternal() && !externalLinkPluginImports[symName] {
-			continue
-		}
-
 		// Internal link converts host imports to SDYNIMPORT so the
 		// internal linker generates IAT entries. External link converts
 		// to SHOSTOBJ so the partial PE emits an undefined external
@@ -899,10 +865,10 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		//
 		// For internal link, both ABI0 and ABIInternal versions are
 		// converted (the IAT collapses them into one entry by name).
-		// For external link, only ABI0 is converted: ABI0 is what gentext's
-		// synthetic init R_CALLs (`Lookup("runtime.addmoduledata", 0)`)
-		// and what host.exe.a's symbol index lists. ABIInternal at ver=1
-		// is left STEXT; without callers in the plugin, deadcode prunes it.
+		// For external link, only ABI0 is converted: ABIInternal copies
+		// in the plugin loader are not findable by extname+ver=1 (the
+		// host's symbol index lists extnames, not ABI-mangled forms),
+		// so converting ver=1 here is a no-op.
 		//
 		// External link additionally creates a companion `__imp_X`
 		// SHOSTOBJ symbol per converted X. gentext (and the rest of the

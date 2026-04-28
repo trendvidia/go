@@ -116,15 +116,42 @@ func pluginSkipInitPkg(pkg string) bool {
 	switch pkg {
 	case "testplugin/common":
 		return true
+	case "runtime":
+		// Plugin's runtime package is host-shared via IAT — every
+		// scheduler/GC/finalizer global lives in host's instance, not
+		// the plugin's. Plugin's runtime init functions would spawn
+		// duplicate forcegchelper / sysmon / scavenger goroutines and
+		// re-initialise lock state that host already set up; e.g.
+		// runtime.init.7 spawns forcegchelper which then throws
+		// "forcegc: phase error" because forcegc.idle is already false
+		// from host's helper. Skip on Windows where the host-share
+		// model applies; on POSIX plugins are independent runtimes
+		// and need their own init.
+		return GOOS == "windows"
 	}
 	return false
 }
 
 // skipHostSharedInits sets state = 2 (Done) on plugin-local inittasks
-// for any package pluginSkipInitPkg flags, so doInit1 short-circuits
-// them. Safe to call unconditionally — for packages outside the skip
-// set or when the inittask has already been deduped to state=2 by the
-// platform dynamic loader (linux/darwin), this is a no-op.
+// whose init code lives in the host. Two ways an inittask qualifies:
+//
+//  1. Its first PC resolves to a `.rel` thunk (a 6-byte JMP-via-IAT
+//     stub the linker emits for cross-module calls). On Windows v3,
+//     every host-shared package's inittask has its first init function
+//     pointing at such a thunk because the actual init lives in host.
+//     Plugin must NOT re-run host's init — doing so spawns duplicate
+//     forcegchelper / sysmon / scavenger goroutines (runtime.init.7
+//     specifically), re-acquires already-acquired runtime locks, and
+//     races with host's already-initialised state.
+//
+//  2. Its package name matches pluginSkipInitPkg's allowlist. Used
+//     for cases where the inittask's first PC is plugin-local but
+//     the package's data is still host-shared (e.g. testplugin/common
+//     where peSharedRuntimeData covers common.X).
+//
+// On linux/darwin the first PC isn't a thunk (no IAT plumbing), so
+// the .rel-suffix branch is a no-op there — only the pluginSkipInitPkg
+// allowlist applies.
 func skipHostSharedInits(md *moduledata) {
 	for _, t := range md.inittasks {
 		if t == nil || t.state == 2 || t.nfns == 0 {
@@ -134,8 +161,14 @@ func skipHostSharedInits(md *moduledata) {
 		f := *(*func())(unsafe.Pointer(&firstFunc))
 		fi := findfunc(abi.FuncPCABIInternal(f))
 		name := funcname(fi)
-		pkg := pkgFromInitName(name)
-		if pluginSkipInitPkg(pkg) {
+		// Windows host-shared init: first PC is in a `.rel` IAT
+		// thunk, so the funcname returns ".rel" (no package prefix).
+		// These tasks' real bodies are in host; skip.
+		if name == ".rel" {
+			t.state = 2
+			continue
+		}
+		if pluginSkipInitPkg(pkgFromInitName(name)) {
 			t.state = 2
 		}
 	}

@@ -28,7 +28,17 @@ type canonicalEntry struct {
 // outlive individual modules.
 //
 // Access is serialised by canonicalSymsLock.
-var canonicalSyms = make(map[string]canonicalEntry, 1024)
+//
+// Initialised lazily in canonicalizeSlots rather than at package
+// init. The Windows plugin DATA-share path (peSharedRuntimeData)
+// binds plugin's __imp_runtime.canonicalSyms to host's slot via the
+// IAT, so a `make(...)` package-init in plugin would write a fresh
+// empty map into host's slot — both clobbering host's already
+// canonicalised entries and (on a second plugin load after GC) hitting
+// `bad sweepgen in refill` because plugin's allocator path uses an
+// mcache whose cached span has a stale sweepgen relative to host's
+// shared mheap_. Lazy init under the existing lock sidesteps both.
+var canonicalSyms map[string]canonicalEntry
 var canonicalSymsLock mutex
 
 // canonicalSymName returns the target name for slot index i in the
@@ -55,6 +65,9 @@ func canonicalSymName(blob []byte, offs []int32, i int) string {
 //
 // Caller holds canonicalSymsLock.
 func canonicalizeSlots(cur *moduledata, slots []uintptr, offs []int32, blob []byte) {
+	if canonicalSyms == nil {
+		canonicalSyms = make(map[string]canonicalEntry, 1024)
+	}
 	for i := range slots {
 		slot := (*uintptr)(unsafe.Pointer(slots[i]))
 		name := canonicalSymName(blob, offs, i)

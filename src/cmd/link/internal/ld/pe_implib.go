@@ -109,6 +109,15 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.scavenge":        true,
 	"runtime.zerobase":        true,
 
+	// Sentinel mspan stored in mcache.alloc[spc] when no span is cached.
+	// Plugin's mcache.refill compares `c.alloc[spc] != &emptymspan`. When
+	// host's releaseAll (called from prepareForSweep at GC start) clears
+	// the mcache slot to host's &emptymspan, plugin's compare against
+	// plugin-local &emptymspan would be unequal — falling through to the
+	// sweepgen check on a zeroed dummy span and throwing "bad sweepgen
+	// in refill". Sharing aligns the sentinel pointer across modules.
+	"runtime.emptymspan":      true,
+
 	// Scheduler.
 	"runtime.sched":               true,
 	"runtime.allp":                true,

@@ -248,6 +248,27 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.reflectOffs":                true,
 }
 
+// peSharedV1Funcs lists package-level (non-method) functions whose v=1
+// ABIInternal entry must be host-bound so that FuncPCABIInternal returns
+// host's PC and the plugin's runtime body routes through host's body.
+// Required for runtime.init.5 to advance past funcMaxSPDelta nil-datap.
+//
+// What belongs here: pure-Go runtime functions referenced by FuncPCABIInternal
+// from any package init, plus runtime introspection helpers (findfunc,
+// funcMaxSPDelta) that must walk host's moduledata to resolve cross-binary
+// PCs.
+//
+// What stays out: method bodies (anything matching `pkg.(*Recv).Method`) —
+// converting their v=1 to SHOSTOBJ orphans type-descriptor R_METHODOFF /
+// R_ADDROFF relocs at "missing section for relocation target ..." in
+// data.go:relocsym.
+var peSharedV1Funcs = map[string]bool{
+	"runtime.findfunc":       true,
+	"runtime.funcMaxSPDelta": true,
+	"runtime.asyncPreempt2":  true,
+	"runtime.xRegRestore":    true,
+}
+
 // peGotRedirect returns the symbol that an R_GOTPCREL relocation targeting
 // `targ` should be retargeted to on PE. The compiler's -dynlink rewrite
 // emits `MOVQ X@GOT, R15; MOVx (R15), Y` for every extern data access; on
@@ -1308,11 +1329,33 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		//     through the converted v=0 sym.
 		//   - internal link converts both versions; the in-binary IAT
 		//     collapses them by name.
+		// triedVers controls which plugin sym version(s) to attempt
+		// for this host export name.
+		//
+		// External link normally converts only v=0. Type-descriptor
+		// R_METHODOFF/R_ADDROFF relocs target ABIInternal method bodies
+		// (v=1) on a non-shared host (mangleABIName leaves them
+		// unsuffixed); converting v=1 for those would orphan the relocs
+		// at "missing section for relocation target ..." in
+		// data.go:relocsym (the SWINDOWS branch at line 500 has special
+		// handling but SHOSTOBJ does not).
+		//
+		// peSharedV1Funcs is a curated allowlist of NON-METHOD package-
+		// level functions whose v=1 ABIInternal entry must be host-bound
+		// so that FuncPCABIInternal returns a host PC (resolvable by
+		// host's findfunc walking host's moduledata) and so plugin's own
+		// runtime body for these functions routes into host's. Required
+		// for runtime.init.5: it calls FuncPCABIInternal(asyncPreempt2)
+		// and (xRegRestore), and findfunc itself must be host-bound so
+		// the plugin doesn't walk its own (mostly empty) moduledata.
 		var triedVers []int
 		if ver >= 0 {
 			triedVers = []int{ver}
 		} else if ctxt.IsExternal() {
 			triedVers = []int{0}
+			if peSharedV1Funcs[lookupName] {
+				triedVers = []int{0, 1}
+			}
 		} else {
 			triedVers = []int{0, 1}
 		}
@@ -1330,17 +1373,7 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			// retargets those to __imp_X via peGotRedirect. For each
 			// host-shared DATA we convert here, the plugin's references
 			// resolve to host's value through the OS-loader-populated
-			// IAT slot. For data we DON'T convert, peGotRedirect
-			// synthesizes a plugin-local SDATA __imp_X containing &X
-			// (R_ADDR) and the plugin reads its own copy.
-			//
-			// We curate which DATA to share rather than convert all of
-			// host's data exports: most package-level data (type
-			// descriptors, function value descriptors, kindNames-style
-			// arrays) is per-binary-equivalent but not semantically
-			// shared, and converting it would explode the IAT and force
-			// pseudo-reloc fallbacks for any reference the compiler's
-			// rewrite path missed.
+			// IAT slot.
 			//
 			// Always-share patterns:
 			//   runtime.tls_g           — Windows TLS slot index (Bug 8)
@@ -1353,6 +1386,12 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			// link adds the original four as the existing exceptions for
 			// initdynimport's IAT-data-slot transform; external link
 			// shares the same superset.
+			//
+			// Package-data sharing for testplugin/common.X (so host's
+			// init-side mutations are visible to plugin readers) is NOT
+			// addressed by this curation alone — broadening DATA conversion
+			// or sharing user-package ..inittasks introduces GC-state /
+			// forcegc-phase / sweepgen regressions. See v3 roadmap.
 			if !st.IsText() {
 				share := strings.HasSuffix(lookupName, "..inittask") ||
 					lookupName == "runtime.writeBarrier" ||

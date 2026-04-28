@@ -6,7 +6,6 @@ package runtime
 
 import (
 	"internal/abi"
-	"internal/runtime/atomic"
 	"internal/stringslite"
 	"unsafe"
 )
@@ -98,16 +97,8 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 		syms[name] = val
 	}
 	skipHostSharedInits(md)
-	// Tell runtime.exit (Windows) to use TerminateProcess instead of
-	// ExitProcess once any plugin is loaded: ExitProcess's DLL_PROCESS_DETACH
-	// walk deadlocks with 2+ Go-built plugin DLLs in the process.
-	atomic.Store(&hostHasLoadedPlugins, 1)
 	return md.pluginpath, syms, md.inittasks, ""
 }
-
-// hostHasLoadedPlugins is set to 1 once a plugin is successfully loaded
-// into the host. Read by runtime.exit on Windows.
-var hostHasLoadedPlugins uint32
 
 // pluginSkipInitPkg reports whether a package's plugin-local init must
 // be short-circuited because its data is host-shared. Pairs with the

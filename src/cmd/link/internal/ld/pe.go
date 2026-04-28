@@ -1211,10 +1211,11 @@ func (f *peFile) writeOptionalHeader(ctxt *Link) {
 	oh.SizeOfUninitializedData = 0
 	if ctxt.LinkMode != LinkExternal {
 		if ctxt.BuildMode == BuildModePlugin {
-			// Plugin DLLs use go:link.plugindllmain as DLL entry point.
-			// It wraps go:link.addmoduledata with a proper DllMain that
-			// returns TRUE.
-			dllmain := ctxt.loader.Lookup("go:link.plugindllmain", 0)
+			// Plugin DLLs use _goPluginDllMain as DLL entry point.
+			// It calls runtime.addmoduledata at DLL_PROCESS_ATTACH and
+			// returns TRUE for all reasons. The matching external-link
+			// override is in lib.go via -Wl,--entry=_goPluginDllMain.
+			dllmain := ctxt.loader.Lookup("_goPluginDllMain", 0)
 			if dllmain != 0 && ctxt.loader.SymValue(dllmain) != 0 {
 				oh64.AddressOfEntryPoint = uint32(ctxt.loader.SymValue(dllmain) - PEBASE)
 				oh.AddressOfEntryPoint = uint32(ctxt.loader.SymValue(dllmain) - PEBASE)
@@ -2042,10 +2043,12 @@ func asmbPe(ctxt *Link) {
 	pefile.addSEH(ctxt)
 	pefile.addDWARF()
 
-	// For Windows plugins with internal linking, DllMain (go:link.plugindllmain)
-	// handles init — no .ctors needed. For external linking, .ctors is processed
-	// by the CRT.
-	if ctxt.LinkMode == LinkExternal {
+	// For Windows plugins (both internal and external link), DllMain
+	// (go:link.plugindllmain) is the DLL entry point and calls
+	// runtime.addmoduledata directly — no .ctors needed. For non-plugin
+	// external linking (c-shared etc.), .ctors is processed by the CRT
+	// at DllMainCRTStartup time.
+	if ctxt.LinkMode == LinkExternal && !(ctxt.BuildMode == BuildModePlugin && ctxt.IsWindows()) {
 		pefile.ctorsSect = pefile.addInitArray(ctxt)
 	}
 

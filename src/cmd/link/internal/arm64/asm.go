@@ -83,7 +83,7 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 // DLLs with internal linking. It loads the plugin's moduledata, reads
 // runtime.addmoduledata from the IAT, and calls it.
 func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
-	dllmain := ldr.CreateSymForUpdate("go:link.plugindllmain", 0)
+	dllmain := ldr.CreateSymForUpdate("_goPluginDllMain", 0)
 	dllmain.SetType(sym.STEXT)
 	ctxt.Textp = append(ctxt.Textp, dllmain.Sym())
 	ldr.SetAttrReachable(dllmain.Sym(), true)
@@ -1002,7 +1002,7 @@ func archreloc(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, r loade
 		if rt == objabi.R_ADDRARM64 && target.IsWindows() &&
 			target.BuildMode == ld.BuildModePlugin &&
 			ldr.SymType(rs) == sym.SWINDOWS &&
-			ldr.SymName(s) != "go:link.plugindllmain" {
+			ldr.SymName(s) != "_goPluginDllMain" {
 			// Skip DllMain — it already has explicit LDR from IAT.
 			t := ldr.SymAddr(rs) + r.Add() - ((ldr.SymValue(s) + int64(r.Off())) &^ 0xfff)
 			var o0, o1 uint32

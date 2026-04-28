@@ -1669,6 +1669,16 @@ func (ctxt *Link) hostlink() {
 			// Export all symbols from the plugin DLL so the host can
 			// resolve them via GetProcAddress.
 			argv = append(argv, "-Wl,--export-all-symbols")
+			// Override the default DllMainCRTStartup entry with the
+			// custom DllMain emitted by gentextPluginDllMain. This is
+			// load-bearing for unload: mingw's _CRT_INIT (called from
+			// DllMainCRTStartup) deadlocks on its per-DLL spinlock at
+			// DETACH because the M-thread that ran ATTACH is gone by
+			// then. Our DllMain calls runtime.addmoduledata at ATTACH
+			// (replacing the role of __CTOR_LIST__/local.dso_init) and
+			// is a no-op at DETACH/THREAD_*. The matching internal-link
+			// override is in pe.go's writeOptionalHeader.
+			argv = append(argv, "-Wl,--entry=_goPluginDllMain")
 			// host.exe.a is appended AFTER go.o (below), not here. ld
 			// scans archive symbol indexes only when an undefined ref
 			// is open, so positioning the import library before go.o

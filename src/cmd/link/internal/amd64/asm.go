@@ -41,9 +41,26 @@ import (
 )
 
 func gentext(ctxt *ld.Link, ldr *loader.Loader) {
-	// On Windows plugins with internal linking, create DllMain directly
-	// (PrepareAddmoduledata is skipped to avoid BL to SWINDOWS symbols).
-	if ctxt.BuildMode == ld.BuildModePlugin && ctxt.IsWindows() && ctxt.IsInternal() {
+	// On Windows plugins (both internal and external linking), generate a
+	// custom DllMain to use as the DLL's entry point. This bypasses
+	// mingw's DllMainCRTStartup → _CRT_INIT path entirely, which is
+	// load-bearing for unload safety: _CRT_INIT uses a per-DLL spinlock
+	// (__native_startup_lock) keyed on thread StackBase as the owner
+	// identifier. Under Go's runtime model, the M-thread that calls
+	// LoadLibrary (and thus runs _CRT_INIT(ATTACH), acquiring the lock)
+	// often differs from the M-thread that calls ExitProcess at unload.
+	// The original holder is dead by then, the lock is permanently held
+	// from the new thread's point of view, and _CRT_INIT(DETACH) busy-
+	// waits forever in `cmpxchg + Sleep(1000)`. Bypassing the entry skips
+	// _CRT_INIT and __CTOR_LIST__/__DTOR_LIST__ — for v3 Go plugins that
+	// is safe because plugin runtime state is host-shared via IAT (no
+	// per-plugin scheduler/GC/finalizer to clean up) and Go's traceback
+	// uses pclntab not libgcc DWARF.
+	//
+	// External link gets the entry-point swap via `-Wl,--entry=` in
+	// lib.go's hostlink path; internal link gets it via pe.go's
+	// writeOptionalHeader.
+	if ctxt.BuildMode == ld.BuildModePlugin && ctxt.IsWindows() {
 		gentextPluginDllMain(ctxt, ldr)
 		return
 	}
@@ -107,7 +124,11 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 // DLLs with internal linking. It loads the plugin's moduledata, reads
 // runtime.addmoduledata from the IAT, and calls it.
 func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
-	dllmain := ldr.CreateSymForUpdate("go:link.plugindllmain", 0)
+	// Symbol name must be parseable by mingw's ld for `-Wl,--entry=`
+	// (used in lib.go for external link). Colons in Go-internal names
+	// like "go:link.plugindllmain" trip ld's command-line parser, so we
+	// use a plain ASCII identifier.
+	dllmain := ldr.CreateSymForUpdate("_goPluginDllMain", 0)
 	dllmain.SetType(sym.STEXT)
 	ctxt.Textp = append(ctxt.Textp, dllmain.Sym())
 	ldr.SetAttrReachable(dllmain.Sym(), true)
@@ -156,19 +177,60 @@ func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
 	// sub rsp, 0x28
 	dm(0x48, 0x83, 0xec, 0x28)
 
-	// lea rdi, [rip + local.pluginmoduledata]
-	dm(0x48, 0x8d, 0x3d)
-	dllmain.AddPCRelPlus(ctxt.Arch, ctxt.Moduledata, 0)
-
-	// Call runtime.addmoduledata via direct call + thunk.
-	amd := ldr.Lookup("runtime.addmoduledata", 0)
-	if amd != 0 {
+	// External-link only: call _pei386_runtime_relocator. mingw provides
+	// this in libmingw32 (statically linked into every external-link
+	// plugin DLL); it walks the per-DLL pseudo-reloc tables and patches
+	// addresses that the OS loader cannot resolve at load time.
+	// Crucially for v3, it dereferences plugin's go.globalptr.<host-
+	// shared-symbol> entries from `&__imp_X` to `[__imp_X]` (the OS-
+	// filled IAT slot value, = host's X address), which is what Go-
+	// emitted access patterns expect. _CRT_INIT(ATTACH) normally invokes
+	// this, but our DllMain bypasses _CRT_INIT to avoid its DETACH-side
+	// spinlock deadlock; we invoke the relocator directly. No args, no
+	// return value. Internal-link plugins don't link mingw and don't
+	// generate the pseudo-reloc tables that need patching, so skip.
+	if ctxt.IsExternal() {
+		relocator := ldr.LookupOrCreateSym("_pei386_runtime_relocator", 0)
+		relUpd := ldr.MakeSymbolUpdater(relocator)
+		if relUpd.Type() == 0 || relUpd.Type() == sym.Sxxx {
+			relUpd.SetType(sym.SHOSTOBJ)
+		}
+		ldr.SetAttrReachable(relocator, true)
 		dm(0xe8)
 		dllmain.AddUint32(ctxt.Arch, 0)
 		r, _ := dllmain.AddRel(objabi.R_CALL)
 		r.SetOff(int32(dllmain.Size() - 4))
 		r.SetSiz(4)
-		r.SetSym(amd)
+		r.SetSym(relocator)
+	}
+
+	// lea rdi, [rip + local.pluginmoduledata]
+	dm(0x48, 0x8d, 0x3d)
+	dllmain.AddPCRelPlus(ctxt.Arch, ctxt.Moduledata, 0)
+
+	// Call runtime.addmoduledata. For internal link this is a direct
+	// e8 rel32 call to the in-binary symbol. For external link
+	// (Windows plugin against host EXE), peLoadImportLibrary has
+	// converted runtime.addmoduledata to SHOSTOBJ; we emit an IAT-
+	// indirect `ff 15 disp32` call to the __imp_ stub instead, same
+	// pattern the local.dso_init external-link path uses.
+	amd := ldr.Lookup("runtime.addmoduledata", 0)
+	if amd != 0 {
+		if t := ldr.SymType(amd); t == sym.SHOSTOBJ || t == sym.SDYNIMPORT {
+			impName := "__imp_" + ldr.SymExtname(amd)
+			impSym := ldr.LookupOrCreateSym(impName, 0)
+			ldr.SetAttrReachable(impSym, true)
+			// call qword ptr [rip+__imp_runtime.addmoduledata]
+			dm(0xff, 0x15)
+			dllmain.AddPCRelPlus(ctxt.Arch, impSym, 0)
+		} else {
+			dm(0xe8)
+			dllmain.AddUint32(ctxt.Arch, 0)
+			r, _ := dllmain.AddRel(objabi.R_CALL)
+			r.SetOff(int32(dllmain.Size() - 4))
+			r.SetSiz(4)
+			r.SetSym(amd)
+		}
 	}
 
 	// add rsp, 0x28

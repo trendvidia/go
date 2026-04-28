@@ -80,7 +80,9 @@ func testMain(m *testing.M) int {
 	if err != nil {
 		log.Panic(err)
 	}
-	defer os.RemoveAll(GOPATH)
+	if os.Getenv("KEEP_TMPDIR") == "" {
+		defer os.RemoveAll(GOPATH)
+	}
 	tmpDir = GOPATH
 	fmt.Printf("TMPDIR=%s\n", tmpDir)
 
@@ -278,6 +280,13 @@ func run(t *testing.T, bin string, args ...string) string {
 func TestDWARFSections(t *testing.T) {
 	// test that DWARF sections are emitted for plugins and programs importing "plugin"
 	globalSkip(t)
+	if runtime.GOOS == "windows" {
+		// v3 Windows plugins disable DWARF (cmd/go/internal/work/gc.go adds
+		// -w for plugin builds): host-provided symbols are converted to
+		// SDYNIMPORT, which invalidates DWARF refs to them. The host
+		// binary still has DWARF; only the plugin DLL lacks it.
+		t.Skip("DWARF disabled for Windows plugin DLLs in v3")
+	}
 	goCmd(t, "run", "./checkdwarf/main.go", "plugin2"+pluginSuffix, "plugin2.UnexportedNameReuse")
 	goCmd(t, "run", "./checkdwarf/main.go", "./host.exe", "main.main")
 }

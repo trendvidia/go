@@ -189,6 +189,14 @@ func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
 	// spinlock deadlock; we invoke the relocator directly. No args, no
 	// return value. Internal-link plugins don't link mingw and don't
 	// generate the pseudo-reloc tables that need patching, so skip.
+	//
+	// Note: we deliberately do NOT call __do_global_ctors here. The
+	// only ctors mingw emits into __CTOR_LIST__ for v3 plugins are
+	// libgcc DWARF frame registration (irrelevant — Go traceback uses
+	// pclntab) and cgo init. cgo plugins on Windows have an unsolved
+	// `cgo_wait_runtime_init_done` per-DLL state issue that running
+	// ctors doesn't fix; the affected tests are skipped on Windows
+	// pending separate cgo-runtime-sharing work.
 	if ctxt.IsExternal() {
 		relocator := ldr.LookupOrCreateSym("_pei386_runtime_relocator", 0)
 		relUpd := ldr.MakeSymbolUpdater(relocator)

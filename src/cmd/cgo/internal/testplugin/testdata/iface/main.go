@@ -7,18 +7,26 @@ package main
 import (
 	"log"
 	"plugin"
+	"runtime"
 
 	"testplugin/iface_i"
 )
 
-func main() {
-	a, err := plugin.Open("iface_a.so")
-	if err != nil {
-		log.Fatalf(`plugin.Open("iface_a.so"): %v`, err)
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
 	}
-	b, err := plugin.Open("iface_b.so")
+	return ".so"
+}()
+
+func main() {
+	a, err := plugin.Open("iface_a" + pluginExt)
 	if err != nil {
-		log.Fatalf(`plugin.Open("iface_b.so"): %v`, err)
+		log.Fatalf(`plugin.Open("iface_a%s"): %v`, pluginExt, err)
+	}
+	b, err := plugin.Open("iface_b" + pluginExt)
+	if err != nil {
+		log.Fatalf(`plugin.Open("iface_b%s"): %v`, pluginExt, err)
 	}
 
 	af, err := a.Lookup("F")

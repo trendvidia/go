@@ -9,10 +9,18 @@ package main
 import (
 	"log"
 	"plugin"
+	"runtime"
 )
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func main() {
-	p, err := plugin.Open("issue.22295.so")
+	p, err := plugin.Open("issue.22295" + pluginExt)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -193,13 +193,51 @@ var hostImplib string
 // Windows-specific requirements (plugin suffix, import library).
 // The args should be the same as for "go build -buildmode=plugin",
 // excluding the "-buildmode=plugin" itself. On Windows, the
-// -pluginimplib flag is merged into any existing -ldflags argument.
+// -pluginimplib flag is merged into any existing -ldflags argument,
+// pointing at hostImplib (host.exe.a). Tests that run their own host
+// binary instead of host.exe must build that host first and call
+// goCmdBuildPluginFor with the host's basename instead.
 func goCmdBuildPlugin(t *testing.T, args ...string) {
 	if t != nil {
 		t.Helper()
 	}
-	if runtime.GOOS == "windows" && hostImplib != "" {
-		implibFlag := "-pluginimplib=" + hostImplib
+	goCmdBuildPluginWithImplib(t, hostImplib, args...)
+}
+
+// goCmdBuildPluginFor is goCmdBuildPlugin for a test that runs its
+// own host binary. hostName is the host's basename without extension
+// (e.g. "issue19418" → uses issue19418.exe.a as the import library).
+// The host MUST be built before this is called; -buildmode=exe on
+// Windows generates the matching .exe.a alongside the binary.
+//
+// Required on Windows because the plugin's IMAGE_DIRECTORY_ENTRY_IMPORT
+// points at a specific host binary by name (PE imports are name-bound),
+// so a plugin built against host.exe.a cannot share the runtime of a
+// host called issue19418.exe — the OS would load both binaries, the
+// plugin's addmoduledata IAT-call would land in host.exe's runtime not
+// issue19418.exe's, and issue19418.exe's plugin.Open would see no new
+// moduledata in its own chain. Each test's plugin must link against
+// the matching host's import library.
+//
+// Non-Windows is unaffected (POSIX dlopen resolves runtime symbols
+// against the loading process at runtime).
+func goCmdBuildPluginFor(t *testing.T, hostName string, args ...string) {
+	if t != nil {
+		t.Helper()
+	}
+	implib := ""
+	if runtime.GOOS == "windows" {
+		implib = filepath.Join(filepath.Dir(hostImplib), hostName+".exe.a")
+	}
+	goCmdBuildPluginWithImplib(t, implib, args...)
+}
+
+func goCmdBuildPluginWithImplib(t *testing.T, implib string, args ...string) {
+	if t != nil {
+		t.Helper()
+	}
+	if runtime.GOOS == "windows" && implib != "" {
+		implibFlag := "-pluginimplib=" + implib
 		// Merge the import library flag into existing -ldflags, if any.
 		merged := false
 		for i, a := range args {
@@ -316,6 +354,20 @@ func skipNotImplementedOnWindows(t *testing.T) {
 	}
 }
 
+// skipCgoPluginOnWindows skips tests whose plugin makes real C calls
+// (uses C.foo or includes non-trivial C code). These tests hang on
+// Windows in cgo_wait_runtime_init_done because v3 doesn't share the
+// cgo runtime_init state between host and plugin DLLs — the plugin's
+// own runtime_init_done is never signalled, so the first cgo call in
+// the plugin blocks forever on a pthread cond. Tests whose plugin
+// declares import "C" purely for its side effect (no actual C calls)
+// are unaffected and don't need this skip.
+func skipCgoPluginOnWindows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows: cgo plugin shares no runtime_init_done with host; first cgo call in plugin hangs (v3 limitation)")
+	}
+}
+
 // TestCloseAPI exercises the L3.b additions: Plugin.Close,
 // Plugin.HasDependents, Plugin.Dependents.
 func TestCloseAPI(t *testing.T) {
@@ -365,9 +417,9 @@ func TestRefcountUnload(t *testing.T) {
 
 func TestUniqueTypesAndItabs(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "./iface_a")
-	goCmdBuildPlugin(t, "./iface_b")
 	goCmd(t, "build", "-o", "iface.exe", "./iface")
+	goCmdBuildPluginFor(t, "iface", "./iface_a")
+	goCmdBuildPluginFor(t, "iface", "./iface_b")
 	run(t, "./iface.exe")
 }
 
@@ -375,8 +427,8 @@ func TestIssue18676(t *testing.T) {
 	// make sure we don't add the same itab twice.
 	// The buggy code hangs forever, so use a timeout to check for that.
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "plugin"+pluginSuffix, "./issue18676/plugin.go")
 	goCmd(t, "build", "-o", "issue18676.exe", "./issue18676/main.go")
+	goCmdBuildPluginFor(t, "issue18676", "-o", "plugin"+pluginSuffix, "./issue18676/plugin.go")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -390,22 +442,22 @@ func TestIssue18676(t *testing.T) {
 func TestIssue19534(t *testing.T) {
 	// Test that we can load a plugin built in a path with non-alpha characters.
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-gcflags=-p=issue.19534", "-ldflags=-pluginpath=issue.19534", "-o", "plugin"+pluginSuffix, "./issue19534/plugin.go")
 	goCmd(t, "build", "-o", "issue19534.exe", "./issue19534/main.go")
+	goCmdBuildPluginFor(t, "issue19534", "-gcflags=-p=issue.19534", "-ldflags=-pluginpath=issue.19534", "-o", "plugin"+pluginSuffix, "./issue19534/plugin.go")
 	run(t, "./issue19534.exe")
 }
 
 func TestIssue18584(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "plugin"+pluginSuffix, "./issue18584/plugin.go")
 	goCmd(t, "build", "-o", "issue18584.exe", "./issue18584/main.go")
+	goCmdBuildPluginFor(t, "issue18584", "-o", "plugin"+pluginSuffix, "./issue18584/plugin.go")
 	run(t, "./issue18584.exe")
 }
 
 func TestIssue19418(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-ldflags=-X main.Val=linkstr", "-o", "plugin"+pluginSuffix, "./issue19418/plugin.go")
 	goCmd(t, "build", "-o", "issue19418.exe", "./issue19418/main.go")
+	goCmdBuildPluginFor(t, "issue19418", "-ldflags=-X main.Val=linkstr", "-o", "plugin"+pluginSuffix, "./issue19418/plugin.go")
 	run(t, "./issue19418.exe")
 }
 
@@ -416,30 +468,31 @@ func TestIssue19529(t *testing.T) {
 
 func TestIssue22175(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "issue22175_plugin1"+pluginSuffix, "./issue22175/plugin1.go")
-	goCmdBuildPlugin(t, "-o", "issue22175_plugin2"+pluginSuffix, "./issue22175/plugin2.go")
 	goCmd(t, "build", "-o", "issue22175.exe", "./issue22175/main.go")
+	goCmdBuildPluginFor(t, "issue22175", "-o", "issue22175_plugin1"+pluginSuffix, "./issue22175/plugin1.go")
+	goCmdBuildPluginFor(t, "issue22175", "-o", "issue22175_plugin2"+pluginSuffix, "./issue22175/plugin2.go")
 	run(t, "./issue22175.exe")
 }
 
 func TestIssue22295(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "issue.22295"+pluginSuffix, "./issue22295.pkg")
 	goCmd(t, "build", "-o", "issue22295.exe", "./issue22295.pkg/main.go")
+	goCmdBuildPluginFor(t, "issue22295", "-o", "issue.22295"+pluginSuffix, "./issue22295.pkg")
 	run(t, "./issue22295.exe")
 }
 
 func TestIssue24351(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "issue24351"+pluginSuffix, "./issue24351/plugin.go")
 	goCmd(t, "build", "-o", "issue24351.exe", "./issue24351/main.go")
+	goCmdBuildPluginFor(t, "issue24351", "-o", "issue24351"+pluginSuffix, "./issue24351/plugin.go")
 	run(t, "./issue24351.exe")
 }
 
 func TestIssue25756(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "life"+pluginSuffix, "./issue25756/plugin")
+	skipCgoPluginOnWindows(t) // life plugin uses C
 	goCmd(t, "build", "-o", "issue25756.exe", "./issue25756/main.go")
+	goCmdBuildPluginFor(t, "issue25756", "-o", "life"+pluginSuffix, "./issue25756/plugin")
 	// Fails intermittently, but 20 runs should cause the failure
 	for n := 20; n > 0; n-- {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
@@ -452,38 +505,39 @@ func TestIssue25756(t *testing.T) {
 // Test with main using -buildmode=pie with plugin for issue #43228
 func TestIssue25756pie(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "life"+pluginSuffix, "./issue25756/plugin")
+	skipCgoPluginOnWindows(t) // life plugin uses C
 	goCmd(t, "build", "-buildmode=pie", "-o", "issue25756pie.exe", "./issue25756/main.go")
+	goCmdBuildPluginFor(t, "issue25756pie", "-o", "life"+pluginSuffix, "./issue25756/plugin")
 	run(t, "./issue25756pie.exe")
 }
 
 func TestMethod(t *testing.T) {
 	// Exported symbol's method must be live.
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "plugin"+pluginSuffix, "./method/plugin.go")
 	goCmd(t, "build", "-o", "method.exe", "./method/main.go")
+	goCmdBuildPluginFor(t, "method", "-o", "plugin"+pluginSuffix, "./method/plugin.go")
 	run(t, "./method.exe")
 }
 
 func TestMethod2(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "method2"+pluginSuffix, "./method2/plugin.go")
 	goCmd(t, "build", "-o", "method2.exe", "./method2/main.go")
+	goCmdBuildPluginFor(t, "method2", "-o", "method2"+pluginSuffix, "./method2/plugin.go")
 	run(t, "./method2.exe")
 }
 
 func TestMethod3(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "method3"+pluginSuffix, "./method3/plugin.go")
 	goCmd(t, "build", "-o", "method3.exe", "./method3/main.go")
+	goCmdBuildPluginFor(t, "method3", "-o", "method3"+pluginSuffix, "./method3/plugin.go")
 	run(t, "./method3.exe")
 }
 
 func TestIssue44956(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "issue44956p1"+pluginSuffix, "./issue44956/plugin1.go")
-	goCmdBuildPlugin(t, "-o", "issue44956p2"+pluginSuffix, "./issue44956/plugin2.go")
 	goCmd(t, "build", "-o", "issue44956.exe", "./issue44956/main.go")
+	goCmdBuildPluginFor(t, "issue44956", "-o", "issue44956p1"+pluginSuffix, "./issue44956/plugin1.go")
+	goCmdBuildPluginFor(t, "issue44956", "-o", "issue44956p2"+pluginSuffix, "./issue44956/plugin2.go")
 	run(t, "./issue44956.exe")
 }
 
@@ -494,8 +548,8 @@ func TestIssue52937(t *testing.T) {
 
 func TestIssue53989(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "issue53989"+pluginSuffix, "./issue53989/plugin.go")
 	goCmd(t, "build", "-o", "issue53989.exe", "./issue53989/main.go")
+	goCmdBuildPluginFor(t, "issue53989", "-o", "issue53989"+pluginSuffix, "./issue53989/plugin.go")
 	run(t, "./issue53989.exe")
 }
 
@@ -530,8 +584,8 @@ func TestSymbolNameMangle(t *testing.T) {
 
 func TestIssue62430(t *testing.T) {
 	globalSkip(t)
-	goCmdBuildPlugin(t, "-o", "issue62430"+pluginSuffix, "./issue62430/plugin.go")
 	goCmd(t, "build", "-o", "issue62430.exe", "./issue62430/main.go")
+	goCmdBuildPluginFor(t, "issue62430", "-o", "issue62430"+pluginSuffix, "./issue62430/plugin.go")
 	run(t, "./issue62430.exe")
 }
 
@@ -564,7 +618,7 @@ func TestIssue67976(t *testing.T) {
 func TestIssue75102(t *testing.T) {
 	globalSkip(t)
 	// add gcflags different from the executable file to trigger plugin open failed.
-	goCmdBuildPlugin(t, "-gcflags=all=-N -l", "-o", "issue75102"+pluginSuffix, "./issue75102/plugin.go")
 	goCmd(t, "build", "-o", "issue75102.exe", "./issue75102/main.go")
+	goCmdBuildPluginFor(t, "issue75102", "-gcflags=all=-N -l", "-o", "issue75102"+pluginSuffix, "./issue75102/plugin.go")
 	run(t, "./issue75102.exe")
 }

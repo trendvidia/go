@@ -19,11 +19,19 @@ package main
 import (
 	"encoding/json"
 	"plugin"
+	"runtime"
 	"testplugin/issue18676/dynamodbstreamsevt"
 )
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func main() {
-	plugin.Open("plugin.so")
+	plugin.Open("plugin" + pluginExt)
 
 	var x interface{} = (*dynamodbstreamsevt.Event)(nil)
 	if _, ok := x.(json.Unmarshaler); !ok {

@@ -4,10 +4,20 @@
 
 package main
 
-import "plugin"
+import (
+	"plugin"
+	"runtime"
+)
+
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
 
 func main() {
-	p, err := plugin.Open("issue24351.so")
+	p, err := plugin.Open("issue24351" + pluginExt)
 	if err != nil {
 		panic(err)
 	}

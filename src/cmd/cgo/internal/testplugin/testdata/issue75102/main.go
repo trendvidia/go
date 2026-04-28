@@ -7,10 +7,18 @@ package main
 import (
 	"fmt"
 	"plugin"
+	"runtime"
 )
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func init() {
-	_, err := plugin.Open("issue75102.so")
+	_, err := plugin.Open("issue75102" + pluginExt)
 	if err == nil {
 		panic("unexpected success to open a different version plugin")
 	}

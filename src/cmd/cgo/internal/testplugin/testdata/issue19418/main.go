@@ -8,10 +8,18 @@ import (
 	"fmt"
 	"os"
 	"plugin"
+	"runtime"
 )
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func main() {
-	p, err := plugin.Open("plugin.so")
+	p, err := plugin.Open("plugin" + pluginExt)
 	if err != nil {
 		panic(err)
 	}

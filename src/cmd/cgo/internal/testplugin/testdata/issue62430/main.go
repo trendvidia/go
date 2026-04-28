@@ -13,11 +13,19 @@ package main
 import (
 	"fmt"
 	"plugin"
+	"runtime"
 	"unicode"
 )
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func main() {
-	p, err := plugin.Open("issue62430.so")
+	p, err := plugin.Open("issue62430" + pluginExt)
 	if err != nil {
 		panic(err)
 	}

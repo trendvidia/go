@@ -13,14 +13,22 @@ package main
 
 import (
 	"plugin"
+	"runtime"
 
 	"testplugin/issue53989/p"
 )
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func main() {
 	p.Square(7) // call the function in main executable
 
-	p, err := plugin.Open("issue53989.so")
+	p, err := plugin.Open("issue53989" + pluginExt)
 	if err != nil {
 		panic(err)
 	}

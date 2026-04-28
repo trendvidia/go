@@ -10,7 +10,15 @@ import (
 	"flag"
 	"fmt"
 	"plugin"
+	"runtime"
 )
+
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
 
 const MAXDIM = 100
 
@@ -29,7 +37,7 @@ func main() {
 		}
 	}
 
-	p, err := plugin.Open("life.so")
+	p, err := plugin.Open("life" + pluginExt)
 	if err != nil {
 		panic(err)
 	}

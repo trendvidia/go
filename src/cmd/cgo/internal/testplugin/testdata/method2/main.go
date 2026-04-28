@@ -9,6 +9,7 @@ package main
 
 import (
 	"plugin"
+	"runtime"
 
 	"testplugin/method2/p"
 )
@@ -17,8 +18,15 @@ var t p.T
 
 type I interface{ M() }
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func main() {
-	pl, err := plugin.Open("method2.so")
+	pl, err := plugin.Open("method2" + pluginExt)
 	if err != nil {
 		panic(err)
 	}

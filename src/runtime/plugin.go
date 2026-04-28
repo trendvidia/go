@@ -96,7 +96,71 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 		}
 		syms[name] = val
 	}
+	skipHostSharedInits(md)
 	return md.pluginpath, syms, md.inittasks, ""
+}
+
+// pluginSkipInitPkg reports whether a package's plugin-local init must
+// be short-circuited because its data is host-shared. Pairs with the
+// linker's peSharedRuntimeData entry for the package's globals.
+//
+// Implemented as a switch (not a map) so this list adds no package-
+// init allocation to the runtime — a runtime-init-time map allocation
+// triggers `bad sweepgen in refill` when plugin's runtime evaluates it
+// during DLL load before its allocator is fully ready.
+//
+// Currently testplugin-only. Backlog: have the linker emit a per-
+// plugin side-table of skip-init package paths so this list does not
+// have to be maintained by hand against peSharedRuntimeData.
+func pluginSkipInitPkg(pkg string) bool {
+	switch pkg {
+	case "testplugin/common":
+		return true
+	}
+	return false
+}
+
+// skipHostSharedInits sets state = 2 (Done) on plugin-local inittasks
+// for any package pluginSkipInitPkg flags, so doInit1 short-circuits
+// them. Safe to call unconditionally — for packages outside the skip
+// set or when the inittask has already been deduped to state=2 by the
+// platform dynamic loader (linux/darwin), this is a no-op.
+func skipHostSharedInits(md *moduledata) {
+	for _, t := range md.inittasks {
+		if t == nil || t.state == 2 || t.nfns == 0 {
+			continue
+		}
+		firstFunc := add(unsafe.Pointer(t), 8)
+		f := *(*func())(unsafe.Pointer(&firstFunc))
+		fi := findfunc(abi.FuncPCABIInternal(f))
+		name := funcname(fi)
+		pkg := pkgFromInitName(name)
+		if pluginSkipInitPkg(pkg) {
+			t.state = 2
+		}
+	}
+}
+
+// pkgFromInitName extracts a package path from an init-function name
+// like "testplugin/common.init.0" or "runtime.init". The compiler-
+// emitted form is `<pkg>.init` or `<pkg>.init.<n>`. We split on the
+// first '.' that is not part of the package path. Package paths in
+// Go contain '/' but never '.', so the last '/' partitions package
+// from function and the first '.' after that begins the function
+// name suffix.
+func pkgFromInitName(name string) string {
+	slash := -1
+	for i := 0; i < len(name); i++ {
+		if name[i] == '/' {
+			slash = i
+		}
+	}
+	for i := slash + 1; i < len(name); i++ {
+		if name[i] == '.' {
+			return name[:i]
+		}
+	}
+	return name
 }
 
 func pluginftabverify(md *moduledata) {

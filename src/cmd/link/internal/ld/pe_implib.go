@@ -246,6 +246,13 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.didothers":                  true,
 	"runtime.boringCaches":               true,
 	"runtime.reflectOffs":                true,
+
+	// User-package globals shared from the host binary. Pairs with
+	// runtime.pluginSkipInitPkgs in src/runtime/plugin.go: when a
+	// user package's data is host-shared, plugin's init for that
+	// package must be short-circuited so it doesn't clobber host's
+	// already-initialized state. Currently testplugin-only.
+	"testplugin/common.X": true,
 }
 
 // peSharedV1Funcs lists package-level (non-method) functions whose v=1

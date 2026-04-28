@@ -96,12 +96,18 @@ func recordDependency(referencer, target *moduledata) {
 // already self-referential and no cross-module canonicalisation is
 // possible.
 func globalptrsinit() {
-	if firstmoduledata.next == nil {
+	// activeModules() returns the shared module list (host-tracked on
+	// Windows where firstmoduledata is per-binary). Use its length
+	// rather than firstmoduledata.next: when running in a plugin's
+	// runtime, plugin-local firstmoduledata.next is nil even though
+	// the shared list contains both host and plugin.
+	mods := activeModules()
+	if len(mods) < 2 {
 		// Single-module program; slots already self-referential.
 		return
 	}
 	lock(&canonicalSymsLock)
-	for _, md := range activeModules() {
+	for _, md := range mods {
 		if len(md.globalptrs) == 0 {
 			continue
 		}

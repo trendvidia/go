@@ -869,6 +869,12 @@ func (ctxt *Link) linksetup() {
 		sb.SetType(sym.SNOPTRDATA)
 		sb.AddUint8(1)
 	}
+	if ctxt.BuildMode == BuildModePlugin {
+		symIdx := ctxt.loader.LookupOrCreateSym("runtime.isPlugin", 0)
+		sb := ctxt.loader.MakeSymbolUpdater(symIdx)
+		sb.SetType(sym.SNOPTRDATA)
+		sb.AddUint8(1)
+	}
 
 	// Recalculate pe parameters now that we have ctxt.LinkMode set.
 	if ctxt.HeadType == objabi.Hwindows {

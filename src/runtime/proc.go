@@ -360,6 +360,13 @@ func runExitHooks(code int) {
 
 // start forcegc helper goroutine
 func init() {
+	if isPlugin {
+		// When loaded as a Go plugin, the host's runtime already runs
+		// a forcegchelper against the (host-shared) runtime.forcegc
+		// state. Spawning a second one here would race host's via the
+		// shared state, manifesting as `forcegc: phase error`.
+		return
+	}
 	go forcegchelper()
 }
 

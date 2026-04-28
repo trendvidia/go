@@ -1499,6 +1499,7 @@ var (
 var (
 	islibrary bool // -buildmode=c-shared
 	isarchive bool // -buildmode=c-archive
+	isPlugin  bool // -buildmode=plugin
 )
 
 // Must agree with internal/buildcfg.FramePointerEnabled.

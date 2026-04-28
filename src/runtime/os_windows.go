@@ -57,6 +57,7 @@ const (
 //go:cgo_import_dynamic runtime._SetWaitableTimer SetWaitableTimer%6 "kernel32.dll"
 //go:cgo_import_dynamic runtime._SuspendThread SuspendThread%1 "kernel32.dll"
 //go:cgo_import_dynamic runtime._SwitchToThread SwitchToThread%0 "kernel32.dll"
+//go:cgo_import_dynamic runtime._TerminateProcess TerminateProcess%2 "kernel32.dll"
 //go:cgo_import_dynamic runtime._TlsAlloc TlsAlloc%0 "kernel32.dll"
 //go:cgo_import_dynamic runtime._VirtualAlloc VirtualAlloc%4 "kernel32.dll"
 //go:cgo_import_dynamic runtime._VirtualFree VirtualFree%3 "kernel32.dll"
@@ -114,6 +115,7 @@ var (
 	_SetWaitableTimer,
 	_SuspendThread,
 	_SwitchToThread,
+	_TerminateProcess,
 	_TlsAlloc,
 	_VirtualAlloc,
 	_VirtualFree,
@@ -543,6 +545,30 @@ func exit(code int32) {
 	// kills the suspending thread, and then this thread suspends.
 	lock(&suspendLock)
 	atomic.Store(&exiting, 1)
+	if atomic.Load(&hostHasLoadedPlugins) != 0 {
+		// Once a Go-built plugin DLL is loaded, ExitProcess deadlocks in
+		// DLL_PROCESS_DETACH cleanup (reproducible from 2 plugins on; the
+		// hung process is unkillable even with taskkill /F). The DLL
+		// detach walk hits something — likely the per-DLL mingw
+		// __native_startup_lock + libgcc DWARF frame deregistration —
+		// that does not finish. TerminateProcess skips the detach walk,
+		// matching Linux's runtime.exit (SYS_exit_group) semantics.
+		// Close inherited stdio handles first so a parent process's
+		// pipe readers see EOF — TerminateProcess does not invoke the
+		// loader's per-handle cleanup that ExitProcess would.
+		const (
+			_STD_INPUT_HANDLE  = ^uintptr(9)  // -10
+			_STD_OUTPUT_HANDLE = ^uintptr(10) // -11
+			_STD_ERROR_HANDLE  = ^uintptr(11) // -12
+		)
+		for _, fd := range [3]uintptr{_STD_INPUT_HANDLE, _STD_OUTPUT_HANDLE, _STD_ERROR_HANDLE} {
+			h := stdcall(_GetStdHandle, fd)
+			if h != 0 && h != ^uintptr(0) {
+				stdcall(_CloseHandle, h)
+			}
+		}
+		stdcall(_TerminateProcess, ^uintptr(0), uintptr(code))
+	}
 	stdcall(_ExitProcess, uintptr(code))
 }
 

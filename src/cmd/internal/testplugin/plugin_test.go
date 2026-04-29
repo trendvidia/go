@@ -180,16 +180,15 @@ func goCmd(t *testing.T, env string, op string, args ...string) error {
 // it merges -pluginimplib=<implib> into -ldflags so the plugin's
 // IAT points at the matching host's import library.
 //
-// Bug D workaround: forces -linkmode=external on Windows. Without it,
-// internal-link plugins crash on cross-module user-package data
-// access (e.g. plugin's `common.X *= 7` faults on a write to a
-// read-only .windynamic IAT slot, or the compiler's globalptr-
-// indirection access pattern collides with the SDYNIMPORT/SWINDOWS
-// IAT path). The architectural fix needs to bypass the globalptr
-// indirection for IAT-shared symbols in `peGotRedirect`. Once that
-// lands the workaround can be dropped — the -linkmode=external
-// override is the only thing keeping this test from exercising the
-// pure-Go-no-mingw-required path the package was created to prove.
+// Bug D workaround: forces -linkmode=external on Windows. Internal-
+// link plugins crash on cross-module user-package data access
+// because mingw ld's runtime pseudo-relocation mechanism (which
+// patches plugin's compiled access pattern at load time to use host's
+// addresses directly) is only available under external link. The Go
+// internal linker has no equivalent. Architectural fix would either
+// implement pseudo-reloc-equivalent in the internal linker or change
+// the compiler's -dynlink data access pattern to be IAT-compatible.
+// Until then, force external link to keep this test green.
 func goCmdBuildPlugin(t *testing.T, implib string, args ...string) error {
 	if t != nil {
 		t.Helper()

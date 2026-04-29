@@ -366,6 +366,20 @@ var peSharedV1Funcs = map[string]bool{
 // Only call on Windows under -dynlink. Other heads/modes have their own
 // GOT machinery (ELF/Darwin via lib.go:AddGotSym).
 func peGotRedirect(arch *sys.Arch, ldr *loader.Loader, targ loader.Sym) loader.Sym {
+	// For internal-link data imports (SWINDOWS), the .windynamic slot
+	// IS the IAT slot — at link time it holds a placeholder, and the
+	// OS loader fills it with host's &X at LoadLibrary time. Return
+	// the SWINDOWS sym directly so the compiler-emitted access
+	// `MOV X@GOTPCREL(%rip), R; MOV (R), value` decodes to a load
+	// from &slot — which yields the slot's content (host's &X) in R,
+	// then dereferences to X's value. Synthesizing a wrapper SNOPTRDATA
+	// holding &slot would add a stale extra indirection: R would end
+	// up holding &slot rather than &X, and the deref would land on
+	// the slot's bytes (host's address) rather than X's value.
+	if ldr.SymType(targ) == sym.SWINDOWS {
+		return targ
+	}
+
 	// For host-shared symbols (SHOSTOBJ), peLoadImportLibrary created
 	// `__imp_<host-export-name>` as the SHOSTOBJ companion — keyed on the
 	// MANGLED export name (e.g. `__imp_runtime.findfunc.abi0`), not the
@@ -1463,17 +1477,31 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			// initdynimport's IAT-data-slot transform; external link
 			// shares the same superset.
 			//
-			// Package-data sharing for testplugin/common.X (so host's
-			// init-side mutations are visible to plugin readers) is NOT
-			// addressed by this curation alone — broadening DATA conversion
-			// or sharing user-package ..inittasks introduces GC-state /
-			// forcegc-phase / sweepgen regressions. See v3 roadmap.
+			// User-package data is also shared: with the compiler's
+			// globalptr-for-data indirection removed (Bug D fix),
+			// plugin's compiled access to a cross-module variable
+			// like `testplugin/common.X` emits a direct R_GOTPCREL
+			// that peGotRedirect rewrites to read the OS-loader-
+			// populated `__imp_X` IAT slot. For that to deliver
+			// host's address (rather than a plugin-local copy), the
+			// underlying symbol must be SDYNIMPORT/SHOSTOBJ.
+			//
+			// Excluded: runtime.* / internal/* — already handled by
+			// the curated peSharedRuntimeData list above. Non-listed
+			// runtime singletons stay plugin-local on purpose. Also
+			// go:* (linker-internal carriers, type descriptors,
+			// pkghashes) which are per-module by design.
 			if !st.IsText() {
 				share := strings.HasSuffix(lookupName, "..inittask") ||
 					lookupName == "runtime.writeBarrier" ||
 					lookupName == "runtime.tls_g" ||
 					lookupName == "runtime.lastmoduledatap" ||
 					peSharedRuntimeData[lookupName]
+				if !share && !strings.HasPrefix(lookupName, "runtime.") &&
+					!strings.HasPrefix(lookupName, "internal/") &&
+					!strings.HasPrefix(lookupName, "go:") {
+					share = true
+				}
 				if !share {
 					continue
 				}

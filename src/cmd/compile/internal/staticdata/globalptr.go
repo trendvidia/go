@@ -15,34 +15,29 @@ import (
 	"cmd/internal/objabi"
 )
 
-// GlobalPtrLsym returns the linker symbol for the go.globalptr.<orig.Name>
+// FuncPtrLsym returns the linker symbol for the go.funcptr.<orig.Name>
 // slot — a pointer-sized writable data location whose static initializer
 // is the address of orig. Under -shared/-dynlink, the compiler routes
-// global-variable references through this slot so the runtime can
-// rewrite the slot at module load to point at the canonical instance
-// (first-loader-wins) of orig across all loaded modules.
+// function-value references (closure code pointers, function values,
+// method-value wrappers) through this slot so the runtime can rewrite
+// the slot at module load to point at the canonical instance
+// (first-loader-wins) of orig across all loaded modules. Pointer
+// identity matters here — `f1 == f2` for func values stored in
+// interfaces requires the same address everywhere, which POSIX dynamic
+// linking doesn't natively guarantee for Go's higher-level value
+// semantics.
 //
 // DUPOK lets the linker dedup the slot across packages that reference
-// the same global. NOPTR means the GC does not scan the slot itself —
-// the original global's storage remains the GC root via its module's
+// the same function. NOPTR means the GC does not scan the slot itself —
+// the original function's storage remains the GC root via its module's
 // gcdata bitmap; the slot is only an indirection pointer.
 //
-// Callers in static-initializer contexts (where the value must be
-// computable at link time) must NOT use this; emit a direct relocation
-// to orig instead. The indirection is only valid in expression
-// contexts that execute at runtime.
-func GlobalPtrLsym(orig *obj.LSym) *obj.LSym {
-	return slotLsym("go.globalptr.", orig)
-}
-
-// FuncPtrLsym returns the linker symbol for the go.funcptr.<orig.Name>
-// slot — same shape as GlobalPtrLsym but for code-pointer indirection
-// (closure code pointers, function values, method-value wrappers).
-//
-// Two distinct namespaces (go.globalptr vs go.funcptr) so the runtime
-// and linker can separately enumerate data slots and code slots — Close
-// converts only the funcptr table to panic-on-call stubs at unload,
-// while the globalptr table follows a different invalidation path.
+// (DATA accesses do not use a slot indirection: Bug D found that the
+// 3-deref globalptr-style pattern collides with the IAT semantics on
+// Windows internal-link plugins, and on POSIX the OS dynamic linker's
+// GOT resolution already provides cross-module data sharing. The
+// compiler emits a direct extern reference for PEXTERN; the linker
+// routes through `__imp_X` on Windows or the GOT on POSIX.)
 func FuncPtrLsym(orig *obj.LSym) *obj.LSym {
 	return slotLsym("go.funcptr.", orig)
 }

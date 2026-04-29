@@ -108,12 +108,28 @@ func (d *deadcodePass) init() {
 		}
 
 		// We don't keep the go.plugin.exports symbol,
-		// but we do keep the symbols it refers to.
+		// but we do keep the symbols it refers to. Force each
+		// into the dynamic export set so plugin.Open's
+		// GetProcAddress(pluginpath.Sym) can resolve them on
+		// Windows. Without this, BSS data symbols (`var X int`)
+		// can be skipped by mingw ld's --export-all-symbols
+		// auto-export and never reach the PE export directory —
+		// the OLD globalptr-for-data path emitted an SDATA slot
+		// with R_ADDR(X) that promoted X out of the tentative
+		// state, which Bug D's compiler-side cleanup removes.
+		// Adding to dynexp makes the export uniform across link
+		// modes — addexport's loop calls Adddynsym, and the PE
+		// initdynexport collects CgoExportDynamic regardless.
 		exportsIdx := d.ldr.Lookup("go:plugin.exports", 0)
 		if exportsIdx != 0 {
 			relocs := d.ldr.Relocs(exportsIdx)
 			for i := 0; i < relocs.Count(); i++ {
-				d.mark(relocs.At(i).Sym(), 0)
+				rs := relocs.At(i).Sym()
+				d.mark(rs, 0)
+				if !d.ldr.AttrCgoExportDynamic(rs) {
+					d.ldr.SetAttrCgoExportDynamic(rs, true)
+					d.ctxt.dynexp = append(d.ctxt.dynexp, rs)
+				}
 			}
 		}
 	}

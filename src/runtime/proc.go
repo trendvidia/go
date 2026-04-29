@@ -885,9 +885,8 @@ func schedinit() {
 	cpuinit(godebug) // must run before alginit
 	alginit()        // maps, hash, rand must not be used before this call
 	mcommoninit(gp.m, -1)
-	modulesinit()    // provides activeModules
-	globalptrsinit() // canonicalise data-global slots; uses activeModules
-	funcptrsinit()   // canonicalise function-pointer slots; uses activeModules
+	modulesinit()  // provides activeModules
+	funcptrsinit() // canonicalise function-pointer slots; uses activeModules
 	typelinksinit()  // uses maps, activeModules
 	itabsinit()      // uses activeModules
 	stkobjinit()    // must run before GC starts

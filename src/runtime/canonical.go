@@ -43,7 +43,7 @@ var canonicalSymsLock mutex
 
 // canonicalSymName returns the target name for slot index i in the
 // per-module name table. Returned string shares storage with the
-// module's globalptrnames / funcptrnames blob (via unsafe.String);
+// module's funcptrnames blob (via unsafe.String);
 // valid for the lifetime of the module.
 func canonicalSymName(blob []byte, offs []int32, i int) string {
 	off := int(offs[i])
@@ -102,36 +102,15 @@ func recordDependency(referencer, target *moduledata) {
 	}
 }
 
-// globalptrsinit canonicalises go.globalptr.* slot indirections
-// across every active module to their first-loader-wins instance.
-// Run at every module load (host startup and each plugin load),
-// but short-circuits for single-module programs where slots are
-// already self-referential and no cross-module canonicalisation is
-// possible.
-func globalptrsinit() {
-	// activeModules() returns the shared module list (host-tracked on
-	// Windows where firstmoduledata is per-binary). Use its length
-	// rather than firstmoduledata.next: when running in a plugin's
-	// runtime, plugin-local firstmoduledata.next is nil even though
-	// the shared list contains both host and plugin.
-	mods := activeModules()
-	if len(mods) < 2 {
-		// Single-module program; slots already self-referential.
-		return
-	}
-	lock(&canonicalSymsLock)
-	for _, md := range mods {
-		if len(md.globalptrs) == 0 {
-			continue
-		}
-		canonicalizeSlots(md, md.globalptrs, md.globalptrnameoffs, md.globalptrnames)
-	}
-	unlock(&canonicalSymsLock)
-}
-
 // funcptrsinit canonicalises go.funcptr.* slot indirections (closure
-// code pointers, function values, method-value wrappers) the same
-// way globalptrsinit handles data globals.
+// code pointers, function values, method-value wrappers) so that
+// pointer-identity comparisons on func values work across modules.
+//
+// (Data-side canonicalisation was previously handled by globalptrsinit
+// walking md.globalptrs. That path was removed in the Bug D fix once
+// the compiler stopped emitting go.globalptr.* slots — cross-module
+// data sharing now goes through the linker's native mechanism on each
+// platform: the IAT on Windows, the GOT on POSIX.)
 func funcptrsinit() {
 	if firstmoduledata.next == nil {
 		return

@@ -42,9 +42,22 @@ import (
 // MSVC-vs-MinGW split via st.isMSVC.
 func peExportArgs(ctxt *Link, st *hostlinkState) {
 	if ctxt.BuildMode == BuildModePlugin {
-		// Plugin DLLs don't export a per-symbol .def file; the host
-		// controls export, and the plugin links against the host
-		// import library at -pluginimplib time.
+		// Plugin DLLs export the symbols collected via
+		// go:plugin.exports (each PluginExport gets CgoExportDynamic
+		// in deadcode.go). Generate a .def file so mingw ld
+		// exports them deterministically — relying on mingw's
+		// --export-all-symbols auto-export skips BSS data
+		// (`var X int`) in some cases, leaving the host's
+		// plugin.Open(...).Lookup() unable to find them via
+		// GetProcAddress.
+		fileName := pePluginExportFile(ctxt)
+		if fileName != "" {
+			prefix := ""
+			if st.isMSVC {
+				prefix = "-Wl,-def:"
+			}
+			st.argv = append(st.argv, prefix+fileName)
+		}
 		return
 	}
 	if ctxt.canUsePlugins {
@@ -2123,6 +2136,43 @@ func hasPluginPkg(ctxt *Link) bool {
 		}
 	}
 	return false
+}
+
+// pePluginExportFile creates a .def file listing every CgoExportDynamic
+// symbol in the plugin DLL. Returns the file path, or "" if no symbols
+// to export. The .def file's EXPORTS list overrides mingw ld's
+// --export-all-symbols heuristics, which skip BSS data symbols whose
+// only incoming reloc is from a RODATA carrier (see deadcode.go's
+// go:plugin.exports handling).
+func pePluginExportFile(ctxt *Link) string {
+	ldr := ctxt.loader
+	var names []string
+	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+		if !ldr.AttrReachable(s) || !ldr.AttrCgoExportDynamic(s) {
+			continue
+		}
+		name := ldr.SymName(s)
+		if peSkipSymName(name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+
+	fname := filepath.Join(*flagTmpdir, "plugin_exports.def")
+	var buf bytes.Buffer
+	buf.WriteString("EXPORTS\n")
+	for _, name := range names {
+		buf.WriteString(name)
+		buf.WriteByte('\n')
+	}
+	if err := os.WriteFile(fname, buf.Bytes(), 0666); err != nil {
+		Errorf("WriteFile %s failed: %v", fname, err)
+	}
+	return fname
 }
 
 // peCreateExportFile creates a file with exported symbols for Windows .def files.

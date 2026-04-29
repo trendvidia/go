@@ -185,48 +185,49 @@ func (ctxt *Link) typelink() {
 	}
 }
 
-// globalptrlink gathers all per-module go.globalptr.* and go.funcptr.*
-// indirection slots emitted by the compiler under -shared/-dynlink and
-// builds three carrier symbols per category:
+// funcptrlink gathers all per-module go.funcptr.* indirection slots
+// emitted by the compiler under -shared/-dynlink and builds three
+// carrier symbols:
 //
-//   - runtime.globalptrlinks / runtime.funcptrlinks — pointer-sized
-//     slot addresses (R_ADDR relocations to each slot).
-//   - runtime.globalptrnameoffs / runtime.funcptrnameoffs — int32
-//     offsets into the per-category names blob, one per slot.
-//   - runtime.globalptrnames / runtime.funcptrnames — packed null-
-//     terminated target names (extracted from the slot symbol's name
-//     by stripping the go.globalptr. or go.funcptr. prefix).
+//   - runtime.funcptrlinks — pointer-sized slot addresses (R_ADDR
+//     relocations to each slot).
+//   - runtime.funcptrnameoffs — int32 offsets into the names blob,
+//     one per slot.
+//   - runtime.funcptrnames — packed null-terminated target names
+//     (extracted from the slot symbol's name by stripping the
+//     go.funcptr. prefix).
 //
 // moduledata exposes the three carriers as parallel slices so the
 // runtime's canonicalisation pass can map each slot to its target's
 // name and look up the canonical (first-loader-wins) instance across
-// all loaded modules.
+// all loaded modules — needed so func values stored in interfaces
+// have stable address identity across host and plugin.
 //
 // In -buildmode=exe the compiler emits no slot symbols, so all
 // carriers remain zero-sized and runtime canonicalisation is a no-op.
-func (ctxt *Link) globalptrlink() {
+//
+// (Data-side indirection was previously emitted as go.globalptr.*
+// slots; that path was removed in the Bug D fix because it collided
+// with the IAT semantics the Go internal linker provides for cross-
+// module data on Windows. Cross-module data sharing now goes through
+// the linker's native mechanism on each platform — the IAT on Windows,
+// the GOT on POSIX.)
+func (ctxt *Link) funcptrlink() {
 	ldr := ctxt.loader
-	var globalptrs, funcptrs []loader.Sym
+	var funcptrs []loader.Sym
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
 		if !ldr.AttrReachable(s) {
 			continue
 		}
 		name := ldr.SymName(s)
-		switch {
-		case strings.HasPrefix(name, "go.globalptr."):
-			globalptrs = append(globalptrs, s)
-		case strings.HasPrefix(name, "go.funcptr."):
+		if strings.HasPrefix(name, "go.funcptr.") {
 			funcptrs = append(funcptrs, s)
 		}
 	}
-	slices.SortFunc(globalptrs, func(a, b loader.Sym) int {
-		return strings.Compare(ldr.SymName(a), ldr.SymName(b))
-	})
 	slices.SortFunc(funcptrs, func(a, b loader.Sym) int {
 		return strings.Compare(ldr.SymName(a), ldr.SymName(b))
 	})
 
-	ctxt.emitSlotCarriers("globalptr", globalptrs)
 	ctxt.emitSlotCarriers("funcptr", funcptrs)
 }
 

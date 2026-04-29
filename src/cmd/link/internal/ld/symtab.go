@@ -817,8 +817,8 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 		nilSlice() // moduleshashes slice
 	}
 
-	// L2 globalptrs / funcptrs slot tables and parallel name tables.
-	// Carriers are emitted by globalptrlink() in typelink.go; in
+	// L2 funcptrs slot table and parallel name tables. Carriers
+	// are emitted by funcptrlink() in typelink.go; in
 	// -buildmode=exe all carriers are zero-sized so the slice headers
 	// come out empty. Order matches the moduledata struct layout in
 	// runtime/symtab.go.
@@ -832,12 +832,9 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 		}
 	}
 	ptrSz := uint64(ctxt.Arch.PtrSize)
-	emitSlotSlice("runtime.globalptrlinks", ptrSz)
-	emitSlotSlice("runtime.globalptrnameoffs", 4)
-	// names slice: the carrier holds raw bytes; element size is 1.
-	emitSlotSlice("runtime.globalptrnames", 1)
 	emitSlotSlice("runtime.funcptrlinks", ptrSz)
 	emitSlotSlice("runtime.funcptrnameoffs", 4)
+	// names slice: the carrier holds raw bytes; element size is 1.
 	emitSlotSlice("runtime.funcptrnames", 1)
 
 	hasmain := ctxt.BuildMode == BuildModeExe || ctxt.BuildMode == BuildModePIE

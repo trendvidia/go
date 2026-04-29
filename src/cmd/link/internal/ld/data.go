@@ -1018,6 +1018,19 @@ func (ctxt *Link) windynrelocsyms() {
 			if ldr.SymType(s) != sym.SWINDOWS {
 				continue
 			}
+			// Skip SWINDOWS symbols that were originally DATA (Bug D
+			// fix): a JMP thunk is only valid for callable targets.
+			// For data SWINDOWS, R_ADDR must resolve directly to the
+			// .windynamic IAT slot so plugin's compiler-emitted load
+			// `MOV __imp_X(%rip), R; MOV (R), value` reads host's
+			// address from the slot and dereferences to the value.
+			// FuncInfo persists past peLoadImportLibrary's SetType
+			// conversion, so it's the reliable test for "was this
+			// originally a function?".
+			fi := ldr.FuncInfo(s)
+			if !fi.Valid() {
+				continue
+			}
 			// Record the stub offset for this SWINDOWS symbol.
 			// R_ADDR resolution (in relocsym) will use this.
 			stubOff := int32(rel.Size())

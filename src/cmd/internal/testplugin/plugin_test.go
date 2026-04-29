@@ -179,23 +179,13 @@ func goCmd(t *testing.T, env string, op string, args ...string) error {
 // goCmdBuildPlugin wraps `go build -buildmode=plugin`. On Windows
 // it merges -pluginimplib=<implib> into -ldflags so the plugin's
 // IAT points at the matching host's import library.
-//
-// Bug D workaround: forces -linkmode=external on Windows. Internal-
-// link plugins crash on cross-module user-package data access
-// because mingw ld's runtime pseudo-relocation mechanism (which
-// patches plugin's compiled access pattern at load time to use host's
-// addresses directly) is only available under external link. The Go
-// internal linker has no equivalent. Architectural fix would either
-// implement pseudo-reloc-equivalent in the internal linker or change
-// the compiler's -dynlink data access pattern to be IAT-compatible.
-// Until then, force external link to keep this test green.
 func goCmdBuildPlugin(t *testing.T, implib string, args ...string) error {
 	if t != nil {
 		t.Helper()
 	}
 	full := []string{"-buildmode=plugin"}
 	if runtime.GOOS == "windows" && implib != "" {
-		full = append(full, "-ldflags=-pluginimplib="+implib+" -linkmode=external")
+		full = append(full, "-ldflags=-pluginimplib="+implib)
 	}
 	full = append(full, args...)
 	return goCmd(t, "", "build", full...)

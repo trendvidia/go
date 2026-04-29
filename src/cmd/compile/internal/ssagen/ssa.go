@@ -5297,18 +5297,6 @@ func (s *state) addr(n ir.Node) *ssa.Value {
 		switch n.Class {
 		case ir.PEXTERN:
 			// global variable
-			if base.Ctxt.Flag_dynlink || base.Ctxt.Flag_shared {
-				// Indirect through a per-module go.globalptr.<sym>
-				// slot so the runtime can canonicalise to the
-				// first-loader's instance at module-load time. See
-				// staticdata.GlobalPtrLsym for the slot's shape and
-				// runtime/symtab.go for the rewriting pass.
-				// nil = compiler-internal symbol; fall through.
-				if slot := staticdata.GlobalPtrLsym(n.Linksym()); slot != nil {
-					slotAddr := s.entryNewValue1A(ssa.OpAddr, types.NewPtr(t), slot, s.sb)
-					return s.rawLoad(t, slotAddr)
-				}
-			}
 			return linksymOffset(n.Linksym(), 0)
 		case ir.PPARAM:
 			// parameter slot

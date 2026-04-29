@@ -13,16 +13,24 @@ import (
 	"fmt"
 	"os"
 	"plugin"
+	"runtime"
 )
 
-func main() {
-	a, err := plugin.Open("plugA.so")
-	if err != nil {
-		fail("Open(plugA.so): %v", err)
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
 	}
-	b, err := plugin.Open("plugB.so")
+	return ".so"
+}()
+
+func main() {
+	a, err := plugin.Open("plugA" + pluginExt)
 	if err != nil {
-		fail("Open(plugB.so): %v", err)
+		fail("Open(plugA): %v", err)
+	}
+	b, err := plugin.Open("plugB" + pluginExt)
+	if err != nil {
+		fail("Open(plugB): %v", err)
 	}
 
 	incA, err := a.Lookup("IncA")

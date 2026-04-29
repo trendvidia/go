@@ -12,12 +12,20 @@ import (
 	"fmt"
 	"os"
 	"plugin"
+	"runtime"
 )
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func main() {
-	p, err := plugin.Open("plugin1.so")
+	p, err := plugin.Open("closeapi-plugin1" + pluginExt)
 	if err != nil {
-		fail("Open(plugin1.so): %v", err)
+		fail("Open(closeapi-plugin1): %v", err)
 	}
 
 	// No other plugin loaded → no dependents.

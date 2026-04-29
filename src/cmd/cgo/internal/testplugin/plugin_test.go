@@ -157,19 +157,27 @@ func testMain(m *testing.M) int {
 	if runtime.GOOS != "windows" {
 		// On non-Windows, build host after plugins.
 		goCmd(nil, "build", "-o", "host.exe", "./host")
-
-		// v2/L3 fixtures: each acts as its own plugin host. On Windows
-		// each would need its own import library (the multi-host
-		// implib gap), so these are skipped on Windows in the
-		// corresponding tests.
-		goCmd(nil, "build", "-o", "closeapi.exe", "./closeapi")
-		goCmd(nil, "build", "-o", "panicstub.exe", "./panicstub")
-		goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
-
-		goCmd(nil, "build", "-buildmode=plugin", "-o=plugA.so", "./refcount/plugA")
-		goCmd(nil, "build", "-buildmode=plugin", "-o=plugB.so", "./refcount/plugB")
-		goCmd(nil, "build", "-o", "refcount.exe", "./refcount/host")
 	}
+
+	// v2/L3 fixtures: each acts as its own plugin host. On Windows
+	// each needs its own import library (each plugin's IAT names a
+	// specific host by basename), so build the host first and use
+	// goCmdBuildPluginFor to point its plugin at <host>.exe.a.
+	// closeunmaps remains POSIX-only because its fixture uses cgo
+	// + mincore syscalls; the test still skips on Windows.
+	goCmd(nil, "build", "-o", "closeapi.exe", "./closeapi")
+	goCmdBuildPluginFor(nil, "closeapi", "-o=closeapi-plugin1"+pluginSuffix, "./plugin1")
+
+	goCmd(nil, "build", "-o", "panicstub.exe", "./panicstub")
+	goCmdBuildPluginFor(nil, "panicstub", "-o=panicstub-plugin1"+pluginSuffix, "./plugin1")
+
+	if runtime.GOOS != "windows" {
+		goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
+	}
+
+	goCmd(nil, "build", "-o", "refcount.exe", "./refcount/host")
+	goCmdBuildPluginFor(nil, "refcount", "-o=plugA"+pluginSuffix, "./refcount/plugA")
+	goCmdBuildPluginFor(nil, "refcount", "-o=plugB"+pluginSuffix, "./refcount/plugB")
 
 	return m.Run()
 }
@@ -336,14 +344,34 @@ func TestRunHost(t *testing.T) {
 	run(t, "./host.exe")
 }
 
-// skipNotImplementedOnWindows skips the v2/L3 fixture-driven tests on
-// Windows. Each fixture acts as its own plugin host, so each needs
-// its own import library; goCmdBuildPlugin currently routes every
-// plugin through host.exe.a, so the multi-host implib gap is unfixed.
-// Re-enable when goCmdBuildPlugin can parameterise the implib path.
-func skipNotImplementedOnWindows(t *testing.T) {
+// skipPluginCloseOnWindows skips tests that require actual plugin
+// unload (Plugin.Close → kernel-side dlclose / FreeLibrary +
+// runtime-side funcptr panic-stub rewrite). Windows v3's
+// `unloadPlugin` is a no-op stub today: the multi-host implib gap
+// got resolved (each fixture's host gets its own host.exe.a, and
+// plugins link against the right one), but the deeper unload flow —
+// FreeLibrary + funcptr canonicalisation tear-down — isn't wired up.
+// Tests that only exercise the Close API surface (no post-Close
+// callbacks, no peer-plugin canonicalisation tear-down) pass; tests
+// that depend on the actual unload semantics still fail.
+func skipPluginCloseOnWindows(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("v2/L3 plugin test requires per-host import library on Windows; not yet implemented")
+		t.Skip("Windows: Plugin.Close unload + funcptr panic-stub rewrite not implemented")
+	}
+}
+
+// skipPeerPluginDataShareOnWindows skips tests that rely on
+// cross-plugin (peer-to-peer) DATA canonicalisation when the host
+// doesn't own the shared package. POSIX dlopen + dynamic linker GOT
+// resolves this naturally; on Windows, the v3 IAT path only handles
+// host→plugin sharing, and Bug D removed the globalptr-for-data
+// indirection that previously served the peer case. Re-enable once
+// peer-plugin DATA share is wired up (likely needs the host to
+// emit globalptr-equivalent indirection so plugA-as-canonical-owner
+// can be recorded and plugB rewrites through it).
+func skipPeerPluginDataShareOnWindows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows: peer-plugin data share (host doesn't own the symbol) not yet supported on internal link")
 	}
 }
 
@@ -365,7 +393,6 @@ func skipCgoPluginOnWindows(t *testing.T) {
 // Plugin.HasDependents, Plugin.Dependents.
 func TestCloseAPI(t *testing.T) {
 	globalSkip(t)
-	skipNotImplementedOnWindows(t)
 	run(t, "./closeapi.exe")
 }
 
@@ -377,7 +404,7 @@ func TestCloseAPI(t *testing.T) {
 // reference under recover() and checks the panic message.
 func TestPanicOnCallStub(t *testing.T) {
 	globalSkip(t)
-	skipNotImplementedOnWindows(t)
+	skipPluginCloseOnWindows(t)
 	run(t, "./panicstub.exe")
 }
 
@@ -390,7 +417,7 @@ func TestPanicOnCallStub(t *testing.T) {
 // unmap also happened.
 func TestCloseUnloadsMemory(t *testing.T) {
 	globalSkip(t)
-	skipNotImplementedOnWindows(t)
+	skipPluginCloseOnWindows(t)
 	run(t, "./closeunmaps.exe")
 }
 
@@ -404,7 +431,7 @@ func TestCloseUnloadsMemory(t *testing.T) {
 // plugB→plugA Close succeeds.
 func TestRefcountUnload(t *testing.T) {
 	globalSkip(t)
-	skipNotImplementedOnWindows(t)
+	skipPeerPluginDataShareOnWindows(t)
 	run(t, "./refcount.exe")
 }
 

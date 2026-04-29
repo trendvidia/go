@@ -15,13 +15,21 @@ import (
 	"fmt"
 	"os"
 	"plugin"
+	"runtime"
 	"strings"
 )
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func main() {
-	p, err := plugin.Open("plugin1.so")
+	p, err := plugin.Open("panicstub-plugin1" + pluginExt)
 	if err != nil {
-		fail("Open(plugin1.so): %v", err)
+		fail("Open(panicstub-plugin1): %v", err)
 	}
 	sym, err := p.Lookup("F")
 	if err != nil {

@@ -22,6 +22,51 @@ import (
 	"cmd/link/internal/sym"
 )
 
+// isMethodBodyName reports whether a symbol name matches the
+// pkg.(*Recv).Method or pkg.Recv.Method pattern — i.e. a method body
+// reachable from a type descriptor's R_METHODOFF / R_ADDROFF reloc.
+// Such bodies cannot be host-shared by deletion-and-IAT-redirect: the
+// type descriptor needs the body to remain in plugin's text section.
+//
+// Heuristic: the name has the shape `<segment>.<segment>.<segment>`
+// where the second segment starts with `(` (pointer receiver) or is
+// a bare identifier (value receiver) and the third segment is the
+// method name. We check for the receiver `(` first (cheap), then for
+// the value-receiver shape (more expensive: need to make sure the
+// middle segment isn't a package path component).
+func isMethodBodyName(name string) bool {
+	// Find the LAST dot — it separates Method from the rest.
+	lastDot := strings.LastIndexByte(name, '.')
+	if lastDot < 0 {
+		return false
+	}
+	// Find the dot before that — separates Recv from pkg.
+	prevDot := strings.LastIndexByte(name[:lastDot], '.')
+	if prevDot < 0 {
+		return false
+	}
+	recv := name[prevDot+1 : lastDot]
+	// Pointer receiver: "(*T)".
+	if len(recv) >= 4 && recv[0] == '(' && recv[1] == '*' && recv[len(recv)-1] == ')' {
+		return true
+	}
+	// Value receiver: bare identifier. To avoid false positives on
+	// package paths like `internal/abi.foo`, ensure recv starts with
+	// an uppercase letter (Go exported type) or contains no '/'.
+	// Simpler: package paths contain '/' but type names don't.
+	// And the segment before recv must look like a package path
+	// (allow lowercase, slashes), recv itself is the type, last is method.
+	if strings.ContainsAny(recv, "/") {
+		return false
+	}
+	// recv is a single identifier-ish token. Could be a type or a
+	// package-final segment. Disambiguate by checking if there's
+	// also an internal type-suffixed pattern. For now, treat any
+	// `pkg.Recv.Method` shape as method-body when recv is a single
+	// identifier — false positives at worst keep things plugin-local.
+	return true
+}
+
 // peSkipSymName reports whether the given symbol name should be excluded
 // from PE export tables and import libraries. It filters out internal
 // linker symbols, PE artifacts, and type descriptors.
@@ -1377,11 +1422,16 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		var triedVers []int
 		if ver >= 0 {
 			triedVers = []int{ver}
-		} else if ctxt.IsExternal() {
+		} else if ctxt.IsExternal() && isMethodBodyName(lookupName) && !peSharedV1Funcs[lookupName] {
+			// Method bodies (pkg.(*Recv).Method / pkg.Recv.Method)
+			// can't be converted at v=1 because plugin's type-
+			// descriptors carry R_METHODOFF / R_ADDROFF relocs
+			// pointing at the method body offset within plugin's
+			// text section. Removing the body orphans those relocs.
+			// Convert at v=0 only (ABI0 wrapper has no type-
+			// descriptor reference). Allowlist in peSharedV1Funcs
+			// can override (no methods there today, but reserved).
 			triedVers = []int{0}
-			if peSharedV1Funcs[lookupName] {
-				triedVers = []int{0, 1}
-			}
 		} else {
 			triedVers = []int{0, 1}
 		}

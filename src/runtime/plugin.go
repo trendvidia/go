@@ -10,6 +10,71 @@ import (
 	"unsafe"
 )
 
+// plugin_validatePluginPkghashes validates a freshly-loaded Windows
+// plugin's per-package fingerprints against host's. addr is the address
+// of the plugin's go:plugin.pkghashes export — a slice header
+// (ptr, len, cap) referencing the plugin's go:link.pkghashes carrier
+// (a []modulehash). For each plugin entry we look up the same package
+// in firstmoduledata.pkghashes (host's carrier, populated by symtab.go
+// for hosts that import the plugin package) and compare linktimehash.
+// A mismatch returns an error string; absent (host doesn't link the
+// package) is OK.
+//
+// This replaces the upstream runtimehash-pointer rebinding that ld.so
+// performs on linux/darwin but Windows PE has no equivalent of —
+// see plans/i-am-still-not-velvet-hummingbird.md for the rationale.
+//
+// Empty addr (plugin built with an older toolchain that lacks the
+// export) returns "" so loading proceeds without a check, matching the
+// pre-fix behavior.
+//
+//go:linkname plugin_validatePkghashes plugin.validatePkghashes
+func plugin_validatePkghashes(addr uintptr) string {
+	if addr == 0 {
+		return ""
+	}
+	hdr := (*[3]uintptr)(unsafe.Pointer(addr))
+	n := hdr[1]
+	if n == 0 {
+		return ""
+	}
+	pluginEntries := unsafe.Slice((*modulehash)(unsafe.Pointer(hdr[0])), int(n))
+	var mismatchPkg string
+	for i := range pluginEntries {
+		for j := range firstmoduledata.pkghashes {
+			if firstmoduledata.pkghashes[j].modulename != pluginEntries[i].modulename {
+				continue
+			}
+			if firstmoduledata.pkghashes[j].linktimehash != pluginEntries[i].linktimehash {
+				mismatchPkg = pluginEntries[i].modulename
+			}
+			break
+		}
+		if mismatchPkg != "" {
+			break
+		}
+	}
+	if mismatchPkg == "" {
+		return ""
+	}
+	// Mark the just-loaded plugin's moduledata as bad. The freshly-
+	// loaded module is the last non-bad entry in the chain
+	// (addmoduledata, run from plugin's DllMain, appended it).
+	// resolveTypeOff / resolveNameOff / textOff in runtime/type.go
+	// skip bad modules so the half-initialized typemap of a rejected
+	// plugin doesn't poison subsequent reflect operations.
+	var md *moduledata
+	for pmd := firstmoduledata.next; pmd != nil; pmd = pmd.next {
+		if !pmd.bad {
+			md = pmd
+		}
+	}
+	if md != nil {
+		md.bad = true
+	}
+	return "plugin was built with a different version of package " + mismatchPkg
+}
+
 //go:linkname plugin_lastmoduleinit plugin.lastmoduleinit
 func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*initTask, errstr string) {
 	var md *moduledata

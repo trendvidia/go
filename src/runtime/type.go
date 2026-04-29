@@ -297,6 +297,13 @@ func resolveNameOff(ptrInModule unsafe.Pointer, off nameOff) name {
 	}
 	base := uintptr(ptrInModule)
 	for md := &firstmoduledata; md != nil; md = md.next {
+		if md.bad {
+			// A rejected plugin (failed pkghash check or duplicate
+			// open) leaves md in the chain with its types range set
+			// but typelinksinit/typeptrsinit not yet run. Walking
+			// such a module returns half-initialized type info; skip.
+			continue
+		}
 		if base >= md.types && base < md.etypes {
 			res := md.types + uintptr(off)
 			if res > md.etypes {
@@ -334,6 +341,9 @@ func resolveTypeOff(ptrInModule unsafe.Pointer, off typeOff) *_type {
 	base := uintptr(ptrInModule)
 	var md *moduledata
 	for next := &firstmoduledata; next != nil; next = next.next {
+		if next.bad {
+			continue // see resolveNameOff for why bad modules are skipped.
+		}
 		if base >= next.types && base < next.etypes {
 			md = next
 			break
@@ -376,6 +386,9 @@ func (t rtype) textOff(off textOff) unsafe.Pointer {
 	base := uintptr(unsafe.Pointer(t.Type))
 	var md *moduledata
 	for next := &firstmoduledata; next != nil; next = next.next {
+		if next.bad {
+			continue // see resolveNameOff for why bad modules are skipped.
+		}
 		if base >= next.types && base < next.etypes {
 			md = next
 			break

@@ -736,7 +736,19 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 
 	if ctxt.BuildMode == BuildModePlugin {
 		addgostring(ctxt, ldr, moduledata, "go:link.thispluginpath", objabi.PathToPrefix(*flagPluginPath))
+	} else {
+		moduledata.AddUint(ctxt.Arch, 0) // pluginpath
+		moduledata.AddUint(ctxt.Arch, 0)
+	}
 
+	// Emit the pkghashes carrier on plugins (always, all heads — used by
+	// the upstream runtimehash/linktimehash check) and on Windows hosts
+	// that import the plugin package (so the runtime can resolve a
+	// plugin's pkghash entry to host's by package name during
+	// plugin.Open — Bug A, Windows version-mismatch detection).
+	emitPkghashes := ctxt.BuildMode == BuildModePlugin ||
+		(ctxt.IsWindows() && ctxt.CanUsePlugins())
+	if emitPkghashes {
 		pkghashes := ldr.CreateSymForUpdate("go:link.pkghashes", 0)
 		pkghashes.SetLocal(true)
 		pkghashes.SetType(sym.SRODATA)
@@ -752,8 +764,6 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 		}
 		slice(pkghashes.Sym(), uint64(len(ctxt.Library)))
 	} else {
-		moduledata.AddUint(ctxt.Arch, 0) // pluginpath
-		moduledata.AddUint(ctxt.Arch, 0)
 		nilSlice() // pkghashes slice
 	}
 	// Add inittasks slice

@@ -1935,6 +1935,16 @@ func addPEBaseReloc(ctxt *Link) {
 
 func (ctxt *Link) dope() {
 	initdynimport(ctxt)
+	// For Windows plugin DLLs, pre-create the go:plugin.pkghashes export
+	// symbol so peExportAllSymbols / initdynexport pick it up. The symbol
+	// is a 24-byte slice header (ptr, len, cap) referencing the
+	// go:link.pkghashes carrier that symtab.go populates later.
+	// host/plugin_windows.go uses GetProcAddress("go:plugin.pkghashes")
+	// to find it and validate plugin's per-package fingerprints against
+	// host's at plugin.Open time (Bug A).
+	if ctxt.BuildMode == BuildModePlugin && ctxt.HeadType == objabi.Hwindows {
+		addPluginPkghashesExport(ctxt)
+	}
 	// When building a plugin host or plugin DLL on Windows with internal
 	// linking, export all reachable symbols.
 	// - Host: so the import library can reference them for plugin builds
@@ -1946,6 +1956,27 @@ func (ctxt *Link) dope() {
 	}
 	initdynexport(ctxt)
 	writeSEH(ctxt)
+}
+
+// addPluginPkghashesExport creates the go:plugin.pkghashes well-known
+// export — a slice header (ptr, len, cap) referencing the eventual
+// go:link.pkghashes carrier. Marked reachable + CgoExportDynamic so
+// peExportAllSymbols / initdynexport / addexports route it into the
+// plugin DLL's PE export directory. The carrier itself is populated by
+// symtab.go's pkghashes block; the R_ADDR reloc here resolves at the
+// final address-assignment phase.
+func addPluginPkghashesExport(ctxt *Link) {
+	ldr := ctxt.loader
+	carrier := ldr.LookupOrCreateSym("go:link.pkghashes", 0)
+	ldr.SetAttrReachable(carrier, true)
+
+	export := ldr.CreateSymForUpdate("go:plugin.pkghashes", 0)
+	export.SetType(sym.SRODATA)
+	export.AddAddr(ctxt.Arch, carrier)
+	export.AddUint(ctxt.Arch, uint64(len(ctxt.Library)))
+	export.AddUint(ctxt.Arch, uint64(len(ctxt.Library)))
+	ldr.SetAttrReachable(export.Sym(), true)
+	ldr.SetAttrCgoExportDynamic(export.Sym(), true)
 }
 
 func setpersrc(ctxt *Link, syms []loader.Sym) {

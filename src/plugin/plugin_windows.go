@@ -43,6 +43,14 @@ func open(name string) (*Plugin, error) {
 	if plugins == nil {
 		plugins = make(map[string]*Plugin)
 	}
+
+	if proc, err := syscall.GetProcAddress(h, "go:plugin.pkghashes"); err == nil {
+		if errstr := validatePkghashes(uintptr(proc)); errstr != "" {
+			pluginsMu.Unlock()
+			return nil, errors.New(`plugin.Open("` + name + `"): ` + errstr)
+		}
+	}
+
 	pluginpath, syms, initTasks, errstr := lastmoduleinit()
 	if errstr != "" {
 		plugins[pluginPath] = &Plugin{
@@ -119,6 +127,15 @@ var (
 //
 //go:linkname lastmoduleinit
 func lastmoduleinit() (pluginpath string, syms map[string]any, inittasks []*initTask, errstr string)
+
+// validatePkghashes is defined in runtime/plugin.go via go:linkname.
+// addr is the address (from GetProcAddress) of the plugin's
+// go:plugin.pkghashes export, i.e. a slice header for the plugin's
+// pkghashes carrier. Returns "" on success or an error message
+// describing the first mismatched package.
+//
+//go:linkname validatePkghashes
+func validatePkghashes(addr uintptr) string
 
 // doInit is defined in package runtime.
 //

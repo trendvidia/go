@@ -603,16 +603,13 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 	}
 	if cfg.BuildBuildmode == "plugin" {
 		ldflags = append(ldflags, "-pluginpath", pluginPath(root))
-		// On Windows, disable DWARF in plugin DLLs. Host-provided symbols
-		// are converted to SDYNIMPORT which invalidates their DWARF refs.
-		// The host's import library must be passed explicitly via
-		// -ldflags=-pluginimplib=<path> when building plugins.
 		if cfg.Goos == "windows" {
-			ldflags = append(ldflags, "-w")
-			// Verify the user supplied -pluginimplib in their ldflags
-			// (forcedLdflags or the package's own Ldflags). Without it
-			// the linker can't resolve the host-shared runtime symbols
-			// and emits a confusing "cannot find runtime/cgo" error.
+			// Host's import library must be passed explicitly via
+			// -ldflags=-pluginimplib=<path> when building plugins.
+			// Verify the user supplied it (forcedLdflags or the
+			// package's own Ldflags). Without it the linker can't
+			// resolve the host-shared runtime symbols and emits a
+			// confusing "cannot find runtime/cgo" error.
 			hasImplib := false
 			for _, f := range forcedLdflags {
 				if strings.HasPrefix(f, "-pluginimplib=") {

@@ -1724,9 +1724,12 @@ func (l *Loader) SEHUnwindSym(fnSymIdx Sym) Sym {
 // lookups, e.f. for function with name XYZ we would then look up
 // go.info.XYZ, etc.
 func (l *Loader) GetFuncDwarfAuxSyms(fnSymIdx Sym) (auxDwarfInfo, auxDwarfLoc, auxDwarfRanges, auxDwarfLines Sym) {
-	if l.SymType(fnSymIdx) == sym.SDYNIMPORT || l.SymType(fnSymIdx) == sym.SWINDOWS {
-		// Symbol was converted to a dynamic import (e.g., for Windows
-		// plugin host-provided symbols). No DWARF info available.
+	switch l.SymType(fnSymIdx) {
+	case sym.SDYNIMPORT, sym.SWINDOWS, sym.SHOSTOBJ:
+		// Symbol was converted to a host import (e.g., Windows plugin
+		// host-provided text symbols routed through the IAT under
+		// internal link, or undefined externs under external link).
+		// No DWARF info travels with the converted form.
 		return
 	}
 	if !l.SymType(fnSymIdx).IsText() {

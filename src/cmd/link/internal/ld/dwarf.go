@@ -517,6 +517,19 @@ func (d *dwctxt) defgotype(gotype loader.Sym) loader.Sym {
 		return d.mustFind("<unspecified>")
 	}
 
+	// Host-shared type descriptors (Windows plugin builds) live in
+	// host's image, not the plugin's. Their data is cleared during
+	// peLoadImportLibrary's SHOSTOBJ/SDYNIMPORT conversion, so
+	// `newtype` would error on `missing type`. Return the
+	// `<unspecified>` placeholder DIE so DW_AT_type / DW_AT_go_elem /
+	// etc. references resolve to a real DIE; the canonical DIE for
+	// these types lives in host's DWARF where the descriptor's data
+	// is intact, and the debugger picks it up when the host binary
+	// is loaded alongside the plugin.
+	if isHostSharedSym(d.ldr, gotype) {
+		return d.mustFind("<unspecified>")
+	}
+
 	// If we already have a tdmap entry for the gotype, return it.
 	if ds, ok := d.tdmap[gotype]; ok {
 		return ds
@@ -709,7 +722,7 @@ func (d *dwctxt) newtype(gotype loader.Sym) *dwarf.DWDie {
 	newattr(die, dwarf.DW_AT_go_kind, dwarf.DW_CLS_CONSTANT, int64(kind), 0)
 
 	if d.ldr.AttrReachable(gotype) {
-		newattr(die, dwarf.DW_AT_go_runtime_type, dwarf.DW_CLS_GO_TYPEREF, 0, dwSym(gotype))
+		d.addRuntimeTypeAttr(die, gotype)
 	}
 
 	// Sanity check.
@@ -758,7 +771,7 @@ func (d *dwctxt) defptrto(dwtype loader.Sym) loader.Sym {
 	gts := d.ldr.Lookup("type:"+ptrname, 0)
 	if gts != 0 && d.ldr.AttrReachable(gts) {
 		newattr(pdie, dwarf.DW_AT_go_kind, dwarf.DW_CLS_CONSTANT, int64(abi.Pointer), 0)
-		newattr(pdie, dwarf.DW_AT_go_runtime_type, dwarf.DW_CLS_GO_TYPEREF, 0, dwSym(gts))
+		d.addRuntimeTypeAttr(pdie, gts)
 	}
 
 	if gts != 0 {
@@ -1851,9 +1864,62 @@ func (d *dwctxt) dwarfVisitFunction(fnSym loader.Sym, unit *sym.CompilationUnit)
 // done before symbol names are mangled while dwarfGenerateDebugSyms does
 // all the work that can only be done after addresses have been assigned to
 // text symbols.
+// isHostSharedSym reports whether s was retyped to a host-import form
+// by `peLoadImportLibrary` on Windows plugin builds. Such symbols have
+// no body, no relocs, and no DWARF info in this image — host owns the
+// canonical instance. DWARF emission must skip them so we don't emit
+// DIEs / `type:X` references that would leave dangling relocs.
+//
+// SHOSTOBJ covers external-link plugins (mingw ld resolves the undef
+// extern via host.exe.a). SDYNIMPORT covers internal-link plugins
+// before initdynimport's pass; SWINDOWS is the post-pass form. All
+// three indicate "this symbol's storage and identity live in host".
+func isHostSharedSym(ldr *loader.Loader, s loader.Sym) bool {
+	switch ldr.SymType(s) {
+	case sym.SHOSTOBJ, sym.SDYNIMPORT, sym.SWINDOWS:
+		return true
+	}
+	return false
+}
+
+// addRuntimeTypeAttr attaches a DW_AT_go_runtime_type attribute to die
+// pointing at gotype, but only when gotype carries actual type-descriptor
+// data in this image. Host-shared type descriptors (Bug D / Bug B
+// interaction on Windows plugin builds) have their data stripped during
+// peLoadImportLibrary's conversion; emitting a DW_CLS_GO_TYPEREF to
+// them produces a R_ADDR reloc to a section-less target that fails as
+// `unreachable sym in relocation`. The canonical DIE for these types
+// lives in host's DWARF; debuggers that load both binaries see it
+// there.
+func (d *dwctxt) addRuntimeTypeAttr(die *dwarf.DWDie, gotype loader.Sym) {
+	if gotype == 0 || isHostSharedSym(d.ldr, gotype) || !d.ldr.AttrReachable(gotype) {
+		return
+	}
+	newattr(die, dwarf.DW_AT_go_runtime_type, dwarf.DW_CLS_GO_TYPEREF, 0, dwSym(gotype))
+}
+
 func dwarfGenerateDebugInfo(ctxt *Link) {
 	if !dwarfEnabled(ctxt) {
 		return
+	}
+
+	// Drop converted host-import symbols from per-unit Textp slices
+	// before any DWARF pass walks them. peLoadImportLibrary (Windows
+	// plugin) retypes plugin-local stubs to SDYNIMPORT/SWINDOWS
+	// (internal link) or SHOSTOBJ (external link); converted syms
+	// have no body, no FuncInfo, and contribute no PC range — keeping
+	// them in unit.Textp leaves a CU with non-empty Textp but empty
+	// PCs, which trips compilationUnitByStartPCCmp's `a.PCs[0]` access.
+	for _, unit := range ctxt.compUnits {
+		j := 0
+		for _, s := range unit.Textp {
+			if isHostSharedSym(ctxt.loader, s) {
+				continue
+			}
+			unit.Textp[j] = s
+			j++
+		}
+		unit.Textp = unit.Textp[:j]
 	}
 
 	d := &dwctxt{
@@ -1881,12 +1947,12 @@ func dwarfGenerateDebugInfo(ctxt *Link) {
 	// Some types that must exist to define other ones (uintptr in particular
 	// is needed for array size)
 	unsafeptrDie := d.mkBuiltinType(ctxt, dwarf.DW_ABRV_BARE_PTRTYPE, "unsafe.Pointer")
-	newattr(unsafeptrDie, dwarf.DW_AT_go_runtime_type, dwarf.DW_CLS_GO_TYPEREF, 0, dwSym(d.lookupOrDiag("type:unsafe.Pointer")))
+	d.addRuntimeTypeAttr(unsafeptrDie, d.lookupOrDiag("type:unsafe.Pointer"))
 	uintptrDie := d.mkBuiltinType(ctxt, dwarf.DW_ABRV_BASETYPE, "uintptr")
 	newattr(uintptrDie, dwarf.DW_AT_encoding, dwarf.DW_CLS_CONSTANT, dwarf.DW_ATE_unsigned, 0)
 	newattr(uintptrDie, dwarf.DW_AT_byte_size, dwarf.DW_CLS_CONSTANT, int64(d.arch.PtrSize), 0)
 	newattr(uintptrDie, dwarf.DW_AT_go_kind, dwarf.DW_CLS_CONSTANT, int64(abi.Uintptr), 0)
-	newattr(uintptrDie, dwarf.DW_AT_go_runtime_type, dwarf.DW_CLS_GO_TYPEREF, 0, dwSym(d.lookupOrDiag("type:uintptr")))
+	d.addRuntimeTypeAttr(uintptrDie, d.lookupOrDiag("type:uintptr"))
 
 	d.uintptrInfoSym = d.mustFind("uintptr")
 
@@ -2140,6 +2206,13 @@ func (d *dwctxt) writedebugaddr(unit *sym.CompilationUnit, debugaddr loader.Sym)
 		// collect relocations corresponding to indirect function
 		// references via .debug_addr.
 		dsyms = dsyms[:0]
+		// On Windows plugin builds, host-imported text symbols carry
+		// no DWARF info — GetFuncDwarfAuxSyms returns 0 for SDYNIMPORT
+		// / SWINDOWS / SHOSTOBJ entries. Skip those rather than feeding
+		// sym 0 into the reloc walk below.
+		if infosym == 0 {
+			continue
+		}
 		dsyms = append(dsyms, infosym)
 		if rangessym != 0 {
 			dsyms = append(dsyms, rangessym)
@@ -2490,12 +2563,21 @@ func dwarfcompress(ctxt *Link) {
 }
 
 func compilationUnitByStartPCCmp(a, b *sym.CompilationUnit) int {
+	// A CU may have non-empty Textp but empty PCs after Bug B's
+	// filter strips host-imported (SDYNIMPORT / SHOSTOBJ / SWINDOWS)
+	// symbols from unit.Textp: calcCompUnitRanges only adds a PC
+	// entry for symbols with valid FuncInfo and a non-nil Unit, and
+	// linker-generated stubs in unit.Textp may have neither. Sort by
+	// PCs presence rather than Textp presence so units with no PCs
+	// fall back to package-name ordering instead of indexing PCs[0].
+	aHasPC := len(a.PCs) > 0
+	bHasPC := len(b.PCs) > 0
 	switch {
-	case len(a.Textp) == 0 && len(b.Textp) == 0:
+	case !aHasPC && !bHasPC:
 		return strings.Compare(a.Lib.Pkg, b.Lib.Pkg)
-	case len(a.Textp) != 0 && len(b.Textp) == 0:
+	case aHasPC && !bHasPC:
 		return -1
-	case len(a.Textp) == 0 && len(b.Textp) != 0:
+	case !aHasPC && bHasPC:
 		return +1
 	default:
 		return cmp.Compare(a.PCs[0].Start, b.PCs[0].Start)

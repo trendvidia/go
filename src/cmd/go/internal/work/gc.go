@@ -609,6 +609,28 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 		// -ldflags=-pluginimplib=<path> when building plugins.
 		if cfg.Goos == "windows" {
 			ldflags = append(ldflags, "-w")
+			// Verify the user supplied -pluginimplib in their ldflags
+			// (forcedLdflags or the package's own Ldflags). Without it
+			// the linker can't resolve the host-shared runtime symbols
+			// and emits a confusing "cannot find runtime/cgo" error.
+			hasImplib := false
+			for _, f := range forcedLdflags {
+				if strings.HasPrefix(f, "-pluginimplib=") {
+					hasImplib = true
+					break
+				}
+			}
+			if !hasImplib {
+				for _, f := range root.Package.Internal.Ldflags {
+					if strings.HasPrefix(f, "-pluginimplib=") {
+						hasImplib = true
+						break
+					}
+				}
+			}
+			if !hasImplib {
+				return fmt.Errorf("-buildmode=plugin on windows requires -ldflags=-pluginimplib=<path-to-host>.exe.a (the host's import library, generated automatically when you `go build` an executable that imports the plugin package)")
+			}
 		}
 	}
 	// On Windows, pass the final executable name to the linker so the

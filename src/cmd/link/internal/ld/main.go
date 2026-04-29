@@ -253,6 +253,16 @@ func Main(arch *sys.Arch, theArch Arch) {
 		Exitf("dynamic linking required on %s; -d flag cannot be used", buildcfg.GOOS)
 	}
 
+	// Windows plugin builds need the host's import library so the plugin
+	// can resolve runtime.addmoduledata and other host-shared symbols.
+	// Without it, the linker falls back to loading runtime/cgo and then
+	// fails on unresolved relocations from gentextPluginDllMain — a
+	// confusing error stack ("loadinternal: cannot find runtime/cgo")
+	// that doesn't tell the user what's actually missing. Fail fast.
+	if ctxt.HeadType == objabi.Hwindows && ctxt.BuildMode == BuildModePlugin && *flagPluginImplib == "" {
+		Exitf("-buildmode=plugin on windows requires -pluginimplib=<path-to-host>.exe.a (the host's import library, generated automatically when you `go build` an executable that imports the plugin package)")
+	}
+
 	isPowerOfTwo := func(n int64) bool {
 		return n > 0 && n&(n-1) == 0
 	}

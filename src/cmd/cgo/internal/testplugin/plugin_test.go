@@ -163,17 +163,14 @@ func testMain(m *testing.M) int {
 	// each needs its own import library (each plugin's IAT names a
 	// specific host by basename), so build the host first and use
 	// goCmdBuildPluginFor to point its plugin at <host>.exe.a.
-	// closeunmaps remains POSIX-only because its fixture uses cgo
-	// + mincore syscalls; the test still skips on Windows.
 	goCmd(nil, "build", "-o", "closeapi.exe", "./closeapi")
 	goCmdBuildPluginFor(nil, "closeapi", "-o=closeapi-plugin1"+pluginSuffix, "./plugin1")
 
 	goCmd(nil, "build", "-o", "panicstub.exe", "./panicstub")
 	goCmdBuildPluginFor(nil, "panicstub", "-o=panicstub-plugin1"+pluginSuffix, "./plugin1")
 
-	if runtime.GOOS != "windows" {
-		goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
-	}
+	goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
+	goCmdBuildPluginFor(nil, "closeunmaps", "-o=closeunmaps-plugin1"+pluginSuffix, "./plugin1")
 
 	goCmd(nil, "build", "-o", "refcount.exe", "./refcount/host")
 	goCmdBuildPluginFor(nil, "refcount", "-o=plugA"+pluginSuffix, "./refcount/plugA")
@@ -408,15 +405,15 @@ func TestPanicOnCallStub(t *testing.T) {
 }
 
 // TestCloseUnloadsMemory verifies that v2's Plugin.Close actually
-// dlcloses the plugin and the kernel unmaps its text pages. The
-// fixture captures the dlsym'd code address before Close, calls
-// Close, then probes the page with mincore — ENOMEM proves the
-// mapping is gone. TestPanicOnCallStub on its own only shows that
-// the descriptor rewrite ran before unmap; this test shows that the
-// unmap also happened.
+// unloads the plugin and the kernel unmaps its text pages. The
+// fixture captures the looked-up code address before Close, calls
+// Close, then probes the page: POSIX uses mincore (ENOMEM proves
+// the mapping is gone); Windows uses VirtualQuery (MEM_FREE proves
+// FreeLibrary released the image). TestPanicOnCallStub on its own
+// only shows that the descriptor rewrite ran before unmap; this
+// test shows that the unmap also happened.
 func TestCloseUnloadsMemory(t *testing.T) {
 	globalSkip(t)
-	skipPluginCloseOnWindows(t)
 	run(t, "./closeunmaps.exe")
 }
 

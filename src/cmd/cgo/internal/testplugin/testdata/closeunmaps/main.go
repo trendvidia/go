@@ -4,54 +4,14 @@
 
 // Exercises v2's dlclose-at-Close: after Plugin.Close, the kernel
 // has unmapped the plugin's text pages, observable as mincore
-// returning ENOMEM on the captured pre-Close code address.
+// returning ENOMEM (POSIX) or VirtualQuery reporting MEM_FREE
+// (Windows) on the captured pre-Close code address.
 //
 // The page-mapping check is the rock-solid signal: a passing
 // TestPanicOnCallStub only proves the runtime rewrote the held
 // descriptor before unmap, not that the unmap actually happened.
 // This fixture proves the unmap.
 package main
-
-/*
-#include <errno.h>
-#include <stdint.h>
-#include <sys/mman.h>
-#include <unistd.h>
-
-// pageOf returns the page-aligned base address containing addr.
-static uintptr_t pageOf(uintptr_t addr) {
-	long ps = sysconf(_SC_PAGESIZE);
-	return addr & ~((uintptr_t)ps - 1);
-}
-
-// pageSize exposes the runtime page size to Go (sysconf doesn't
-// translate cleanly through cgo on every platform).
-static long pageSize(void) {
-	return sysconf(_SC_PAGESIZE);
-}
-
-// isUnmapped probes a single page at addr with mincore. Linux and
-// Darwin both return -1/ENOMEM when the queried range is not part
-// of any mapping; other errno values mean the mapping exists (so
-// the page is mapped — the opposite of what we want).
-//
-// Returns: 1 = unmapped, 0 = mapped, -1 = unexpected errno (with
-// the value placed in *errnoOut).
-static int isUnmapped(uintptr_t addr, int *errnoOut) {
-	long ps = sysconf(_SC_PAGESIZE);
-	unsigned char vec[1];
-	uintptr_t page = pageOf(addr);
-	if (mincore((void*)page, ps, (char*)vec) == 0) {
-		return 0; // mapped
-	}
-	if (errno == ENOMEM) {
-		return 1; // unmapped
-	}
-	*errnoOut = errno;
-	return -1;
-}
-*/
-import "C"
 
 import (
 	"fmt"
@@ -61,10 +21,17 @@ import (
 	"unsafe"
 )
 
+var pluginExt = func() string {
+	if runtime.GOOS == "windows" {
+		return ".dll"
+	}
+	return ".so"
+}()
+
 func main() {
-	p, err := plugin.Open("plugin1.so")
+	p, err := plugin.Open("closeunmaps-plugin1" + pluginExt)
 	if err != nil {
-		fail("Open(plugin1.so): %v", err)
+		fail("Open(closeunmaps-plugin1): %v", err)
 	}
 	sym, err := p.Lookup("F")
 	if err != nil {
@@ -85,9 +52,8 @@ func main() {
 
 	// Sanity: the code address must currently be mapped — anything
 	// else means we read the wrong word.
-	var errnoOut C.int
-	if got := C.isUnmapped(C.uintptr_t(codeAddr), &errnoOut); got != 0 {
-		fail("pre-Close isUnmapped(0x%x) = %d errno=%d; want 0 (mapped)", codeAddr, int(got), int(errnoOut))
+	if got, errOut := isUnmapped(codeAddr); got != 0 {
+		fail("pre-Close isUnmapped(0x%x) = %d err=%d; want 0 (mapped)", codeAddr, got, errOut)
 	}
 
 	if err := p.Close(); err != nil {
@@ -99,6 +65,10 @@ func main() {
 	//   - Linux: dlclose with refcount==0 reliably triggers munmap,
 	//     so the page MUST report ENOMEM. We assert that.
 	//
+	//   - Windows: FreeLibrary releases the mapping and VirtualQuery
+	//     reports MEM_FREE for the formerly-mapped region. Strict
+	//     assertion, like Linux.
+	//
 	//   - Darwin: dyld may retain dylibs in process memory after
 	//     dlclose for caching reasons even when refcount drops to
 	//     zero (Apple documents dlclose as "may unload"). We can
@@ -108,22 +78,22 @@ func main() {
 	//     module unlink — does its job either way; held callers
 	//     panic via TestPanicOnCallStub regardless of whether the
 	//     mapping survives.
-	got := C.isUnmapped(C.uintptr_t(codeAddr), &errnoOut)
+	got, errOut := isUnmapped(codeAddr)
 	switch runtime.GOOS {
 	case "darwin":
 		// Either result is acceptable. Just verify isUnmapped
 		// itself didn't error out unexpectedly.
 		if got == -1 {
-			fail("post-Close: isUnmapped(0x%x) failed with unexpected errno=%d", codeAddr, int(errnoOut))
+			fail("post-Close: isUnmapped(0x%x) failed with unexpected err=%d", codeAddr, errOut)
 		}
 	default:
 		switch got {
 		case 1:
 			// Expected.
 		case 0:
-			fail("post-Close: page containing 0x%x is still mapped; dlclose did not unmap", codeAddr)
+			fail("post-Close: page containing 0x%x is still mapped; unload did not unmap", codeAddr)
 		default:
-			fail("post-Close: isUnmapped(0x%x) failed with unexpected errno=%d", codeAddr, int(errnoOut))
+			fail("post-Close: isUnmapped(0x%x) failed with unexpected err=%d", codeAddr, errOut)
 		}
 	}
 

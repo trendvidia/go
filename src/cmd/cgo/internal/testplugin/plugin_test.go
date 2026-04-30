@@ -341,22 +341,6 @@ func TestRunHost(t *testing.T) {
 	run(t, "./host.exe")
 }
 
-// skipPluginCloseOnWindows skips tests that require actual plugin
-// unload (Plugin.Close → kernel-side dlclose / FreeLibrary +
-// runtime-side funcptr panic-stub rewrite). Windows v3's
-// `unloadPlugin` is a no-op stub today: the multi-host implib gap
-// got resolved (each fixture's host gets its own host.exe.a, and
-// plugins link against the right one), but the deeper unload flow —
-// FreeLibrary + funcptr canonicalisation tear-down — isn't wired up.
-// Tests that only exercise the Close API surface (no post-Close
-// callbacks, no peer-plugin canonicalisation tear-down) pass; tests
-// that depend on the actual unload semantics still fail.
-func skipPluginCloseOnWindows(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows: Plugin.Close unload + funcptr panic-stub rewrite not implemented")
-	}
-}
-
 // skipPeerPluginDataShareOnWindows skips tests that rely on
 // cross-plugin (peer-to-peer) DATA canonicalisation when the host
 // doesn't own the shared package. POSIX dlopen + dynamic linker GOT

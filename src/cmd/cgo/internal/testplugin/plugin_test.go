@@ -404,7 +404,6 @@ func TestCloseAPI(t *testing.T) {
 // reference under recover() and checks the panic message.
 func TestPanicOnCallStub(t *testing.T) {
 	globalSkip(t)
-	skipPluginCloseOnWindows(t)
 	run(t, "./panicstub.exe")
 }
 

@@ -73,6 +73,7 @@ func open(name string) (*Plugin, error) {
 
 	// Fill out the value of each plugin symbol.
 	updatedSyms := map[string]any{}
+	var funcDescriptors []*uintptr
 	for symName, sym := range syms {
 		isFunc := symName[0] == '.'
 		if isFunc {
@@ -87,7 +88,17 @@ func open(name string) (*Plugin, error) {
 		}
 		valp := (*[2]unsafe.Pointer)(unsafe.Pointer(&sym))
 		if isFunc {
-			(*valp)[1] = unsafe.Pointer(&proc)
+			// Allocate a stable heap holder (mirroring plugin_dlopen's
+			// pattern). The func value's data pointer is the holder;
+			// calling the value loads holder[0] and indirects to it.
+			// At Close, the runtime overwrites *holder with the
+			// pluginClosedFuncStub PC, so any held call panics with a
+			// recognisable message instead of jumping into what
+			// FreeLibrary has just unmapped.
+			holder := new(uintptr)
+			*holder = proc
+			(*valp)[1] = unsafe.Pointer(holder)
+			funcDescriptors = append(funcDescriptors, holder)
 		} else {
 			(*valp)[1] = unsafe.Pointer(proc)
 		}
@@ -96,6 +107,8 @@ func open(name string) (*Plugin, error) {
 		updatedSyms[symName] = sym
 	}
 	p.syms = updatedSyms
+	p.funcDescriptors = funcDescriptors
+	p.handle = uintptr(h)
 
 	close(p.loaded)
 	return p, nil
@@ -109,12 +122,27 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 }
 
 // unloadPlugin is the Windows counterpart of plugin_dlopen.go's
-// dlclose-based phase 2. The current Windows port does not yet
-// support per-plugin import libraries for multi-host fixtures, so the
-// v2/L3 tests that exercise Plugin.Close are skipped on Windows and
-// this path is unreachable from those tests. The function is defined
-// so closePlugin compiles uniformly across platforms.
+// dlclose-based phase 2. Calls FreeLibrary on the HMODULE captured
+// at Open time, then drops the plugin from the global registry. The
+// runtime side of Plugin.Close (plugin_close in runtime/plugin.go)
+// already rewrote held func descriptors to pluginClosedFuncStub
+// before this point, so any held call panics with a recognisable
+// message instead of jumping into what FreeLibrary just unmapped.
 func unloadPlugin(p *Plugin) error {
+	if p.handle == 0 {
+		return nil
+	}
+	if err := syscall.FreeLibrary(syscall.Handle(p.handle)); err != nil {
+		return err
+	}
+	pluginsMu.Lock()
+	for path, q := range plugins {
+		if q == p {
+			delete(plugins, path)
+			break
+		}
+	}
+	pluginsMu.Unlock()
 	return nil
 }
 

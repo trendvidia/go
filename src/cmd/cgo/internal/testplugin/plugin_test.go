@@ -604,16 +604,6 @@ func TestSymbolNameMangle(t *testing.T) {
 
 func TestIssue62430(t *testing.T) {
 	globalSkip(t)
-	if runtime.GOOS == "windows" {
-		// The plugin reads host's unicode.Categories (a map). Routing
-		// the map header through the IAT shares the variable's address
-		// but the dereferenced hmap is in host's heap; v3's plugin-data
-		// share doesn't yet handle map internals across the host/plugin
-		// boundary on PE — first map access faults at 0xfff... in
-		// internal/runtime/maps.(*Map).Used. Tracked separately from
-		// the simpler scalar-globals share that v3 already handles.
-		t.Skip("Windows: map-typed host-shared globals not yet supported (issue62430 reads unicode.Categories)")
-	}
 	goCmd(t, "build", "-o", "issue62430.exe", "./issue62430/main.go")
 	goCmdBuildPluginFor(t, "issue62430", "-o", "issue62430"+pluginSuffix, "./issue62430/plugin.go")
 	run(t, "./issue62430.exe")

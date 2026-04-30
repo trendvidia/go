@@ -456,6 +456,8 @@ func Main(arch *sys.Arch, theArch Arch) {
 	ctxt.typelink()
 	bench.Start("funcptrlink")
 	ctxt.funcptrlink()
+	bench.Start("userDataLink")
+	ctxt.userDataLink()
 	bench.Start("buildinfo")
 	ctxt.buildinfo()
 	bench.Start("pclntab")

@@ -468,6 +468,30 @@ type moduledata struct {
 	funcptrnameoffs []int32
 	funcptrnames    []byte
 
+	// L3.b user-package DATA tables. Emitted by the linker's
+	// userDataLink() in typelink.go. Two parallel triplets:
+	//
+	//   - udexports: user-package data symbols this module DEFINES.
+	//     Each udexports[i] is the symbol's resolved address;
+	//     udexportnames[udexportnameoffs[i]] holds its bare name.
+	//     The runtime registers (name → addr, owner=this module) in
+	//     canonicalSyms with first-loader-wins semantics.
+	//
+	//   - udimports: addresses of `__imp_X` SNOPTRDATA wrappers
+	//     synthesized by peGotRedirect for this module's cross-module
+	//     data accesses on Windows. Each udimports[i] is the address
+	//     of an 8-byte slot whose initial content is &local_X; the
+	//     runtime rewrites the slot to point at the canonical owner's
+	//     instance when this module isn't the first loader of name X.
+	//     Empty on POSIX (no __imp_ wrappers; the dynamic linker
+	//     resolves cross-module data via standard GOT).
+	udexports        []uintptr
+	udexportnameoffs []int32
+	udexportnames    []byte
+	udimports        []uintptr
+	udimportnameoffs []int32
+	udimportnames    []byte
+
 	hasmain uint8 // 1 if module contains the main function, 0 otherwise
 	bad     bool  // module failed to load and should be ignored
 

@@ -837,6 +837,18 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 	// names slice: the carrier holds raw bytes; element size is 1.
 	emitSlotSlice("runtime.funcptrnames", 1)
 
+	// L3.b user-package DATA tables — emitted by userDataLink() in
+	// typelink.go. Used by the runtime's L3 peer-plugin canonicalisation
+	// for symbols whose canonical owner isn't host (where the OS PE
+	// loader can't bind via host's import library). Empty in -buildmode=
+	// exe and on POSIX (the dynamic linker handles symbol merging).
+	emitSlotSlice("runtime.userDataExportslinks", ptrSz)
+	emitSlotSlice("runtime.userDataExportsnameoffs", 4)
+	emitSlotSlice("runtime.userDataExportsnames", 1)
+	emitSlotSlice("runtime.userDataImportslinks", ptrSz)
+	emitSlotSlice("runtime.userDataImportsnameoffs", 4)
+	emitSlotSlice("runtime.userDataImportsnames", 1)
+
 	hasmain := ctxt.BuildMode == BuildModeExe || ctxt.BuildMode == BuildModePIE
 	if hasmain {
 		moduledata.AddUint8(1)

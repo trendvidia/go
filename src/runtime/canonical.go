@@ -87,6 +87,54 @@ type pkgKey struct {
 // Access is serialised by canonicalSymsLock.
 var pkgOwners map[pkgKey]*moduledata
 
+// userDataInit handles L3.b's peer-plugin DATA canonicalisation. Two
+// passes, both under canonicalSymsLock:
+//
+//  1. Register every user-package data symbol this module DEFINES in
+//     canonicalSyms with first-loader-wins semantics. Each entry maps
+//     "pkg/path.SymName" → (addr, owner).
+//
+//  2. Walk every `__imp_X` SNOPTRDATA wrapper this module IMPORTS for
+//     a user-package data symbol. If the canonical owner of X is a
+//     different module, rewrite the wrapper's content to the canonical
+//     address. The compiler-emitted `MOV X@GOTPCREL(%rip), R; MOV (R),
+//     value` access pattern in this module's code then loads the
+//     canonical address into R and dereferences to the canonical
+//     instance — both intra- and cross-package accesses unified.
+//
+// Caller holds canonicalSymsLock.
+func userDataInit(md *moduledata) {
+	// canonicalSyms is lazy-initialised by canonicalizeSlots when any
+	// module has funcptrs; if every module's funcptrs slice is empty
+	// (rare but possible — e.g. plugins that hold no cross-module
+	// function values) the map is still nil here. Initialise it so
+	// the export-registration pass below has something to write to.
+	if len(md.udexports) > 0 && canonicalSyms == nil {
+		canonicalSyms = make(map[string]canonicalEntry, 1024)
+	}
+	// Pass 1: register exports.
+	for i, addr := range md.udexports {
+		name := canonicalSymName(md.udexportnames, md.udexportnameoffs, i)
+		if _, ok := canonicalSyms[name]; !ok {
+			canonicalSyms[name] = canonicalEntry{addr: addr, owner: md}
+		}
+	}
+
+	// Pass 2: rewrite imports whose canonical lives elsewhere.
+	for i, slotAddr := range md.udimports {
+		name := canonicalSymName(md.udimportnames, md.udimportnameoffs, i)
+		entry, ok := canonicalSyms[name]
+		if !ok || entry.owner == md {
+			continue
+		}
+		slot := (*uintptr)(unsafe.Pointer(slotAddr))
+		if *slot != entry.addr {
+			*slot = entry.addr
+		}
+		recordDependency(md, entry.owner)
+	}
+}
+
 // recordPkgDependencies walks md's pkghashes and either registers md
 // as the first-loader of each (package, hash) tuple or records a
 // dependency edge to the earlier owner. Caller holds canonicalSymsLock.

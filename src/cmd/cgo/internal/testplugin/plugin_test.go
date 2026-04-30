@@ -341,21 +341,6 @@ func TestRunHost(t *testing.T) {
 	run(t, "./host.exe")
 }
 
-// skipPeerPluginDataShareOnWindows skips tests that rely on
-// cross-plugin (peer-to-peer) DATA canonicalisation when the host
-// doesn't own the shared package. POSIX dlopen + dynamic linker GOT
-// resolves this naturally; on Windows, the v3 IAT path only handles
-// host→plugin sharing, and Bug D removed the globalptr-for-data
-// indirection that previously served the peer case. Re-enable once
-// peer-plugin DATA share is wired up (likely needs the host to
-// emit globalptr-equivalent indirection so plugA-as-canonical-owner
-// can be recorded and plugB rewrites through it).
-func skipPeerPluginDataShareOnWindows(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows: peer-plugin data share (host doesn't own the symbol) not yet supported on internal link")
-	}
-}
-
 // skipCgoPluginOnWindows skips tests whose plugin makes real C calls
 // (uses C.foo or includes non-trivial C code). These tests hang on
 // Windows in cgo_wait_runtime_init_done because v3 doesn't share the
@@ -411,7 +396,6 @@ func TestCloseUnloadsMemory(t *testing.T) {
 // plugB→plugA Close succeeds.
 func TestRefcountUnload(t *testing.T) {
 	globalSkip(t)
-	skipPeerPluginDataShareOnWindows(t)
 	run(t, "./refcount.exe")
 }
 

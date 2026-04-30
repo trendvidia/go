@@ -130,14 +130,16 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	typelinksinit()
 	typeptrsinit(md)
 
-	// Record peer-plugin DATA dependencies via package-level tracking.
-	// Bug D removed the symbol-level globalptr indirection that made
-	// the runtime party to data canonicalisation; package-level (pkg
-	// path, linktimehash) ownership recovers L3's HasDependents/Close
-	// safety net without re-introducing a custom data-access path.
-	// Must run under canonicalSymsLock; recordPkgDependencies and the
-	// recordDependency it calls share the same lock as funcptrsinit.
+	// L3.b cross-module wiring under canonicalSymsLock:
+	//   - userDataInit: register this module's user-package data
+	//     exports as canonical and rewrite its `__imp_X` import slots
+	//     to point at the canonical instance when it lives elsewhere.
+	//   - recordPkgDependencies: package-level (pkg path, linktimehash)
+	//     ownership tracking — the safety-net for Plugin.Close that
+	//     covers symbol kinds (types, function bodies) which the
+	//     symbol-level walks above don't directly canonicalise.
 	lock(&canonicalSymsLock)
+	userDataInit(md)
 	recordPkgDependencies(md)
 	unlock(&canonicalSymsLock)
 

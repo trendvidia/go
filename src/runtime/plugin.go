@@ -505,6 +505,23 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 		}
 	}
 
+	// Drop the closing module's own dependents map (if any) from the
+	// GC anchor slice — this module won't appear as a target again,
+	// so the map is no longer needed. Compacting in-place keeps the
+	// slice O(N). Maps are not directly comparable, so we compare the
+	// underlying *Map header via unsafe.Pointer.
+	if md.dependents != nil {
+		closing := *(*unsafe.Pointer)(unsafe.Pointer(&md.dependents))
+		w := dependentsRoots[:0]
+		for _, m := range dependentsRoots {
+			if *(*unsafe.Pointer)(unsafe.Pointer(&m)) != closing {
+				w = append(w, m)
+			}
+		}
+		dependentsRoots = w
+		md.dependents = nil
+	}
+
 	// Mark the module bad so it won't appear in subsequent
 	// modulesinit results, and unlink it from the firstmoduledata
 	// chain so the chain walker skips it. We don't dlclose the .so

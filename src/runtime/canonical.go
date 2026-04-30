@@ -41,6 +41,25 @@ type canonicalEntry struct {
 var canonicalSyms map[string]canonicalEntry
 var canonicalSymsLock mutex
 
+// dependentsRoots anchors every per-module dependents map in a
+// GC-scanned global so the map and its backing buffer stay live.
+//
+// moduledata lives in the linker-emitted .go.module section, which is
+// writable but explicitly NOT scanned by the GC (see cmd/link/internal/
+// ld/data.go's "GC doesn't need to look at it" comment for SMODULEDATA).
+// That means the *Map pointer stored in target.dependents is invisible
+// to GC: the heap-allocated Map header and its group buffer can be
+// reclaimed and the freed memory reused by other allocations, while
+// target.dependents still points at it. Symptoms observed before the
+// fix: dependents[referencer] lookups missed entries that had just
+// been inserted (the group buffer's bytes were overwritten by an
+// unrelated map's contents), surfacing as "small map with no empty
+// slot (concurrent map writes?)" on the eighth growth-triggering put.
+//
+// Anchoring each map here keeps it reachable from a real GC root.
+// Access is serialised by canonicalSymsLock.
+var dependentsRoots []map[*moduledata]struct{}
+
 // canonicalSymName returns the target name for slot index i in the
 // per-module name table. Returned string shares storage with the
 // module's funcptrnames blob (via unsafe.String);
@@ -94,7 +113,12 @@ func recordDependency(referencer, target *moduledata) {
 		return
 	}
 	if target.dependents == nil {
-		target.dependents = make(map[*moduledata]struct{})
+		m := make(map[*moduledata]struct{})
+		target.dependents = m
+		// Anchor m in dependentsRoots so the heap object stays
+		// live — see dependentsRoots' comment for why moduledata
+		// alone is not a GC root.
+		dependentsRoots = append(dependentsRoots, m)
 	}
 	if _, exists := target.dependents[referencer]; !exists {
 		target.dependents[referencer] = struct{}{}

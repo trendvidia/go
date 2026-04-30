@@ -60,6 +60,50 @@ var canonicalSymsLock mutex
 // Access is serialised by canonicalSymsLock.
 var dependentsRoots []map[*moduledata]struct{}
 
+// pkgKey identifies a specific compiled instance of a Go package.
+// name is the package path; hash is the linktimehash distinguishing
+// builds of the same path from different source (e.g. each plugin's
+// own "main" package, or two plugins built against different versions
+// of a shared library).
+type pkgKey struct {
+	name string
+	hash string
+}
+
+// pkgOwners records the first-loader of each (package, hash) tuple
+// across all currently-loaded modules. When a later module loads with
+// the same tuple in its pkghashes, recordPkgDependencies records a
+// peer-plugin dependency edge from the later module to the earlier
+// owner.
+//
+// This is how L3 tracks cross-plugin DATA dependencies after Bug D
+// removed go.globalptr.* slots: the runtime no longer observes
+// dynamically-bound data symbol addresses (the OS dynamic linker
+// handles that on every platform), so we track at the package level
+// instead. A plugin importing a package owned by a peer plugin
+// implicitly depends on that peer regardless of how individual
+// symbol bindings are wired by the dynamic linker.
+//
+// Access is serialised by canonicalSymsLock.
+var pkgOwners map[pkgKey]*moduledata
+
+// recordPkgDependencies walks md's pkghashes and either registers md
+// as the first-loader of each (package, hash) tuple or records a
+// dependency edge to the earlier owner. Caller holds canonicalSymsLock.
+func recordPkgDependencies(md *moduledata) {
+	if pkgOwners == nil {
+		pkgOwners = make(map[pkgKey]*moduledata)
+	}
+	for _, ph := range md.pkghashes {
+		k := pkgKey{ph.modulename, ph.linktimehash}
+		if owner, ok := pkgOwners[k]; ok {
+			recordDependency(md, owner)
+		} else {
+			pkgOwners[k] = md
+		}
+	}
+}
+
 // canonicalSymName returns the target name for slot index i in the
 // per-module name table. Returned string shares storage with the
 // module's funcptrnames blob (via unsafe.String);

@@ -130,6 +130,17 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	typelinksinit()
 	typeptrsinit(md)
 
+	// Record peer-plugin DATA dependencies via package-level tracking.
+	// Bug D removed the symbol-level globalptr indirection that made
+	// the runtime party to data canonicalisation; package-level (pkg
+	// path, linktimehash) ownership recovers L3's HasDependents/Close
+	// safety net without re-introducing a custom data-access path.
+	// Must run under canonicalSymsLock; recordPkgDependencies and the
+	// recordDependency it calls share the same lock as funcptrsinit.
+	lock(&canonicalSymsLock)
+	recordPkgDependencies(md)
+	unlock(&canonicalSymsLock)
+
 	pluginftabverify(md)
 	moduledataverify1(md)
 
@@ -490,6 +501,15 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 	for name, entry := range canonicalSyms {
 		if entry.owner == md {
 			delete(canonicalSyms, name)
+		}
+	}
+
+	// Remove pkgOwners entries naming this module as owner — peers
+	// loaded after this point that import the same package will see
+	// no owner and become canonical themselves.
+	for k, owner := range pkgOwners {
+		if owner == md {
+			delete(pkgOwners, k)
 		}
 	}
 

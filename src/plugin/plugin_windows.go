@@ -51,6 +51,24 @@ func open(name string) (*Plugin, error) {
 		}
 	}
 
+	// Wake up the plugin's own cgo runtime-init handshake. Plugin DLLs
+	// statically link their own copy of runtime/cgo, including the
+	// runtime_init_done flag and runtime_init_wait Event in
+	// gcc_libinit_windows.c. Host's runtime.main called notify on host's
+	// copy at startup; plugin has no runtime.main of its own, so plugin's
+	// flag stays 0 and any cgo entry-point in the plugin would block
+	// forever in _cgo_wait_runtime_init_done.
+	//
+	// Invoke plugin's notify ourselves. The function is mingw-auto-
+	// exported from any plugin DLL that contains runtime/cgo (i.e. has
+	// `import "C"` somewhere); pure-Go plugins don't export it and we
+	// silently skip via GetProcAddress's not-found error. The notify
+	// function is idempotent (gated by InterlockedExchangeAdd) and
+	// touches only this DLL's local statics — host is unaffected.
+	if proc, err := syscall.GetProcAddress(h, "x_cgo_notify_runtime_init_done"); err == nil {
+		syscall.SyscallN(uintptr(proc), 0)
+	}
+
 	pluginpath, syms, initTasks, errstr := lastmoduleinit()
 	if errstr != "" {
 		plugins[pluginPath] = &Plugin{

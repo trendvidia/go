@@ -341,20 +341,6 @@ func TestRunHost(t *testing.T) {
 	run(t, "./host.exe")
 }
 
-// skipCgoPluginOnWindows skips tests whose plugin makes real C calls
-// (uses C.foo or includes non-trivial C code). These tests hang on
-// Windows in cgo_wait_runtime_init_done because v3 doesn't share the
-// cgo runtime_init state between host and plugin DLLs — the plugin's
-// own runtime_init_done is never signalled, so the first cgo call in
-// the plugin blocks forever on a pthread cond. Tests whose plugin
-// declares import "C" purely for its side effect (no actual C calls)
-// are unaffected and don't need this skip.
-func skipCgoPluginOnWindows(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows: cgo plugin shares no runtime_init_done with host; first cgo call in plugin hangs (v3 limitation)")
-	}
-}
-
 // TestCloseAPI exercises the L3.b additions: Plugin.Close,
 // Plugin.HasDependents, Plugin.Dependents.
 func TestCloseAPI(t *testing.T) {
@@ -474,7 +460,6 @@ func TestIssue24351(t *testing.T) {
 
 func TestIssue25756(t *testing.T) {
 	globalSkip(t)
-	skipCgoPluginOnWindows(t) // life plugin uses C
 	goCmd(t, "build", "-o", "issue25756.exe", "./issue25756/main.go")
 	goCmdBuildPluginFor(t, "issue25756", "-o", "life"+pluginSuffix, "./issue25756/plugin")
 	// Fails intermittently, but 20 runs should cause the failure
@@ -489,7 +474,6 @@ func TestIssue25756(t *testing.T) {
 // Test with main using -buildmode=pie with plugin for issue #43228
 func TestIssue25756pie(t *testing.T) {
 	globalSkip(t)
-	skipCgoPluginOnWindows(t) // life plugin uses C
 	goCmd(t, "build", "-buildmode=pie", "-o", "issue25756pie.exe", "./issue25756/main.go")
 	goCmdBuildPluginFor(t, "issue25756pie", "-o", "life"+pluginSuffix, "./issue25756/plugin")
 	run(t, "./issue25756pie.exe")

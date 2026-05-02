@@ -688,9 +688,17 @@ func ITabAddrAt(pos src.XPos, typ, iface *types.Type) *ir.AddrExpr {
 // canonical itab returned by getitab(canonicalInter, canonicalType) —
 // so non-empty interface values built in the plugin carry the same itab
 // pointer host/other modules would have used. See TypePtrForUseAt.
+//
+// Both paths use ITabLsym (lenient: allowNonImplement=true), matching
+// the upstream noder caller this replaced. Strictness here would fatal
+// on legitimate compile-time-detected scenarios where the typechecker
+// has already emitted (or is about to emit) a regular error — e.g. a
+// //go:nointerface method preventing implementation of an interface.
+// The strict variant ITabAddrAt is reserved for static initializers.
 func ITabAddrForUseAt(pos src.XPos, typ, iface *types.Type) ir.Node {
 	if !base.Ctxt.Flag_typetab {
-		return ITabAddrAt(pos, typ, iface)
+		lsym := ITabLsym(typ, iface)
+		return typecheck.LinksymAddr(pos, lsym, types.Types[types.TUINT8])
 	}
 	slot := itabptrLsym(typ, iface)
 	return ir.NewLinksymExpr(pos, slot, types.NewPtr(types.Types[types.TUINT8]))
@@ -702,8 +710,12 @@ func ITabAddrForUseAt(pos src.XPos, typ, iface *types.Type) ir.Node {
 // to getitab(canonicalInter, canonicalType). DUPOK lets the linker
 // dedup the slot across packages that reference the same (typ, iface)
 // pair.
+//
+// Uses ITabLsym (lenient) for the same reason ITabAddrForUseAt does:
+// types that don't implement the interface (e.g. //go:nointerface) emit
+// a placeholder itab here while the typechecker handles the real error.
 func itabptrLsym(typ, iface *types.Type) *obj.LSym {
-	itabSym := itabLsym(typ, iface, false)
+	itabSym := ITabLsym(typ, iface)
 	name := "go.itabptr." + typ.LinkString() + "," + iface.LinkString()
 	s := base.Ctxt.Lookup(name)
 	if s.Size == 0 {

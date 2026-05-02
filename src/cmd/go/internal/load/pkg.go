@@ -2686,7 +2686,9 @@ func externalLinkingReason(s *modload.State, p *Package) (what string) {
 		if cfg.BuildContext.GOARCH == "wasm" {
 			break
 		}
-		fallthrough
+		// c-shared always needs external linking, including on
+		// Windows (the OS toolchain — mingw — produces the .dll).
+		return "-buildmode=" + cfg.BuildBuildmode
 	case "plugin":
 		// On Windows, the internal linker can produce plugin DLLs
 		// using import thunks, so external linking is not required.

@@ -97,6 +97,23 @@ func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
 	// mov x29, sp
 	dm(0x910003fd)
 
+	// DllMain is called for DLL_PROCESS_ATTACH (1), DLL_THREAD_ATTACH (2),
+	// DLL_THREAD_DETACH (3), and DLL_PROCESS_DETACH (0). We must only
+	// call addmoduledata on DLL_PROCESS_ATTACH — same gate as the amd64
+	// DllMain. Without it, every new OS thread (THREAD_ATTACH) re-adds
+	// the moduledata and corrupts the module list, and FreeLibrary
+	// (PROCESS_DETACH) calls addmoduledata against the module being
+	// unmapped. fdwReason arrives in w1.
+	amd := ldr.Lookup("runtime.addmoduledata", 0)
+	if amd != 0 {
+		// cmp w1, #1 (fdwReason == DLL_PROCESS_ATTACH?)
+		dm(0x7100043f)
+		// b.ne skip — over the 6 instructions of the moduledata load
+		// and the addmoduledata IAT call below, to the `mov x0, #1`
+		// epilogue (imm19 = 7).
+		dm(0x540000e1)
+	}
+
 	// Load address of local.pluginmoduledata into x0
 	dm(0x90000000) // adrp x0, moduledata
 	dm(0x91000000) // add x0, x0, #offset
@@ -107,7 +124,6 @@ func gentextPluginDllMain(ctxt *ld.Link, ldr *loader.Loader) {
 
 	// Load runtime.addmoduledata from IAT and call it.
 	// Use two R_ARM64_PCREL relocations (same as windynrelocsym thunks).
-	amd := ldr.Lookup("runtime.addmoduledata", 0)
 	if amd != 0 {
 		// adrp x16, addmoduledata_IAT
 		dm(0x90000010)

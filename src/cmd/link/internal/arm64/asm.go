@@ -39,6 +39,7 @@ import (
 	"debug/elf"
 	"fmt"
 	"log"
+	"strings"
 )
 
 func gentext(ctxt *ld.Link, ldr *loader.Loader) {
@@ -952,8 +953,14 @@ func archreloc(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, r loade
 	switch rt := r.Type(); rt {
 	case objabi.R_ARM64_GOTPCREL:
 		// On Windows PE with internal linking, handle GOT-relative
-		// relocations. SWINDOWS targets (host-provided via IAT) use
-		// ADRP+LDR to load from IAT. Local targets get relaxed to ADRP+ADD.
+		// relocations. Slot targets keep the ADRP+LDR load:
+		// SWINDOWS slots are IAT entries the OS loader fills with the
+		// host's symbol address; __imp_X SNOPTRDATA slots are
+		// synthesized by peGotRedirect and hold &X, which the runtime
+		// rewrites at plugin-load time for peer-plugin DATA
+		// canonicalisation — relaxing them to a direct ADRP+ADD would
+		// freeze the local instance and break that rewriting.
+		// Remaining local targets get relaxed to ADRP+ADD.
 		if target.IsWindows() {
 			targType := ldr.SymType(rs)
 
@@ -966,8 +973,10 @@ func archreloc(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, r loade
 				o1 = uint32(val >> 32)
 			}
 
-			if targType == sym.SWINDOWS {
-				// Imported symbol — ADRP+LDR loads pointer from IAT.
+			isSlot := targType == sym.SWINDOWS ||
+				(targType == sym.SNOPTRDATA && strings.HasPrefix(ldr.SymName(rs), "__imp_"))
+			if isSlot {
+				// Slot symbol — ADRP+LDR loads the pointer it holds.
 				t := ldr.SymAddr(rs) + r.Add() - ((ldr.SymValue(s) + int64(r.Off())) &^ 0xfff)
 				o0 |= (uint32((t>>12)&3) << 29) | (uint32((t>>12>>2)&0x7ffff) << 5)
 				if t&7 != 0 {

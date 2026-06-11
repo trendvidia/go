@@ -430,7 +430,7 @@ func peGotRedirect(arch *sys.Arch, ldr *loader.Loader, targ loader.Sym) loader.S
 // passes for Windows plugin builds. Pre-dynlink builds have no R_GOTPCREL
 // relocs and the pass is a no-op.
 func peRetargetGotRelocs(ctxt *Link) {
-	if !ctxt.IsWindows() || !ctxt.IsAMD64() {
+	if !ctxt.IsWindows() || !(ctxt.IsAMD64() || ctxt.IsARM64()) {
 		return
 	}
 	ldr := ctxt.loader
@@ -439,7 +439,11 @@ func peRetargetGotRelocs(ctxt *Link) {
 		var sb *loader.SymbolBuilder
 		for ri := 0; ri < relocs.Count(); ri++ {
 			r := relocs.At(ri)
-			if r.Type() != objabi.R_GOTPCREL {
+			// amd64 -dynlink emits R_GOTPCREL (MOV X@GOTPCREL(%rip), R);
+			// arm64 -dynlink emits R_ARM64_GOTPCREL (ADRP+LDR pair).
+			// Both denote "load X's address from X's GOT slot" and get
+			// the same __imp_X slot treatment.
+			if r.Type() != objabi.R_GOTPCREL && r.Type() != objabi.R_ARM64_GOTPCREL {
 				continue
 			}
 			rs := r.Sym()

@@ -552,6 +552,19 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 	for prev := &firstmoduledata; prev.next != nil; prev = prev.next {
 		if prev.next == md {
 			prev.next = md.next
+			// If md is the chain tail, addmoduledata's append
+			// cursor still points at it; retreat the cursor to the
+			// new tail. Without this, the next module load stores
+			// through lastmoduledatap into the closed plugin's
+			// (about to be unmapped) image — faulting where the OS
+			// unmaps eagerly (darwin dlopen, windows addmoduledata)
+			// — or, where the mapping lingers (glibc), silently
+			// links the new module onto the detached node, leaving
+			// it unreachable from firstmoduledata and surfacing as
+			// "plugin already loaded". See issue #5.
+			if lastmoduledatap == md {
+				lastmoduledatap = prev
+			}
 			break
 		}
 	}

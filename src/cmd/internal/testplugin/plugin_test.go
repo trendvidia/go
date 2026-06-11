@@ -253,14 +253,6 @@ func main() {}
 func TestStress(t *testing.T) {
 	globalSkip(t)
 
-	// Close→reopen churn across rounds currently breaks on every
-	// platform (SIGSEGV in dlopen on darwin/arm64, "plugin already
-	// loaded" on linux/amd64, AV in addmoduledata on windows/arm64).
-	// Single-cycle hot reload (TestCloseHotReload) works; multi-
-	// plugin churn does not. Unskip when the lifecycle teardown is
-	// fixed.
-	t.Skip("multi-plugin close/reopen churn broken; see https://github.com/trendvidia/go/issues/5")
-
 	const nPlugins = 8
 
 	// Generate the plugin variants into the GOPATH copy of the module.

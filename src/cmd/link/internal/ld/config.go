@@ -212,9 +212,22 @@ func determineLinkMode(ctxt *Link) {
 			if preferExternal && ctxt.Debugvlog > 0 {
 				ctxt.Logf("external linking prefer list is %v\n", preferlinkext)
 			}
-			if extNeeded || (iscgo && (externalobj || preferExternal)) {
+			switch {
+			case ctxt.BuildMode == BuildModePlugin && ctxt.IsWindows() && ctxt.IsARM64() && *flagPluginImplib != "":
+				// Plugin DLLs on windows/arm64 must be linked
+				// internally even when cgo objects are present:
+				// -dynlink compiled code references data through
+				// 64-bit GOT slots (R_ARM64_GOTPCREL with size 8),
+				// and COFF has no 64-bit PC-relative relocation
+				// type to express them for an external linker.
+				// The internal linker resolves them directly.
+				// On amd64 GOT references are 32-bit displacements
+				// (IMAGE_REL_AMD64_REL32), so external linking
+				// remains available there.
+				ctxt.LinkMode = LinkInternal
+			case extNeeded || (iscgo && (externalobj || preferExternal)):
 				ctxt.LinkMode = LinkExternal
-			} else {
+			default:
 				ctxt.LinkMode = LinkInternal
 			}
 		}

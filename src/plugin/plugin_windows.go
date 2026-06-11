@@ -9,7 +9,6 @@ package plugin
 import (
 	"errors"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -146,6 +145,8 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 // already rewrote held func descriptors to pluginClosedFuncStub
 // before this point, so any held call panics with a recognisable
 // message instead of jumping into what FreeLibrary just unmapped.
+//
+// Caller (closePlugin) holds pluginsMu.
 func unloadPlugin(p *Plugin) error {
 	if p.handle == 0 {
 		return nil
@@ -153,21 +154,14 @@ func unloadPlugin(p *Plugin) error {
 	if err := syscall.FreeLibrary(syscall.Handle(p.handle)); err != nil {
 		return err
 	}
-	pluginsMu.Lock()
 	for path, q := range plugins {
 		if q == p {
 			delete(plugins, path)
 			break
 		}
 	}
-	pluginsMu.Unlock()
 	return nil
 }
-
-var (
-	pluginsMu sync.Mutex
-	plugins   map[string]*Plugin
-)
 
 // lastmoduleinit is defined in package runtime via go:linkname.
 //

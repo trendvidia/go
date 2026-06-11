@@ -69,7 +69,26 @@
 // operations may be more suitable despite the performance overheads.
 package plugin
 
-import _ "unsafe" // for go:linkname
+import (
+	"sync"
+	_ "unsafe" // for go:linkname
+)
+
+// pluginsMu serialises every mutation of plugin state shared across
+// goroutines: the plugins path cache below, and — critically — the
+// runtime's moduledata chain. The chain is APPENDED to by
+// runtime.addmoduledata, which runs lock-free from a module
+// constructor inside dlopen/LoadLibrary while open() holds
+// pluginsMu; it is UNLINKED by Plugin.Close (runtime pluginClose).
+// closePlugin therefore holds pluginsMu for its whole body so the
+// unlink (and its lastmoduledatap fixup) can never interleave with
+// a concurrent Open's append. Lock order: pluginsMu, then runtime
+// locks (canonicalSymsLock, itabLock) — the same order open()'s
+// lastmoduleinit establishes.
+var (
+	pluginsMu sync.Mutex
+	plugins   map[string]*Plugin
+)
 
 // Plugin is a loaded Go plugin.
 type Plugin struct {
@@ -186,6 +205,13 @@ func closePlugin(p *Plugin) error {
 	if p == nil {
 		return nil
 	}
+	// Hold pluginsMu for the entire close so the moduledata-chain
+	// unlink in pluginClose cannot interleave with a concurrent
+	// Open's addmoduledata append (see pluginsMu's doc comment),
+	// and so p.err / the path-cache entry change atomically with
+	// respect to open()'s cached-entry check.
+	pluginsMu.Lock()
+	defer pluginsMu.Unlock()
 	if p.err != "" {
 		// Already closed (or failed to load); idempotent return.
 		return nil

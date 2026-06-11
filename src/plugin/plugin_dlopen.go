@@ -51,7 +51,6 @@ import "C"
 
 import (
 	"errors"
-	"sync"
 	"unsafe"
 )
 
@@ -174,11 +173,13 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 // handle (failed-load placeholder, or an entry that already had
 // Close run) is a no-op so callers can be conservative.
 //
-// Cache cleanup: the plugins[filepath] entry is also removed under
-// pluginsMu so a future plugin.Open of the same path obtains a
-// fresh dlopen (and a fresh moduledata) instead of latching onto
-// the closed handle. Without this step, Close would unmap but the
-// next Open would short-circuit on the cached closed *Plugin.
+// Cache cleanup: the plugins[filepath] entry is also removed so a
+// future plugin.Open of the same path obtains a fresh dlopen (and a
+// fresh moduledata) instead of latching onto the closed handle.
+// Without this step, Close would unmap but the next Open would
+// short-circuit on the cached closed *Plugin.
+//
+// Caller (closePlugin) holds pluginsMu.
 func unloadPlugin(p *Plugin) error {
 	if p.handle == 0 {
 		return nil
@@ -187,21 +188,14 @@ func unloadPlugin(p *Plugin) error {
 	if C.pluginCloseHandle(C.uintptr_t(p.handle), &cErr) != 0 {
 		return errors.New(C.GoString(cErr))
 	}
-	pluginsMu.Lock()
 	for path, q := range plugins {
 		if q == p {
 			delete(plugins, path)
 			break
 		}
 	}
-	pluginsMu.Unlock()
 	return nil
 }
-
-var (
-	pluginsMu sync.Mutex
-	plugins   map[string]*Plugin
-)
 
 // lastmoduleinit is defined in package runtime.
 func lastmoduleinit() (pluginpath string, syms map[string]any, inittasks []*initTask, errstr string)

@@ -215,6 +215,21 @@ func TestBasic(t *testing.T) {
 	runHost(t, "host.exe")
 }
 
+// TestFuncMainAccepted locks in trendvidia/go#6: -buildmode=plugin
+// must accept-and-ignore a `func main` in the plugin's main package.
+// Stock default `go build` requires func main to link, so a package
+// that declares it can satisfy both stock builds and a fork plugin
+// build without a per-plugin `//go:build !goplus` stub. The build
+// succeeding here is the guarantee; TestBasic already covers that a
+// func-main plugin (p1) loads and its symbols resolve.
+func TestFuncMainAccepted(t *testing.T) {
+	globalSkip(t)
+	out := filepath.Join(modRoot, "p-funcmain"+pluginSuffix)
+	if err := goCmdBuildPlugin(t, hostImplib, "-o", out, "./funcmain"); err != nil {
+		t.Fatalf("-buildmode=plugin rejected a package with func main: %v", err)
+	}
+}
+
 // TestMismatch exercises the pkghashes mismatch guard (Bug A): a
 // plugin compiled against a different version of `common` must be
 // rejected by plugin.Open with "different version" in the error.

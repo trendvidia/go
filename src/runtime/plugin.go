@@ -39,7 +39,7 @@ func plugin_validatePkghashes(addr uintptr) string {
 		return ""
 	}
 	pluginEntries := unsafe.Slice((*modulehash)(unsafe.Pointer(hdr[0])), int(n))
-	var mismatchPkg string
+	var mismatchPkg, pluginHash, hostHash string
 	for i := range pluginEntries {
 		for j := range firstmoduledata.pkghashes {
 			if firstmoduledata.pkghashes[j].modulename != pluginEntries[i].modulename {
@@ -47,6 +47,8 @@ func plugin_validatePkghashes(addr uintptr) string {
 			}
 			if firstmoduledata.pkghashes[j].linktimehash != pluginEntries[i].linktimehash {
 				mismatchPkg = pluginEntries[i].modulename
+				pluginHash = pluginEntries[i].linktimehash
+				hostHash = firstmoduledata.pkghashes[j].linktimehash
 			}
 			break
 		}
@@ -72,7 +74,38 @@ func plugin_validatePkghashes(addr uintptr) string {
 	if md != nil {
 		md.bad = true
 	}
-	return "plugin was built with a different version of package " + mismatchPkg
+	return pluginVersionMismatchMsg(mismatchPkg, pluginHash, hostHash)
+}
+
+// pluginVersionMismatchMsg formats the plugin.Open version-lock error.
+// The version lock spans every package linked into both host and
+// plugin — not just govm's CompilerVersion — so a bare package name is
+// often not enough to diagnose which side is stale. We name the
+// package and both build fingerprints (plugin vs host) so a standalone
+// plugin build that resolved a package differently from the host is
+// diagnosable without decoding the raw plugin.Open message or
+// re-deriving hashes by hand. See trendvidia/go#7.
+//
+// linktimehash carries the raw package fingerprint bytes (see the
+// linker's go:link.pkghash emission in cmd/link/internal/ld/symtab.go),
+// which are not printable, so both are rendered as hex.
+func pluginVersionMismatchMsg(pkg, pluginHash, hostHash string) string {
+	return "plugin was built with a different version of package " + pkg +
+		" (plugin build hash " + pkghashHex(pluginHash) +
+		", host build hash " + pkghashHex(hostHash) + ")"
+}
+
+// pkghashHex renders a raw package fingerprint (the byte string carried
+// in modulehash.linktimehash / *runtimehash) as lowercase hex for use
+// in diagnostics. The fingerprints are raw bytes rather than text, so
+// they must be encoded before appearing in an error message.
+func pkghashHex(s string) string {
+	const digits = "0123456789abcdef"
+	b := make([]byte, 0, len(s)*2)
+	for i := 0; i < len(s); i++ {
+		b = append(b, digits[s[i]>>4], digits[s[i]&0xf])
+	}
+	return string(b)
 }
 
 //go:linkname plugin_lastmoduleinit plugin.lastmoduleinit
@@ -120,7 +153,7 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	for _, pkghash := range md.pkghashes {
 		if pkghash.linktimehash != *pkghash.runtimehash {
 			md.bad = true
-			return "", nil, nil, "plugin was built with a different version of package " + pkghash.modulename
+			return "", nil, nil, pluginVersionMismatchMsg(pkghash.modulename, pkghash.linktimehash, *pkghash.runtimehash)
 		}
 	}
 

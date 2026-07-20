@@ -606,3 +606,25 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 	modulesinit()
 	return ""
 }
+
+// plugin_syncBeforeUnmap is a stop-the-world barrier the plugin package
+// takes AFTER plugin_close has unlinked a closed plugin's moduledata
+// (its modulesinit above drops the module from activeModules) and
+// BEFORE the plugin's image is unmapped by dlclose/FreeLibrary.
+//
+// The GC scans every active module's data/bss roots in runtime.markroot
+// by ranging over activeModules(). A mark worker that loaded the module
+// slice before plugin_close's modulesinit() can still be mid-scan of the
+// closing plugin's data when the unmap frees those pages, faulting
+// (observed as an access violation in markroot during Plugin.Close on
+// windows/amd64, timing-dependent). Stopping and restarting the world
+// forces every P past a safe point, so no worker retains the pre-unlink
+// slice; after startTheWorld, markroot reloads activeModules() (the
+// closed module now absent) and the subsequent unmap touches no memory
+// the GC will scan.
+//
+//go:linkname plugin_syncBeforeUnmap plugin.syncBeforeUnmap
+func plugin_syncBeforeUnmap() {
+	stw := stopTheWorld(stwPluginClose)
+	startTheWorld(stw)
+}

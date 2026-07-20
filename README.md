@@ -75,12 +75,13 @@ crashing the host:
   not just a compiler-version mismatch. See the `plugin` package docs and
   [trendvidia/go#7](https://github.com/trendvidia/go/issues/7).
 
-**Reproducibility caveat.** These additions currently make builds
-non-reproducible: build-ID-derived data embedded in objects is
-intermittently nondeterministic, so two identical builds can differ
-byte-for-byte (upstream Go, including under `-shared`, is reproducible).
-This fails the upstream `cmd/go` `TestScript/repro_build` test and is
-tracked in [trendvidia/go#8](https://github.com/trendvidia/go/issues/8).
+**Reproducibility.** Because these `go.funcptr` slots are created while
+functions are compiled in parallel, an earlier version emitted them in
+goroutine-scheduling order, which made builds non-reproducible
+(intermittently). This was fixed by emitting the slots sorted by name at
+the end of compilation; builds are now bit-for-bit reproducible and the
+upstream `cmd/go` `TestScript/repro_build` test passes. See
+[trendvidia/go#8](https://github.com/trendvidia/go/issues/8).
 
 ### Contributing
 

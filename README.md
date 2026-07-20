@@ -49,6 +49,39 @@ the fork match upstream's default cgo behavior. (cgo itself still works;
 this only controls the *default* when `CGO_ENABLED` is not set at use
 time.)
 
+### Binary/object format differences (plugin object consistency)
+
+To make every package loadable as, and shareable with, a
+`-buildmode=plugin` object, this fork changes the compiled object and
+final binary format relative to upstream Go. These differences are
+deliberate and exist so that a host and its plugins can share code and
+data safely and so that `Plugin.Close` can tear a plugin down without
+crashing the host:
+
+- **Dynamic-linking codegen by default.** Packages are compiled in
+  shared/dynlink mode (`-shared`) so their code and globals are
+  position-independent and can be referenced across the host↔plugin
+  boundary, instead of upstream's static default.
+- **Writable function-pointer descriptors.** The compiler emits
+  `go.funcptr.<name>` / `<name>·f` descriptor symbols and, under
+  dynlink, places them in writable `.noptrdata` (see
+  `cmd/compile/internal/staticdata.WriteFuncSyms`). This lets
+  `Plugin.Close` rewrite held func values to a panic-on-call stub
+  before the plugin's text is unmapped. Standard `-buildmode=exe`
+  builds keep these in read-only data, matching upstream.
+- **Per-package version-lock hashes.** Objects/binaries carry per-package
+  build fingerprints so `plugin.Open` can reject a plugin built against a
+  divergent version of *any* shared package (runtime, protobuf, etc.),
+  not just a compiler-version mismatch. See the `plugin` package docs and
+  [trendvidia/go#7](https://github.com/trendvidia/go/issues/7).
+
+**Reproducibility caveat.** These additions currently make builds
+non-reproducible: build-ID-derived data embedded in objects is
+intermittently nondeterministic, so two identical builds can differ
+byte-for-byte (upstream Go, including under `-shared`, is reproducible).
+This fails the upstream `cmd/go` `TestScript/repro_build` test and is
+tracked in [trendvidia/go#8](https://github.com/trendvidia/go/issues/8).
+
 ### Contributing
 
 Go is the work of thousands of contributors. We appreciate your help!

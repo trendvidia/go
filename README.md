@@ -28,6 +28,27 @@ operating system and architecture, visit
 https://go.dev/doc/install/source
 for source installation instructions.
 
+### Building this fork
+
+This is the trendvidia "plus" fork of Go (`go version` reports
+`… (plus)`). When building the toolchain from source, run `make.bash`
+with **`CGO_ENABLED` unset** in the environment:
+
+```
+cd src
+env -u CGO_ENABLED ./make.bash
+```
+
+`cmd/dist` bakes the value of `$CGO_ENABLED` at build time into the
+toolchain's `DefaultCGO_ENABLED` (`internal/buildcfg`). If `CGO_ENABLED=1`
+is exported when `make.bash` runs, the built toolchain defaults cgo to
+*on* unconditionally and skips the upstream "no C compiler in `PATH` →
+default cgo off" autodetection — which diverges from stock Go and fails
+the `cmd/go` `TestScript/autocgo` test. Leaving `CGO_ENABLED` unset makes
+the fork match upstream's default cgo behavior. (cgo itself still works;
+this only controls the *default* when `CGO_ENABLED` is not set at use
+time.)
+
 ### Contributing
 
 Go is the work of thousands of contributors. We appreciate your help!

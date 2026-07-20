@@ -127,6 +127,7 @@ func dumpdata() {
 	}
 
 	staticdata.WriteFuncSyms()
+	staticdata.WriteFuncPtrSlots()
 	addGCLocals()
 }
 

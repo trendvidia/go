@@ -67,6 +67,48 @@
 // communication (IPC) mechanisms such as sockets, pipes, remote
 // procedure call (RPC), shared memory mappings, or file system
 // operations may be more suitable despite the performance overheads.
+//
+// # Authoring a plugin main package (fork note)
+//
+// A plugin's main package may declare a `func main`; -buildmode=plugin
+// accepts it and does not run it (only package init functions run at
+// plugin load). This lets a single package satisfy both a plugin build
+// and a stock default `go build ./...` — which requires `func main` to
+// link — without a per-plugin build-tag stub. In other words:
+//
+//	package main
+//
+//	func Exported() { /* ... */ }
+//
+//	func main() {} // ignored by -buildmode=plugin; keeps `go build ./...` and go vet green
+//
+// is a supported, canonical pattern; you do not need a `//go:build`
+// stub to drop `func main` out of the plugin build. See trendvidia/go#6.
+//
+// # Version locking spans all shared packages (fork note)
+//
+// [Open] rejects a plugin whose build of any package linked into both
+// the host and the plugin differs from the host's build of that same
+// package — not merely a single toolchain/compiler version. The lock
+// surface is every shared package: the runtime, google.golang.org/protobuf,
+// and any other dependency the host and plugin both link. A standalone
+// plugin build therefore loads only when the host resolves an identical
+// dependency graph.
+//
+// The practical consequence: build the host and the plugin against the
+// same resolved module graph. If the host resolves dependencies through
+// a go.work overlay or a `replace` directive, the plugin must resolve
+// them the same way; the reliable recipe is to build both with
+// GOWORK=off against pinned go.mod versions (or both under the same
+// workspace) so their per-package build hashes match.
+//
+// When a mismatch is detected, [Open] reports the offending package and
+// both build hashes, for example:
+//
+//	plugin was built with a different version of package google.golang.org/protobuf/internal/pragma (plugin build hash 1a2b…, host build hash 9f8e…)
+//
+// so the diverging package — and which side is stale — is identifiable
+// without decoding the raw loader message. See trendvidia/go#7.
 package plugin
 
 import (

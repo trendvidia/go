@@ -88,7 +88,13 @@ func runVersion(ctx context.Context, cmd *base.Command, args []string) {
 		if gover.TestVersion != "" {
 			v = gover.TestVersion + " (TESTGO_VERSION)"
 		}
-		fmt.Printf("go version %s %s/%s\n", v, runtime.GOOS, runtime.GOARCH)
+		// forkVersionMarker identifies this toolchain as the trendvidia
+		// "plus" fork. It trails GOOS/GOARCH so the leading
+		// "go version <version>" prefix — which tooling and version
+		// parsers key on — is unchanged, and runtime.Version() (embedded
+		// in built binaries, parsed by gover) keeps its canonical form.
+		const forkVersionMarker = "(plus)"
+		fmt.Printf("go version %s %s/%s %s\n", v, runtime.GOOS, runtime.GOARCH, forkVersionMarker)
 		return
 	}
 

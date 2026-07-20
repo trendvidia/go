@@ -28,6 +28,61 @@ operating system and architecture, visit
 https://go.dev/doc/install/source
 for source installation instructions.
 
+### Building this fork
+
+This is the trendvidia "plus" fork of Go (`go version` reports
+`… (plus)`). When building the toolchain from source, run `make.bash`
+with **`CGO_ENABLED` unset** in the environment:
+
+```
+cd src
+env -u CGO_ENABLED ./make.bash
+```
+
+`cmd/dist` bakes the value of `$CGO_ENABLED` at build time into the
+toolchain's `DefaultCGO_ENABLED` (`internal/buildcfg`). If `CGO_ENABLED=1`
+is exported when `make.bash` runs, the built toolchain defaults cgo to
+*on* unconditionally and skips the upstream "no C compiler in `PATH` →
+default cgo off" autodetection — which diverges from stock Go and fails
+the `cmd/go` `TestScript/autocgo` test. Leaving `CGO_ENABLED` unset makes
+the fork match upstream's default cgo behavior. (cgo itself still works;
+this only controls the *default* when `CGO_ENABLED` is not set at use
+time.)
+
+### Binary/object format differences (plugin object consistency)
+
+To make every package loadable as, and shareable with, a
+`-buildmode=plugin` object, this fork changes the compiled object and
+final binary format relative to upstream Go. These differences are
+deliberate and exist so that a host and its plugins can share code and
+data safely and so that `Plugin.Close` can tear a plugin down without
+crashing the host:
+
+- **Dynamic-linking codegen by default.** Packages are compiled in
+  shared/dynlink mode (`-shared`) so their code and globals are
+  position-independent and can be referenced across the host↔plugin
+  boundary, instead of upstream's static default.
+- **Writable function-pointer descriptors.** The compiler emits
+  `go.funcptr.<name>` / `<name>·f` descriptor symbols and, under
+  dynlink, places them in writable `.noptrdata` (see
+  `cmd/compile/internal/staticdata.WriteFuncSyms`). This lets
+  `Plugin.Close` rewrite held func values to a panic-on-call stub
+  before the plugin's text is unmapped. Standard `-buildmode=exe`
+  builds keep these in read-only data, matching upstream.
+- **Per-package version-lock hashes.** Objects/binaries carry per-package
+  build fingerprints so `plugin.Open` can reject a plugin built against a
+  divergent version of *any* shared package (runtime, protobuf, etc.),
+  not just a compiler-version mismatch. See the `plugin` package docs and
+  [trendvidia/go#7](https://github.com/trendvidia/go/issues/7).
+
+**Reproducibility.** Because these `go.funcptr` slots are created while
+functions are compiled in parallel, an earlier version emitted them in
+goroutine-scheduling order, which made builds non-reproducible
+(intermittently). This was fixed by emitting the slots sorted by name at
+the end of compilation; builds are now bit-for-bit reproducible and the
+upstream `cmd/go` `TestScript/repro_build` test passes. See
+[trendvidia/go#8](https://github.com/trendvidia/go/issues/8).
+
 ### Contributing
 
 Go is the work of thousands of contributors. We appreciate your help!

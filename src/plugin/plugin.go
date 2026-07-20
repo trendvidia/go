@@ -215,6 +215,15 @@ func pluginDependents(pluginpath string) []string
 //go:linkname pluginClose
 func pluginClose(pluginpath string, funcDescriptors []*uintptr) (errstr string)
 
+// syncBeforeUnmap is a runtime stop-the-world barrier taken between the
+// moduledata unlink in pluginClose and unmapping the plugin image in
+// unloadPlugin, so a GC mark worker cannot be scanning the plugin's
+// data/bss roots when dlclose/FreeLibrary frees those pages. Defined in
+// package runtime.
+//
+//go:linkname syncBeforeUnmap
+func syncBeforeUnmap()
+
 // closePlugin is the platform-independent half of Plugin.Close. It
 // runs in three ordered phases:
 //
@@ -269,6 +278,13 @@ func closePlugin(p *Plugin) error {
 	if errstr := pluginClose(p.pluginpath, p.funcDescriptors); errstr != "" {
 		return pluginErr("Close", p.pluginpath, errstr)
 	}
+	// Stop-the-world barrier between the moduledata unlink above and the
+	// image unmap below: ensures no GC mark worker is still scanning the
+	// plugin's data/bss roots (via markroot's activeModules() walk) when
+	// unloadPlugin's dlclose/FreeLibrary frees those pages. Without it,
+	// a worker holding the pre-unlink module slice faults on the unmapped
+	// memory (a windows/amd64 Plugin.Close access violation in markroot).
+	syncBeforeUnmap()
 	if err := unloadPlugin(p); err != nil {
 		// Runtime state is already torn down. Surface the dlclose
 		// error but mark the plugin closed regardless: re-trying

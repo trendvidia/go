@@ -885,10 +885,10 @@ func schedinit() {
 	cpuinit(godebug) // must run before alginit
 	alginit()        // maps, hash, rand must not be used before this call
 	mcommoninit(gp.m, -1)
-	modulesinit()  // provides activeModules
-	funcptrsinit() // canonicalise function-pointer slots; uses activeModules
-	typelinksinit()  // uses maps, activeModules
-	itabsinit()      // uses activeModules
+	modulesinit()   // provides activeModules
+	funcptrsinit()  // canonicalise function-pointer slots; uses activeModules
+	typelinksinit() // uses maps, activeModules
+	itabsinit()     // uses activeModules
 	stkobjinit()    // must run before GC starts
 
 	sigsave(&gp.m.sigmask)
@@ -1473,6 +1473,7 @@ const (
 	stwForTestReadMemStatsSlow                      // "ReadMemStatsSlow (test)"
 	stwForTestPageCachePagesLeaked                  // "PageCachePagesLeaked (test)"
 	stwForTestResetDebugLog                         // "ResetDebugLog (test)"
+	stwPluginClose                                  // "plugin close"
 )
 
 func (r stwReason) String() string {
@@ -1504,6 +1505,7 @@ var stwReasonStrings = [...]string{
 	stwForTestReadMemStatsSlow:     "ReadMemStatsSlow (test)",
 	stwForTestPageCachePagesLeaked: "PageCachePagesLeaked (test)",
 	stwForTestResetDebugLog:        "ResetDebugLog (test)",
+	stwPluginClose:                 "plugin close",
 }
 
 // worldStop provides context from the stop-the-world required by the

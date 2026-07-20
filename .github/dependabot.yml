@@ -1,0 +1,31 @@
+# Dependabot configuration for the trendvidia/go fork.
+#
+# The golang.org/x/* modules in src/go.mod and src/cmd/go.mod are pinned
+# to match the upstream Go release; they are updated by syncing the
+# toolchain, never independently. The standard library also vendors only
+# a subset of each module (crypto primitives, net utilities), so security
+# advisories for non-vendored packages — e.g. golang.org/x/crypto/ssh,
+# golang.org/x/net/html — do not apply to this toolchain. We ignore them
+# here so Dependabot does not open no-op bump PRs against upstream-managed
+# pins. (Alerts for those packages are dismissed as "not used".)
+version: 2
+updates:
+  # GitHub Actions used by the plugin-validation matrix workflow.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Vendored Go modules — standard library (src) and cmd (src/cmd).
+  - package-ecosystem: gomod
+    directory: /src
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: golang.org/x/*
+  - package-ecosystem: gomod
+    directory: /src/cmd
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: golang.org/x/*

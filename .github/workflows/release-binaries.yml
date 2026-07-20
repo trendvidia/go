@@ -71,7 +71,7 @@ jobs:
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $gover = (Get-Content "$env:GITHUB_WORKSPACE\VERSION")[0]
           $name = "$gover-plus.${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"

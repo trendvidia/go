@@ -1,0 +1,89 @@
+# Builds native toolchain archives for each platform and attaches them
+# to an existing GitHub release. Manually dispatched with the release
+# tag; builds on the self-hosted runners (one per platform), packages
+# the built go tree as go<version>-plus.<goos>-<goarch>.tar.gz, and
+# uploads it as a release asset.
+name: release-binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build binaries for and attach (e.g. v1.26.5)
+        required: true
+        default: v1.26.5
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-binaries-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: mini, goos: darwin, goarch: arm64 }
+          - { runner: trader, goos: linux, goarch: amd64 }
+          - { runner: linux_parallels, goos: linux, goarch: arm64 }
+          - { runner: windows_omen, goos: windows, goarch: amd64 }
+          - { runner: windows_parallels, goos: windows, goarch: arm64 }
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      # --- Build the toolchain natively ---
+      - name: Build toolchain (Unix)
+        if: runner.os != 'Windows'
+        working-directory: src
+        run: |
+          export GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          ./make.bash
+
+      - name: Build toolchain (Windows)
+        if: runner.os == 'Windows'
+        working-directory: src
+        shell: cmd
+        run: |
+          for /f "delims=" %%i in ('go env GOROOT') do set "GOROOT_BOOTSTRAP=%%i"
+          call make.bat
+
+      # --- Package the built go tree as go<version>-plus.<os>-<arch>.tar.gz ---
+      # The checkout dir is named "go" (repo name), so archiving it from
+      # its parent yields a top-level go/ prefix, matching the upstream
+      # distribution layout. .git is excluded.
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          gover=$(sed -n 1p "$GITHUB_WORKSPACE/VERSION")
+          name="${gover}-plus.${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          cd "$(dirname "$GITHUB_WORKSPACE")"
+          tar --exclude='go/.git' -czf "$RUNNER_TEMP/$name" go
+          ls -lh "$RUNNER_TEMP/$name"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gover = (Get-Content "$env:GITHUB_WORKSPACE\VERSION")[0]
+          $name = "$gover-plus.${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          Push-Location (Split-Path $env:GITHUB_WORKSPACE -Parent)
+          & tar.exe --exclude='go/.git' -czf "$env:RUNNER_TEMP\$name" go
+          Pop-Location
+          Get-ChildItem "$env:RUNNER_TEMP\$name" | Format-List Name,Length
+
+      # --- Attach to the release (adds assets; does not alter notes) ---
+      - name: Upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: ${{ runner.temp }}/*-plus.${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          fail_on_unmatched_files: true

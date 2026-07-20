@@ -5,6 +5,7 @@
 package staticdata
 
 import (
+	"slices"
 	"strings"
 	"sync"
 
@@ -55,9 +56,42 @@ func slotLsym(prefix string, orig *obj.LSym) *obj.LSym {
 	}
 	name := prefix + orig.Name
 	s := base.Ctxt.Lookup(name)
+	// Record the slot for deferred, order-stable emission. We do NOT
+	// emit the slot data here: slotLsym is called from ssagen while
+	// functions are compiled in parallel, so emitting inline appends
+	// the slot to the object in goroutine-scheduling order and makes
+	// the compiled object non-reproducible (trendvidia/go#8).
+	// WriteFuncPtrSlots emits the recorded slots sorted by name at the
+	// end of compilation instead. The caller only needs the symbol to
+	// exist (as a relocation target); its data is filled in before the
+	// object is written — the same deferred pattern WriteFuncSyms uses.
 	slotMu.Lock()
-	if s.Size == 0 {
-		objw.SymPtr(s, 0, orig, 0)
+	if _, ok := pendingSlots[s]; !ok {
+		pendingSlots[s] = orig
+	}
+	slotMu.Unlock()
+	return s
+}
+
+// WriteFuncPtrSlots emits the deferred go.funcptr slot data recorded by
+// slotLsym, in a deterministic order (sorted by symbol name). Must be
+// called once, single-threaded, after all functions are compiled — from
+// gc.dumpdata, alongside WriteFuncSyms.
+//
+// Emission order affects only object layout, not semantics: the slots
+// are DUPOK and are resolved by name by the linker and by the runtime's
+// module-load canonicalisation, so a stable sort is transparent to
+// plugin loading and Plugin.Close.
+func WriteFuncPtrSlots() {
+	slots := make([]*obj.LSym, 0, len(pendingSlots))
+	for s := range pendingSlots {
+		slots = append(slots, s)
+	}
+	slices.SortFunc(slots, func(a, b *obj.LSym) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	for _, s := range slots {
+		objw.SymPtr(s, 0, pendingSlots[s], 0)
 		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
 		// Force SNOPTRDATA so the slot lives in writable .noptrdata
 		// rather than being promoted to a RELRO read-only section by
@@ -66,8 +100,6 @@ func slotLsym(prefix string, orig *obj.LSym) *obj.LSym {
 		// write to the slot during canonicalisation at module load.
 		s.Type = objabi.SNOPTRDATA
 	}
-	slotMu.Unlock()
-	return s
 }
 
 // isCompilerInternal reports whether name identifies a per-module
@@ -107,7 +139,14 @@ func isCompilerInternal(name string) bool {
 	return false
 }
 
-// slotMu serialises slot creation. Without it, two goroutines
-// compiling packages in parallel can both observe Size == 0 and both
-// call objw.Global, producing a redeclaration error from the linker.
+// slotMu serialises access to pendingSlots. slotLsym is called from
+// goroutines compiling functions in parallel, so recording a slot needs
+// mutual exclusion.
 var slotMu sync.Mutex
+
+// pendingSlots records every go.funcptr slot referenced during
+// compilation, mapping the slot symbol to the original it points at.
+// Populated (under slotMu) by slotLsym during parallel compilation and
+// drained, sorted, by WriteFuncPtrSlots at dumpdata time. The map keys
+// deduplicate slots referenced from multiple functions.
+var pendingSlots = map[*obj.LSym]*obj.LSym{}

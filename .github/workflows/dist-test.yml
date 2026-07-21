@@ -1,0 +1,89 @@
+name: dist-test
+
+# Per-platform validation of the fork, built FROM SOURCE on each self-hosted box
+# (bootstrapped by the box's own installed go-plus, GOROOT_BOOTSTRAP=$(go env GOROOT)).
+#
+# darwin/arm64 + linux/{amd64,arm64}: the FULL Go dist test (src/all.bash) — the
+# rigorous check that the toolchain, runtime and whole stdlib are correct.
+#
+# windows/{amd64,arm64}: build (make.bat) + a core-stdlib smoke, NOT full all.bat.
+# The full Windows dist test fails on OS-integration corners that self-hosted
+# workgroup/VM Windows boxes don't satisfy (symlink privilege, workgroup
+# NETWORK-SERVICE account resolution) — environmental, not fork defects; see #16.
+# The fork's Windows-specific feature (plugin load/unload) is validated on all 5
+# platforms by plugin-matrix.yml, so here Windows proves it BUILDS + runs core code.
+#
+# Runner labels match release-binaries.yml / plugin-matrix.yml (per-machine labels).
+
+on:
+  push:
+    branches: [trendvidia]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Nightly 06:00 UTC sweep across all five boxes.
+    - cron: '0 6 * * *'
+
+# A full all.bash per Unix leg is expensive; supersede in-flight runs for the ref.
+concurrency:
+  group: dist-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dist-test:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: mini, goos: darwin, goarch: arm64 }
+          - { runner: trader, goos: linux, goarch: amd64 }
+          - { runner: linux_parallels, goos: linux, goarch: arm64 }
+          - { runner: windows_omen, goos: windows, goarch: amd64 }
+          - { runner: windows_parallels, goos: windows, goarch: arm64 }
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unix: full dist test (make.bash + the complete test run).
+      - name: all.bash (Unix)
+        if: runner.os != 'Windows'
+        working-directory: src
+        run: |
+          export GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          ./all.bash
+
+      # Windows: build the toolchain, then smoke-test a curated set of PURE core
+      # stdlib packages with the freshly-built go (compile + link + run + test).
+      # The list deliberately excludes packages whose tests need external tools
+      # or specific OS config (#16): os/user (workgroup account resolution), os
+      # (symlink privilege), and runtime (its runtime-gdb tests fail on an
+      # incompatible mingw gdb). make.bat already validates the runtime compiles;
+      # plugin-matrix.yml validates the fork's plugin runtime feature on all 5.
+      - name: make.bat + core-stdlib smoke (Windows)
+        if: runner.os == 'Windows'
+        working-directory: src
+        shell: cmd
+        run: |
+          for /f "delims=" %%i in ('go env GOROOT') do set "GOROOT_BOOTSTRAP=%%i"
+          call make.bat || exit /b 1
+          ..\bin\go.exe test -short -count=1 errors fmt strings strconv bytes sort math encoding/json regexp sync context || exit /b 1
+
+      # Confirm the toolchain we just built is the fork, not stock Go.
+      - name: Assert the built toolchain is go-plus (Unix)
+        if: runner.os != 'Windows'
+        working-directory: src
+        run: |
+          ../bin/go version
+          ../bin/go version | grep -q '(plus)' || { echo "::error::built toolchain is not the go-plus fork"; exit 1; }
+      - name: Assert the built toolchain is go-plus (Windows)
+        if: runner.os == 'Windows'
+        working-directory: src
+        shell: powershell
+        run: |
+          ..\bin\go.exe version
+          if (-not (..\bin\go.exe version | Select-String '\(plus\)')) { Write-Error 'built toolchain is not the go-plus fork'; exit 1 }

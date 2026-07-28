@@ -467,8 +467,195 @@ func peRetargetGotRelocs(ctxt *Link) {
 
 // impLibSymbol holds info about a symbol to include in the import library.
 type impLibSymbol struct {
+	sym    loader.Sym
 	name   string
 	isFunc bool
+}
+
+// peExportLimit bounds how many names a PE image may publish. The export
+// directory sizes its tables with uint32 fields, but an import resolves a
+// by-ordinal entry through the low 16 bits of the import lookup entry, so
+// no PE image can address more than 65535 exports. mingw ld refuses the
+// link outright past that point ("export ordinal too large: N"), which is
+// how a large plugin host used to fail to build at all. Stop short of the
+// hard limit so nothing the external linker adds on its own can push the
+// table over.
+const peExportLimit = 65500
+
+// peHostExportRank ranks a plugin host's exports by how load-bearing they
+// are for the host<->plugin boundary, lowest first. It only matters when
+// a host has more exportable symbols than a PE image can address; the
+// rank then decides what survives the cut.
+//
+// Rank 0 is the cross-module runtime ABI: the process-wide singletons in
+// peSharedRuntimeData (allocator, scheduler, GC) and the runtime entry
+// points a plugin's own runtime routes into. Dropping one of these does
+// not fail any link — peLoadImportLibrary just leaves the plugin's copy
+// local — it silently gives the plugin a second allocator or scheduler,
+// so they are never eviction candidates.
+//
+// Rank 1 is everything else. Those are shared as a convenience: a global
+// in a package both host and plugin link resolves to the host's instance.
+// Losing one costs that sharing, not the runtime's integrity.
+func peHostExportRank(name string) int {
+	if strings.HasPrefix(name, "runtime.") || strings.HasPrefix(name, "internal/") ||
+		peSharedRuntimeData[name] || peSharedV1Funcs[name] {
+		return 0
+	}
+	return 1
+}
+
+// peSymIsExternal reports whether s reaches the object file's symbol
+// table as IMAGE_SYM_CLASS_EXTERNAL, which is the precondition for the
+// external linker to export it by name. Listing anything else in a .def
+// stops mingw ld with "cannot export X: symbol not defined".
+//
+// It mirrors writeSymbols: shouldBeInSymbolTable's AttrNotInSymbolTable
+// check, then the test that picks IMAGE_SYM_CLASS_STATIC over EXTERNAL.
+// writeSymbols also requires a section assignment, but every reachable
+// text/rodata/data symbol gets one in dodata, so nothing here turns on
+// it.
+//
+// Between them these rule out Go assembly's file-local `foo<>` symbols
+// (runtime's gogo<>, memeqbody<>, setg_gcc<>) and everything folded into
+// a carrier symbol rather than emitted in its own right: gclocals·
+// bitmaps, .opendefer funcdata, gcbits. None were ever importable
+// anyway — peLoadImportLibrary resolves host names at ABI version 0 or
+// 1, never at a static version.
+//
+// Only meaningful once symtab has run, which is where most of these
+// attributes are assigned. Consumers running before that see the
+// unfiltered candidate set; see peHostExportCandidates.
+func peSymIsExternal(ldr *loader.Loader, s loader.Sym) bool {
+	if ldr.AttrNotInSymbolTable(s) {
+		return false
+	}
+	return !ldr.IsFileLocal(s) && !ldr.AttrVisibilityHidden(s) && !ldr.AttrLocal(s)
+}
+
+// peHostExportSnapshot is the candidate set peSnapshotHostExports picks
+// at dope time.
+var peHostExportSnapshot []impLibSymbol
+
+// peHostExportCandidates returns the bounded set a plugin host may
+// publish, as chosen at dope time. The internal linker's export table is
+// built from it directly: addexports writes each entry's address out of
+// the loader, so it does not care whether a symbol also earns its own
+// COFF symbol table entry.
+//
+// An empty result means peSnapshotHostExports never ran, since the
+// runtime alone contributes thousands of symbols to any plugin host. That
+// would leave the host publishing nothing, and every plugin built against
+// it would fail to bind at load time with no hint as to why, so callers
+// report it instead of writing out an empty table.
+func peHostExportCandidates() []impLibSymbol {
+	return peHostExportSnapshot
+}
+
+// peHostExports returns the symbols a plugin host actually publishes to
+// the outside world, in PE import library order (alphabetical). It is
+// the single source of truth for the two artifacts that have to agree:
+//
+//   - asmb2 -> peGenerateImportLibrary, the host.exe.a plugins link against
+//   - hostlink -> peHostExportFile, the .def the external linker exports from
+//
+// A plugin imports exactly what it finds in the symbol index of
+// host.exe.a, so listing more in the archive than the host exports would
+// leave a plugin binding an import the OS loader cannot resolve. Both
+// callers run after symtab, so both see the same answer.
+func peHostExports(ldr *loader.Loader) []impLibSymbol {
+	symbols := make([]impLibSymbol, 0, len(peHostExportSnapshot))
+	for _, s := range peHostExportSnapshot {
+		if peSymIsExternal(ldr, s.sym) {
+			symbols = append(symbols, s)
+		}
+	}
+	return symbols
+}
+
+// peSnapshotHostExports picks the export set for a Windows plugin host.
+// Called from dope, which is the last point before Gentext where the
+// three consumers above all see the same loader: after it, trampolines,
+// `__imp_X` slots, section boundary markers and go:buildid appear, none
+// of which a plugin may bind to anyway.
+//
+// The result is bounded by peExportLimit. Callers get a deterministic set
+// across builds — ranked so the runtime ABI survives, then sorted by name
+// within rank — because a host and the plugins built against it are
+// linked separately and must land on the same list.
+func peSnapshotHostExports(ctxt *Link) {
+	ldr := ctxt.loader
+
+	// Names go through mangleABIName so a function with both ABI variants
+	// produces two distinct entries: "X" (the ABIInternal entry on a
+	// non-shared host) and "X.abi0" (the ABI0 body). External-link
+	// plugins need the ABI0 body separately because compiler-emitted
+	// call sites for runtime helpers like `runtime.systemstack` use the
+	// ABI0 stack-arg shape and cannot tolerate the host's ABIInternal
+	// wrapper, whose `mov %rax,(%rsp)` clobbers the caller's stack arg.
+	//
+	// Only reachable symbols are eligible. Critical symbols like
+	// runtime.addmoduledata are made reachable by the deadcode pass,
+	// which marks every defined symbol reachable for plugin hosts.
+	seen := make(map[string]bool)
+	var symbols []impLibSymbol
+	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+		if !ldr.AttrReachable(s) {
+			continue
+		}
+		st := ldr.SymType(s)
+		if !st.IsText() && !st.IsRODATA() && !st.IsData() {
+			continue
+		}
+		name := mangleABIName(ctxt, ldr, s, ldr.SymExtname(s))
+		if peSkipSymName(name) || seen[name] {
+			continue
+		}
+		// Section boundary markers stay out. A plugin that bound one
+		// would point its own moduledata at the host's section bounds
+		// and crash the GC, so peLoadImportLibrary refuses to import
+		// them — publishing them only invites the mistake.
+		if peSectionMarkers[name] {
+			continue
+		}
+		// Linker-internal carriers stay out for the same reason: they
+		// are per-module by construction (string literal storage, itab
+		// storage, the FIPS section bounds), and peLoadImportLibrary's
+		// data gating already refuses to share anything `go:`-prefixed.
+		// They are also the only export names that are not identifiers
+		// — `go:string."..."` embeds the literal verbatim, quotes and
+		// newlines included, which no .def EXPORTS line can carry.
+		if strings.HasPrefix(name, "go:") {
+			continue
+		}
+		seen[name] = true
+		symbols = append(symbols, impLibSymbol{sym: s, name: name, isFunc: st.IsText()})
+	}
+
+	if len(symbols) > peExportLimit {
+		sort.Slice(symbols, func(i, j int) bool {
+			ri, rj := peHostExportRank(symbols[i].name), peHostExportRank(symbols[j].name)
+			if ri != rj {
+				return ri < rj
+			}
+			return symbols[i].name < symbols[j].name
+		})
+		dropped := symbols[peExportLimit:]
+		symbols = symbols[:peExportLimit]
+		fmt.Fprintf(os.Stderr, "link: warning: %s can host plugins and has %d exportable symbols, "+
+			"but a PE image can only address %d exports; %d were left out of the host export table.\n"+
+			"link: warning: the cross-module runtime ABI is exported in full, so plugins still load and run. "+
+			"Package-level symbols that were dropped (for example %s) stay module-local instead of resolving "+
+			"to the host's instance, so a plugin sharing one of those globals with the host will see its own copy.\n",
+			filepath.Base(*flagOutfile), len(symbols)+len(dropped), peExportLimit, len(dropped), dropped[0].name)
+	}
+
+	// Alphabetical order is the PE import library convention, and
+	// writeFirstLinkerMember's offset table is built in this order.
+	sort.Slice(symbols, func(i, j int) bool {
+		return symbols[i].name < symbols[j].name
+	})
+	peHostExportSnapshot = symbols
 }
 
 // peGenerateImportLibrary creates a MinGW-compatible import library (.a)
@@ -514,52 +701,14 @@ func peGenerateImportLibrary(ctxt *Link) {
 		return
 	}
 
-	ldr := ctxt.loader
-
-	// Collect exportable symbols from the loader. Only include reachable
-	// symbols — the host's PE export table only contains reachable symbols,
-	// so the import library must match. Critical symbols like
-	// runtime.addmoduledata are made reachable by the deadcode pass
-	// (which marks all defined symbols reachable for plugin hosts).
-	//
-	// Names go through mangleABIName so a function with both ABI variants
-	// produces two distinct entries: "X" (the ABIInternal entry on a
-	// non-shared host) and "X.abi0" (the ABI0 body). External-link
-	// plugins need the ABI0 body separately because compiler-emitted
-	// call sites for runtime helpers like `runtime.systemstack` use the
-	// ABI0 stack-arg shape and cannot tolerate the host's ABIInternal
-	// wrapper, whose `mov %rax,(%rsp)` clobbers the caller's stack arg.
-	seen := make(map[string]bool)
-	var symbols []impLibSymbol
-	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
-		if !ldr.AttrReachable(s) {
-			continue
-		}
-		st := ldr.SymType(s)
-		if !st.IsText() && !st.IsRODATA() && !st.IsData() {
-			continue
-		}
-		name := mangleABIName(ctxt, ldr, s, ldr.SymExtname(s))
-		if peSkipSymName(name) || seen[name] {
-			continue
-		}
-		seen[name] = true
-		isFunc := st.IsText()
-		symbols = append(symbols, impLibSymbol{name: name, isFunc: isFunc})
-		// PE export ordinals are uint16; cap at 65535.
-		if len(symbols) >= 0xFFFF {
-			break
-		}
-	}
-
+	// The archive lists exactly what the host's PE export table publishes
+	// — see peHostExports — so every name a plugin resolves out of the
+	// symbol index is one the OS loader can actually bind at load time.
+	symbols := peHostExports(ctxt.loader)
 	if len(symbols) == 0 {
+		Errorf("no host exports to write to %s; plugins would have nothing to link against", implib)
 		return
 	}
-
-	// Sort alphabetically (required by PE import library convention).
-	sort.Slice(symbols, func(i, j int) bool {
-		return symbols[i].name < symbols[j].name
-	})
 
 	f, err := os.Create(implib)
 	if err != nil {
@@ -1569,7 +1718,13 @@ func filterConvertedSyms(ctxt *Link) []loader.Sym {
 
 // peExportAllSymbols marks all reachable text/data symbols for export in
 // the PE export table. This is the internal-linker equivalent of MinGW's
-// --export-all-symbols flag.
+// --export-all-symbols flag, used for plugin DLLs so the host can reach
+// their symbols via GetProcAddress.
+//
+// Plugin hosts go through peMarkHostExports instead: a host is a whole
+// application and routinely has more symbols than a PE image can export,
+// so its list has to be bounded deliberately rather than truncated
+// wherever initdynexport happens to stop.
 func peExportAllSymbols(ctxt *Link) {
 	ldr := ctxt.loader
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
@@ -1589,6 +1744,25 @@ func peExportAllSymbols(ctxt *Link) {
 			continue
 		}
 		ldr.SetAttrCgoExportDynamic(s, true)
+	}
+}
+
+// peMarkHostExports marks the internal-linked plugin host's exports,
+// from the candidate set peSnapshotHostExports picked.
+//
+// It runs in dope, before symtab has decided which symbols get their own
+// entry in the COFF symbol table, so it marks the candidates rather than
+// the narrower set peHostExports settles on later. That only makes the
+// internal linker's export table a superset of host.exe.a — still within
+// peExportLimit, and every archive entry still has an export behind it,
+// which is the direction that matters.
+func peMarkHostExports(ctxt *Link) {
+	ldr := ctxt.loader
+	for _, s := range peHostExportCandidates() {
+		if ldr.AttrCgoExportDynamic(s.sym) {
+			continue // already in the export list
+		}
+		ldr.SetAttrCgoExportDynamic(s.sym, true)
 	}
 }
 

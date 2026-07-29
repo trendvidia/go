@@ -31,7 +31,8 @@ for source installation instructions.
 ### Building this fork
 
 This is the trendvidia "plus" fork of Go (`go version` reports
-`… (plus)`). When building the toolchain from source, run `make.bash`
+`… (plus <fork release>)`, e.g. `go version go1.26.5 darwin/arm64 (plus
+v1.26.5a)` — the leading version stays canonical upstream Go). When building the toolchain from source, run `make.bash`
 with **`CGO_ENABLED` unset** in the environment:
 
 ```

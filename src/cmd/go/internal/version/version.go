@@ -89,11 +89,25 @@ func runVersion(ctx context.Context, cmd *base.Command, args []string) {
 			v = gover.TestVersion + " (TESTGO_VERSION)"
 		}
 		// forkVersionMarker identifies this toolchain as the trendvidia
-		// "plus" fork. It trails GOOS/GOARCH so the leading
-		// "go version <version>" prefix — which tooling and version
-		// parsers key on — is unchanged, and runtime.Version() (embedded
-		// in built binaries, parsed by gover) keeps its canonical form.
-		const forkVersionMarker = "(plus)"
+		// "plus" fork and names the fork release it was built from. It
+		// trails GOOS/GOARCH so the leading "go version <version>"
+		// prefix — which tooling and version parsers key on — is
+		// unchanged, and runtime.Version() (embedded in built binaries,
+		// parsed by gover) keeps its canonical form.
+		//
+		// The release tag carries a revision letter when a fork release
+		// ships on an unchanged upstream base (v1.26.5, then v1.26.5a).
+		// That letter cannot live in VERSION: Go's version grammar is
+		// major[.minor[.patch]][kind[pre]] with kind limited to
+		// alpha/beta/rc, so "go1.26.5a" fails to parse and compares as
+		// malformed — i.e. below plain "go1.26.5" — which would break
+		// go.mod language-version comparison and toolchain selection.
+		// Hence it is reported here instead.
+		//
+		// Bump this on every fork release. Anything matching on the
+		// marker should match the "(plus" prefix, not the whole string,
+		// so it survives the bump.
+		const forkVersionMarker = "(plus v1.26.5a)"
 		fmt.Printf("go version %s %s/%s %s\n", v, runtime.GOOS, runtime.GOARCH, forkVersionMarker)
 		return
 	}

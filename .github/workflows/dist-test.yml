@@ -79,11 +79,11 @@ jobs:
         working-directory: src
         run: |
           ../bin/go version
-          ../bin/go version | grep -q '(plus)' || { echo "::error::built toolchain is not the go-plus fork"; exit 1; }
+          ../bin/go version | grep -q '(plus' || { echo "::error::built toolchain is not the go-plus fork"; exit 1; }
       - name: Assert the built toolchain is go-plus (Windows)
         if: runner.os == 'Windows'
         working-directory: src
         shell: powershell
         run: |
           ..\bin\go.exe version
-          if (-not (..\bin\go.exe version | Select-String '\(plus\)')) { Write-Error 'built toolchain is not the go-plus fork'; exit 1 }
+          if (-not (..\bin\go.exe version | Select-String '\(plus')) { Write-Error 'built toolchain is not the go-plus fork'; exit 1 }

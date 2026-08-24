@@ -126,7 +126,21 @@ func open(name string) (*Plugin, error) {
 
 		dlp := C.pluginLookup(h, (*C.char)(unsafe.Pointer(&cname[0])), &cErr)
 		if dlp == nil {
-			return nil, errors.New(`plugin.Open("` + name + `"): could not find symbol ` + symName + `: ` + C.GoString(cErr))
+			// p is already cached with loaded unclosed; a bare return
+			// strands every future Open of this path on <-p.loaded
+			// forever (and handed the caller no *Plugin to Close).
+			// Mark the entry failed and wake waiters; subsequent
+			// Opens report "(previous failure)". The .so stays mapped
+			// and the handle unreleased — matching this file's other
+			// failure classes, which also retain the mapping — and
+			// nothing may dlclose it: no *Plugin with a live handle
+			// escaped.
+			errStr := "could not find symbol " + symName + ": " + C.GoString(cErr)
+			pluginsMu.Lock()
+			p.err = errStr
+			close(p.loaded)
+			pluginsMu.Unlock()
+			return nil, errors.New(`plugin.Open("` + name + `"): ` + errStr)
 		}
 		valp := (*[2]unsafe.Pointer)(unsafe.Pointer(&sym))
 		if isFunc {

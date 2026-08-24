@@ -14,6 +14,7 @@ import (
 	"os"
 	"plugin"
 	"runtime"
+	"strings"
 )
 
 var pluginExt = func() string {
@@ -80,9 +81,13 @@ func main() {
 		fail("b.Dependents() = %v; want empty", got)
 	}
 
-	// Close on plugA must fail while plugB still depends on it.
+	// Close on plugA must fail while plugB still depends on it, and
+	// the refusal must name plugB so the caller can act without a
+	// separate Dependents round-trip (trendvidia/go#26).
 	if err := a.Close(); err == nil {
 		fail("a.Close() returned nil while plugB still depends on plugA; want refused")
+	} else if !strings.Contains(err.Error(), "testplugin/refcount/plugB") {
+		fail("a.Close() error %q does not name dependent testplugin/refcount/plugB", err)
 	}
 
 	// Close plugB; plugA should now be closeable.

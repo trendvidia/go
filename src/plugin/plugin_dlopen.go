@@ -68,9 +68,17 @@ func open(name string) (*Plugin, error) {
 
 	pluginsMu.Lock()
 	if p := plugins[filepath]; p != nil {
+		// p.err transitions "" → non-empty only under pluginsMu
+		// (failed-load caching, Plugin.Close), so it must be read
+		// while still holding the mutex. Release before waiting on
+		// loaded so other plugins can load/close concurrently; a
+		// Close completing in that window hands back an already-
+		// closed *Plugin, on which every later operation safely
+		// returns errors.
+		err := p.err
 		pluginsMu.Unlock()
-		if p.err != "" {
-			return nil, errors.New(`plugin.Open("` + name + `"): ` + p.err + ` (previous failure)`)
+		if err != "" {
+			return nil, errors.New(`plugin.Open("` + name + `"): ` + err + ` (previous failure)`)
 		}
 		<-p.loaded
 		return p, nil
@@ -157,7 +165,17 @@ func open(name string) (*Plugin, error) {
 	return p, nil
 }
 
+// lookup serialises against Plugin.Close via pluginsMu: closePlugin
+// mutates p.syms (nils it), p.pluginpath (clones it off the plugin's
+// RODATA before dlclose unmaps those bytes) and p.err while holding
+// the mutex, so an unlocked read here could race a concurrent Close —
+// torn map access at best, a pluginpath dangling into unmapped
+// memory in the error path at worst. Lookup never runs with pluginsMu
+// already held (open and closePlugin do not call it), so taking the
+// mutex here cannot deadlock.
 func lookup(p *Plugin, symName string) (Symbol, error) {
+	pluginsMu.Lock()
+	defer pluginsMu.Unlock()
 	if s := p.syms[symName]; s != nil {
 		return s, nil
 	}

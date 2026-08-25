@@ -309,7 +309,10 @@ func checkABIMarker(pluginPath string) error {
 	for i := range sects {
 		h := optOff + optSize + i*40
 		va, raw, ptr := le32(h+12), le32(h+16), le32(h+20)
-		if va == 0 || ptr == 0 {
+		// A section with no raw bytes (e.g. .bss) legitimately has
+		// SizeOfRawData==0 and PointerToRawData==0; only reject a
+		// backed section with no file offset, or an unmapped VA.
+		if va == 0 || (raw != 0 && ptr == 0) {
 			return errors.New("plugin binary has a malformed section table")
 		}
 		sects[i] = section{va: va, raw: raw, ptr: ptr}

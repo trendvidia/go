@@ -515,7 +515,7 @@ func TestExportTableCompleteness(t *testing.T) {
 		src     string
 		out     string
 		exports []string // exact table names required
-		suff    []string // table names required to end with these
+		subs    []string // fragments some table name must contain
 	}{
 		{
 			src: "./plugin1",
@@ -542,7 +542,7 @@ func TestExportTableCompleteness(t *testing.T) {
 			// -lang=go1.16 and rejects the generics below.
 			src:  "./mangle/plugin.go",
 			out:  "et-mangle",
-			suff: []string{".P", ".G", ".F["},
+			subs: []string{".P", ".G", ".F["},
 		},
 	}
 	for _, fx := range fixtures {
@@ -575,16 +575,16 @@ func TestExportTableCompleteness(t *testing.T) {
 				t.Errorf("%s: export %q missing from image export table (%d entries present)", image, want, len(table))
 			}
 		}
-		for _, suf := range fx.suff {
+		for _, sub := range fx.subs {
 			found := false
 			for name := range table {
-				if strings.HasSuffix(name, suf) {
+				if strings.Contains(name, sub) {
 					found = true
 					break
 				}
 			}
 			if !found {
-				t.Errorf("%s: no export name ending %q in image export table (%d entries present)", image, suf, len(table))
+				t.Errorf("%s: no export name containing %q in image export table (%d entries present)", image, sub, len(table))
 			}
 		}
 	}

@@ -144,14 +144,16 @@ type Plugin struct {
 	// code address and is the data pointer of the user's func
 	// value. At Close, the runtime overwrites *each holder with
 	// the address of runtime.pluginClosedFuncStub so a held call
-	// panics with a recognisable message instead of jumping into
-	// what dlclose has just unmapped.
+	// through that Lookup value panics with a recognisable
+	// message instead of jumping into what dlclose has just
+	// unmapped. The protection covers Lookup results only; see
+	// [Plugin.Close] for the unprotected reference classes.
 	funcDescriptors []*uintptr
 	// handle is the platform dlopen handle (or 0 in stub builds /
 	// failed-load entries). Plugin.Close passes this to the
 	// platform unloadPlugin path which calls dlclose, releasing
 	// the OS-level mapping after the runtime side has rewritten
-	// every held descriptor to a panic stub. Handles are not
+	// every Lookup-obtained descriptor to a panic stub. Handles are not
 	// reused across re-opens: each successful Open obtains a fresh
 	// handle from dlopen.
 	handle uintptr
@@ -246,16 +248,21 @@ func syncBeforeUnmap()
 // closePlugin is the platform-independent half of Plugin.Close. It
 // runs in three ordered phases:
 //
-//  1. Runtime side (pluginClose): rewrites every closure descriptor
-//     pointing into this plugin to runtime.pluginClosedFuncStub —
-//     both the static descriptors emitted into the plugin's
-//     .noptrdata (found via canonicalSyms) and the per-Lookup heap
-//     holders threaded through funcDescriptors. Removes the
-//     module's canonicalSyms entries and unlinks moduledata.
+//  1. Runtime side (pluginClose): rewrites the closure descriptors
+//     the runtime can reach — the static ones emitted into the
+//     plugin's .noptrdata (found via canonicalSyms) and the
+//     per-Lookup heap holders threaded through funcDescriptors — to
+//     runtime.pluginClosedFuncStub. Closures created at runtime
+//     inside the plugin and returned to the host are registered
+//     nowhere and stay unprotected (see [Plugin.Close]). Also
+//     removes the module's canonicalSyms entries and unlinks
+//     moduledata.
 //
 //  2. Platform side (unloadPlugin): dlclose / FreeLibraryEx. The OS
-//     unmaps the plugin's text and data. Held func values are safe
-//     to call: phase 1 already redirected them at the panic stub.
+//     unmaps the plugin's text and data. Func values obtained via
+//     [Lookup] remain safe to call: phase 1 already redirected their
+//     descriptors at the panic stub. Any other reference class has
+//     no protection and faults unrecoverably if used from here on.
 //
 //  3. Marker: clear syms/funcDescriptors and set err so subsequent
 //     Lookup calls return the standard "symbol not found" error and

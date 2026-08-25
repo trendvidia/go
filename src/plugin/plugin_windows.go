@@ -52,7 +52,23 @@ func open(name string) (*Plugin, error) {
 	}
 
 	if proc, err := syscall.GetProcAddress(h, "go:plugin.pkghashes"); err == nil {
-		if errstr := validatePkghashes(uintptr(proc)); errstr != "" {
+		if errstr, rejectedPath := validatePkghashes(uintptr(proc)); errstr != "" {
+			// validatePkghashes marked the rejected moduledata bad AND
+			// detached it from the chain — it lives inside this DLL's
+			// image, so it must be gone from the chain before the
+			// FreeLibrary below unmaps those pages. syncBeforeUnmap is
+			// the same STW barrier Close takes: no GC worker may still
+			// be scanning this module's data roots when they free.
+			syncBeforeUnmap()
+			syscall.FreeLibrary(h)
+			// Cache the failure like the lastmoduleinit-failure path
+			// does: a bare return would leak one loader refcount per
+			// retry and re-run DllMain each time, deterministically
+			// failing again.
+			plugins[pluginPath] = &Plugin{
+				pluginpath: rejectedPath,
+				err:        errstr,
+			}
 			pluginsMu.Unlock()
 			return nil, errors.New(`plugin.Open("` + name + `"): ` + errstr)
 		}
@@ -109,7 +125,19 @@ func open(name string) (*Plugin, error) {
 		fullName := pluginpath + "." + symName
 		proc, procErr := syscall.GetProcAddress(h, fullName)
 		if procErr != nil {
-			return nil, errors.New(`plugin.Open("` + name + `"): could not find symbol ` + symName + `: ` + procErr.Error())
+			// p is already cached with loaded unclosed; a bare return
+			// strands every future Open of this path on <-p.loaded
+			// forever (and handed the caller no *Plugin to Close).
+			// Mark the entry failed and wake waiters; subsequent
+			// Opens report "(previous failure)". The library stays
+			// mapped and the handle unreleased — no *Plugin with a
+			// live handle escaped, so nothing may FreeLibrary it.
+			errStr := "could not find symbol " + symName + ": " + procErr.Error()
+			pluginsMu.Lock()
+			p.err = errStr
+			close(p.loaded)
+			pluginsMu.Unlock()
+			return nil, errors.New(`plugin.Open("` + name + `"): ` + errStr)
 		}
 		valp := (*[2]unsafe.Pointer)(unsafe.Pointer(&sym))
 		if isFunc {
@@ -117,9 +145,12 @@ func open(name string) (*Plugin, error) {
 			// pattern). The func value's data pointer is the holder;
 			// calling the value loads holder[0] and indirects to it.
 			// At Close, the runtime overwrites *holder with the
-			// pluginClosedFuncStub PC, so any held call panics with a
-			// recognisable message instead of jumping into what
-			// FreeLibrary has just unmapped.
+			// pluginClosedFuncStub PC, so any held call through this
+			// Lookup func value panics with a recognisable message
+			// instead of jumping into what FreeLibrary has just
+			// unmapped. Runtime-created closures returned by calls
+			// into the plugin carry no such holder and stay
+			// unprotected.
 			holder := new(uintptr)
 			*holder = proc
 			(*valp)[1] = unsafe.Pointer(holder)
@@ -160,9 +191,13 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 // dlclose-based phase 2. Calls FreeLibrary on the HMODULE captured
 // at Open time, then drops the plugin from the global registry. The
 // runtime side of Plugin.Close (plugin_close in runtime/plugin.go)
-// already rewrote held func descriptors to pluginClosedFuncStub
-// before this point, so any held call panics with a recognisable
-// message instead of jumping into what FreeLibrary just unmapped.
+// already rewrote every registered func descriptor to
+// pluginClosedFuncStub before this point, so a held call through a
+// Lookup-obtained func value panics with a recognisable message
+// instead of jumping into what FreeLibrary just unmapped.
+// Unregistered references — closures returned by calls into the
+// plugin, pointers to exported variables — still point into this
+// image and fault unrecoverably if used now; see Plugin.Close.
 //
 // Caller (closePlugin) holds pluginsMu.
 func unloadPlugin(p *Plugin) error {
@@ -189,11 +224,15 @@ func lastmoduleinit() (pluginpath string, syms map[string]any, inittasks []*init
 // validatePkghashes is defined in runtime/plugin.go via go:linkname.
 // addr is the address (from GetProcAddress) of the plugin's
 // go:plugin.pkghashes export, i.e. a slice header for the plugin's
-// pkghashes carrier. Returns "" on success or an error message
-// describing the first mismatched package.
+// pkghashes carrier. Returns an error message describing the first
+// mismatched package ("" on success), plus the rejected module's
+// pluginpath for failure diagnostics ("") on success.
+//
+// On mismatch it also marks the rejected moduledata bad and detaches
+// it from the chain, so the caller may FreeLibrary the DLL safely.
 //
 //go:linkname validatePkghashes
-func validatePkghashes(addr uintptr) string
+func validatePkghashes(addr uintptr) (errstr string, rejectedPath string)
 
 // doInit is defined in package runtime.
 //

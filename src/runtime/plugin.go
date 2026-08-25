@@ -29,14 +29,14 @@ import (
 // pre-fix behavior.
 //
 //go:linkname plugin_validatePkghashes plugin.validatePkghashes
-func plugin_validatePkghashes(addr uintptr) string {
+func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 	if addr == 0 {
-		return ""
+		return "", ""
 	}
 	hdr := (*[3]uintptr)(unsafe.Pointer(addr))
 	n := hdr[1]
 	if n == 0 {
-		return ""
+		return "", ""
 	}
 	pluginEntries := unsafe.Slice((*modulehash)(unsafe.Pointer(hdr[0])), int(n))
 	var mismatchPkg, pluginHash, hostHash string
@@ -57,14 +57,21 @@ func plugin_validatePkghashes(addr uintptr) string {
 		}
 	}
 	if mismatchPkg == "" {
-		return ""
+		return "", ""
 	}
-	// Mark the just-loaded plugin's moduledata as bad. The freshly-
-	// loaded module is the last non-bad entry in the chain
-	// (addmoduledata, run from plugin's DllMain, appended it).
-	// resolveTypeOff / resolveNameOff / textOff in runtime/type.go
-	// skip bad modules so the half-initialized typemap of a rejected
-	// plugin doesn't poison subsequent reflect operations.
+	// Mark the just-loaded plugin's moduledata as bad and detach it
+	// from the chain. The freshly-loaded module is the last non-bad
+	// entry in the chain (addmoduledata, run from plugin's DllMain,
+	// appended it). resolveTypeOff / resolveNameOff / textOff in
+	// runtime/type.go skip bad modules so the half-initialized typemap
+	// of a rejected plugin doesn't poison subsequent reflect
+	// operations; detaching goes further so the caller can FreeLibrary
+	// the rejected DLL (trendvidia/go#26) without leaving dangling
+	// chain entries — the moduledata lives inside the DLL's image.
+	// Nothing registered this module under canonicalSyms/pkgOwners
+	// (validation precedes plugin_lastmoduleinit), so there is nothing
+	// else to unwind. Caller holds pluginsMu, which serialises chain
+	// mutation against concurrent loads.
 	var md *moduledata
 	for pmd := firstmoduledata.next; pmd != nil; pmd = pmd.next {
 		if !pmd.bad {
@@ -73,8 +80,11 @@ func plugin_validatePkghashes(addr uintptr) string {
 	}
 	if md != nil {
 		md.bad = true
+		detachModule(md)
+		modulesinit()
+		return pluginVersionMismatchMsg(mismatchPkg, pluginHash, hostHash), md.pluginpath
 	}
-	return pluginVersionMismatchMsg(mismatchPkg, pluginHash, hostHash)
+	return pluginVersionMismatchMsg(mismatchPkg, pluginHash, hostHash), ""
 }
 
 // pluginVersionMismatchMsg formats the plugin.Open version-lock error.
@@ -406,6 +416,15 @@ func plugin_dependents(pluginpath string) []string {
 // through descriptor.F; after the rewrite that indirect lands here
 // and panics with a recognisable message.
 //
+// The rewrite reaches only registered descriptors: static ·f
+// descriptors recorded in canonicalSyms, and the per-Lookup heap
+// holders threaded through plugin.Plugin.funcDescriptors. A closure
+// created at runtime inside the plugin and returned to the host is
+// registered nowhere, keeps pointing at the plugin's text, and kills
+// the process with an unrecoverable fault when called after Close —
+// as does dereferencing a pointer to any of the plugin's variables.
+// See plugin.Plugin.Close for the full envelope.
+//
 // The stub takes no arguments and returns nothing — caller's actual
 // signature can be anything. The ABI mismatch is harmless: panic
 // unwinds via deferred handlers before the caller's epilogue runs,
@@ -499,11 +518,11 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 		return "plugin not found: " + pluginpath
 	}
 	if md.refcount > 0 {
-		return "plugin has dependents; Close them first"
+		return pluginDependentsMsg(md)
 	}
 
-	// Convert every held func value pointing into this module to a
-	// panic-on-call. Two distinct sources:
+	// Convert every reachable held descriptor pointing into this
+	// module to a panic-on-call. Two distinct sources:
 	//
 	//   (1) Static closure descriptors emitted by the compiler for
 	//       the plugin's own PFUNC values. Reachable from anything
@@ -518,6 +537,10 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 	//       code address; the func value's data pointer points at
 	//       that holder, not at the static descriptor. The plugin
 	//       package threads the slice of holders to us.
+	//
+	// Closures created at runtime inside the plugin and returned to
+	// the host are reachable from neither source; their calls after
+	// Close fault fatally. See pluginClosedFuncStub's doc comment.
 	//
 	// Both rewrites must happen BEFORE dlclose (added in the second
 	// half of v2): once the plugin's text and data are unmapped we
@@ -582,29 +605,78 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 	// chain so the chain walker skips it. We don't dlclose the .so
 	// in v1; the OS keeps the mapping but no Go state references it.
 	md.bad = true
+	detachModule(md)
+	// Rebuild activeModules so the unlinked module disappears from
+	// future iterations.
+	modulesinit()
+	return ""
+}
+
+// detachModule unlinks md from the firstmoduledata chain. Shared by
+// plugin_close and rejectLoadedPlugin (the Windows version-mismatch
+// path), which must both remove a module before its backing image can
+// go away.
+//
+// If md is the chain tail, addmoduledata's append cursor still points
+// at it; retreat the cursor to the new tail. Without this, the next
+// module load stores through lastmoduledatap into the closed plugin's
+// (about to be unmapped) image — faulting where the OS unmaps eagerly
+// (darwin dlopen, windows addmoduledata) — or, where the mapping
+// lingers (glibc), silently links the new module onto the detached
+// node, leaving it unreachable from firstmoduledata and surfacing as
+// "plugin already loaded". See issue #5.
+//
+// Callers hold pluginsMu (via closePlugin / open), which serialises
+// chain mutation against concurrent loads.
+func detachModule(md *moduledata) {
 	for prev := &firstmoduledata; prev.next != nil; prev = prev.next {
 		if prev.next == md {
 			prev.next = md.next
-			// If md is the chain tail, addmoduledata's append
-			// cursor still points at it; retreat the cursor to the
-			// new tail. Without this, the next module load stores
-			// through lastmoduledatap into the closed plugin's
-			// (about to be unmapped) image — faulting where the OS
-			// unmaps eagerly (darwin dlopen, windows addmoduledata)
-			// — or, where the mapping lingers (glibc), silently
-			// links the new module onto the detached node, leaving
-			// it unreachable from firstmoduledata and surfacing as
-			// "plugin already loaded". See issue #5.
 			if lastmoduledatap == md {
 				lastmoduledatap = prev
 			}
 			break
 		}
 	}
-	// Rebuild activeModules so the unlinked module disappears from
-	// future iterations.
-	modulesinit()
-	return ""
+}
+
+// pluginDependentsMsg formats the Close-refusal error. It names each
+// dependent pluginpath so the caller can act on the refusal without a
+// separate Plugin.Dependents round-trip (trendvidia/go#26).
+//
+// Keys with an empty pluginpath would be host-class edges. No code
+// path records one today — recordDependency's referencer is always a
+// loading plugin, and the host registers nothing — but if one ever
+// did, name it here rather than silently omitting it from the reason
+// while still refusing the Close.
+func pluginDependentsMsg(md *moduledata) string {
+	host := false
+	for dep := range md.dependents {
+		if dep.pluginpath == "" {
+			host = true
+		}
+	}
+	msg := "plugin has dependents; Close them first:"
+	first := true
+	// Walk activeModules rather than the map so names come out in
+	// load order instead of map iteration order.
+	for _, dep := range activeModules() {
+		if dep.pluginpath == "" {
+			continue
+		}
+		if _, ok := md.dependents[dep]; !ok {
+			continue
+		}
+		if !first {
+			msg += ","
+		}
+		first = false
+		msg += " " + dep.pluginpath
+	}
+	if host {
+		msg += "; the host program also holds references into it"
+	}
+	return msg
 }
 
 // plugin_syncBeforeUnmap is a stop-the-world barrier the plugin package

@@ -134,6 +134,47 @@ func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 	return msg, ""
 }
 
+// plugin_rejectChainedModule gives a just-chained but rejected plugin
+// the same treatment plugin_validatePkghashes applies to a pkghash
+// mismatch: the last non-bad module on the chain — the caller has
+// verified the chain grew across LoadLibrary, so that node is the
+// candidate — is marked bad and detached, and activeModules is
+// rebuilt without it.
+//
+// Unlike the pkghash path this does NOT precede a FreeLibrary: the
+// rejected image stays mapped (unmapping safely needs syncBeforeUnmap,
+// which package plugin takes only for pkghash rejections), so no GC
+// barrier is needed here either. What must not survive is a WALKABLE
+// node: pluginabi.Version bumps precisely when moduledata layout
+// assumptions change, so every later chain walk reading this node at
+// host field offsets is the fatal-fault hazard the ABI fence exists to
+// prevent — and detachModule also retreats addmoduledata's cursor off
+// the detached tail, so the next real load links onto the live chain
+// instead of behind it.
+//
+// A no-op when no chained candidate exists, so a mis-timed call
+// degrades to the pre-fix behaviour rather than detaching an innocent
+// module.
+//
+// Caller holds pluginsMu (as open does), which serialises chain
+// mutation against concurrent loads and closes.
+//
+//go:linkname plugin_rejectChainedModule plugin.rejectChainedModule
+func plugin_rejectChainedModule() {
+	var cand *moduledata
+	for pmd := firstmoduledata.next; pmd != nil; pmd = pmd.next {
+		if !pmd.bad {
+			cand = pmd
+		}
+	}
+	if cand == nil {
+		return
+	}
+	cand.bad = true
+	detachModule(cand)
+	modulesinit()
+}
+
 // pluginVersionMismatchMsg formats the plugin.Open version-lock error.
 // The version lock spans every package linked into both host and
 // plugin — not just govm's CompilerVersion — so a bare package name is

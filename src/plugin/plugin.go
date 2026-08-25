@@ -125,18 +125,22 @@
 // export table is parsed directly, so a binary built by another fork
 // or toolchain generation (whose runtime data structures may have a
 // different layout) is rejected with a clean error before any of its
-// code runs, instead of being loaded and faulting. After LoadLibrary,
-// the module actually mapped is checked against the request: its
-// loader-recorded path must match the opened path — a request that
-// resolves to an already-mapped module from another directory is
-// refused with an error naming both paths rather than silently aliased
-// — and the marker is re-read through GetProcAddress so what was
-// judged is what was mapped, not what the file held moments earlier.
-// A module that fails only the
-// post-load checks has already chained its moduledata into the host
-// runtime, so it is refused but left mapped — unloading it safely needs
-// the runtime-side detach that exists solely for pkghash mismatches.
-// The generation number's bump rules live in internal/pluginabi.
+// code runs, instead of being loaded and faulting. What the file bytes
+// cannot decide — WHICH module LoadLibrary will return — is settled
+// after the load, by two checks that cover its two failure modes.
+// When the loader hands back an already-mapped module instead of a
+// fresh map (detected because the runtime chain did not grow), the
+// handle's loader-recorded path is compared with the opened path, and
+// a request that resolved to a module from another directory is
+// refused with an error naming both paths rather than silently aliased;
+// nothing chained in this case, so the handle is freed. Whatever WAS
+// freshly mapped also has the marker re-read through GetProcAddress,
+// catching a candidate file swapped in between the two reads; by then
+// the module's DllMain has chained its moduledata, so that rejection
+// refuses the load but leaves the image mapped — marked bad and
+// detached from the runtime chain so no later walk reads it — because
+// unloading safely needs the stop-the-world barrier Close takes. The
+// generation number's bump rules live in internal/pluginabi.
 // POSIX needs no equivalent: the dynamic linker resolves symbols
 // across modules at load time, so incompatible binaries already fail
 // there.

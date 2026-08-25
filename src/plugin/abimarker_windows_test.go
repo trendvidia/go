@@ -10,7 +10,9 @@ import (
 	"internal/pluginabi"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -318,5 +320,109 @@ func TestCheckABIMarkerUnreadable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "does-not-exist.dll")
 	if err := checkABIMarker(path); err != nil {
 		t.Fatalf("checkABIMarker(%q) = %v; want nil so LoadLibrary reports the OS error", path, err)
+	}
+}
+
+// loadablePE adapts newPE's synthetic image for an actual LoadLibrary:
+// the byte-level fixtures above are only ever parsed by checkABIMarker,
+// but the stage-2 checks judge MAPPED modules, so the image needs the
+// optional-header fields a real loader validates — alignments,
+// SizeOfImage, NumberOfRvaAndSizes, readable section characteristics —
+// and a machine type matching the running process. Returns the loaded
+// handle; the caller must FreeLibrary it.
+func loadablePE(t *testing.T, mutate func(p *peImage)) syscall.Handle {
+	t.Helper()
+	p := newPE(2)
+	switch runtime.GOARCH {
+	case "arm64":
+		p.u16(p.coff, 0xaa64) // IMAGE_FILE_MACHINE_ARM64
+	case "amd64":
+		// 0x8664 is what newPE already writes.
+	default:
+		t.Skipf("no machine type mapped for %s", runtime.GOARCH)
+	}
+	p.u32(p.optOff+24, 0x10000000) // ImageBase low dword (high dword stays 0); free base needs no relocations
+	p.u32(p.optOff+32, 0x1000)     // SectionAlignment
+	p.u32(p.optOff+36, 0x200)      // FileAlignment
+	p.u32(p.optOff+56, 0x4000)     // SizeOfImage (covers .edata at RVA 0x2000, multiple of SectionAlignment)
+	p.u32(p.optOff+60, 0x200)      // SizeOfHeaders
+	p.u16(p.optOff+68, 3)          // Subsystem: IMAGE_SUBSYSTEM_WINDOWS_CUI
+	p.u32(p.optOff+108, 16)        // NumberOfRvaAndSizes (the export directory lives in slot 0)
+	for i := 0; i < 2; i++ {       // both sections: CNT_INITIALIZED_DATA | MEM_READ
+		p.u32(p.sectTbl+i*40+36, 0x40000040)
+	}
+	if mutate != nil {
+		mutate(p)
+	}
+	path := filepath.Join(t.TempDir(), "loadable.dll")
+	if err := os.WriteFile(path, p.buf, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	h, err := syscall.LoadLibrary(path)
+	if err != nil {
+		t.Fatalf("LoadLibrary(%q) failed: %v", path, err)
+	}
+	return h
+}
+
+// TestCheckLoadedABIMarker exercises the stage-2 half of the fence
+// against genuinely MAPPED modules — the state no file-byte fixture can
+// reach, since making stage 1 pass while stage 2 fails requires the
+// file to change between the read and the load. The rejection texts
+// pinned here feed open()'s post-load refusal path verbatim.
+func TestCheckLoadedABIMarker(t *testing.T) {
+	t.Run("mapped module without marker", func(t *testing.T) {
+		h, err := syscall.LoadLibrary("kernel32.dll")
+		if err != nil {
+			t.Skipf("kernel32 unavailable: %v", err)
+		}
+		defer syscall.FreeLibrary(h)
+		err = checkLoadedABIMarker(h)
+		if err == nil || !strings.Contains(err.Error(), "exports no go:plugin.abi marker") {
+			t.Fatalf("checkLoadedABIMarker(kernel32) = %v; want the missing-marker rejection", err)
+		}
+	})
+	cases := []struct {
+		name    string
+		mutate  func(p *peImage)
+		wantErr string // "" means the mapped image must be accepted
+	}{
+		{
+			name: "well-formed mapped image",
+		},
+		{
+			name: "version from another generation",
+			mutate: func(p *peImage) {
+				p.u32(p.markerOff+4, pluginabi.Version+1)
+			},
+			wantErr: "the loaded plugin module was built with an incompatible toolchain ABI",
+		},
+		{
+			name: "corrupted marker word",
+			mutate: func(p *peImage) {
+				p.u32(p.markerOff, pluginabi.Marker^1)
+			},
+			wantErr: "unrecognised go:plugin.abi marker in the loaded module",
+		},
+		{
+			name:    "export renamed",
+			mutate:  func(p *peImage) { p.buf[p.nameOff] = 'x' },
+			wantErr: "exports no go:plugin.abi marker",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			h := loadablePE(t, tt.mutate)
+			defer syscall.FreeLibrary(h)
+			err := checkLoadedABIMarker(h)
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("checkLoadedABIMarker = %v; want acceptance", err)
+			case tt.wantErr != "" && err == nil:
+				t.Fatalf("checkLoadedABIMarker accepted the image; want %q", tt.wantErr)
+			case tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr):
+				t.Fatalf("checkLoadedABIMarker = %v; want %q", err, tt.wantErr)
+			}
+		})
 	}
 }

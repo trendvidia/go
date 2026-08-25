@@ -718,10 +718,16 @@ func itabptrLsym(typ, iface *types.Type) *obj.LSym {
 	itabSym := ITabLsym(typ, iface)
 	name := "go.itabptr." + typ.LinkString() + "," + iface.LinkString()
 	s := base.Ctxt.Lookup(name)
+	// Guard against concurrent emission (signatmu, as in TypeptrLsym).
+	// Without this, two parallel backend workers compiling the same
+	// (typ, iface) pair can both see Size == 0 and both call objw.Global,
+	// fatally redeclaring the slot or corrupting its relocations.
+	signatmu.Lock()
 	if s.Size == 0 {
 		objw.SymPtr(s, 0, itabSym, 0)
 		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
 	}
+	signatmu.Unlock()
 	return s
 }
 

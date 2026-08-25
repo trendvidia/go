@@ -51,6 +51,29 @@ func open(name string) (*Plugin, error) {
 		plugins = make(map[string]*Plugin)
 	}
 
+	// A Go plugin DLL chains its moduledata into this process from its
+	// DllMain during LoadLibrary (addmoduledata runs while this
+	// function holds pluginsMu). If the chain did not grow, the DLL
+	// never initialized HERE — e.g. it was linked against another
+	// program's import library and PE bound its imports by module name
+	// elsewhere (observed building the peerlock fixture,
+	// trendvidia/go#24/#31). Refuse before validating:
+	// validatePkghashes identifies the candidate as the newly chained
+	// module, and on a chain that did not grow it would take the last
+	// healthy peer for one — silently passing a divergent build, or
+	// marking/detaching that peer's moduledata while the FreeLibrary
+	// below unmaps only the offender. No syncBeforeUnmap is needed:
+	// the module never entered activeModules, so no GC root references
+	// this image.
+	if prevTail := chainTail(); chainTail() == prevTail {
+		const noModData = "plugin DLL registered no Go module data in this process" +
+			" (its runtime imports may be bound to another program's image)"
+		syscall.FreeLibrary(h)
+		plugins[pluginPath] = &Plugin{err: noModData}
+		pluginsMu.Unlock()
+		return nil, errors.New(`plugin.Open("` + name + `"): ` + noModData)
+	}
+
 	if proc, err := syscall.GetProcAddress(h, "go:plugin.pkghashes"); err == nil {
 		if errstr, rejectedPath := validatePkghashes(uintptr(proc)); errstr != "" {
 			// validatePkghashes marked the rejected moduledata bad AND
@@ -233,6 +256,13 @@ func lastmoduleinit() (pluginpath string, syms map[string]any, inittasks []*init
 //
 //go:linkname validatePkghashes
 func validatePkghashes(addr uintptr) (errstr string, rejectedPath string)
+
+// chainTail is defined in package runtime via go:linkname. It returns
+// the address of the last moduledata on the chain; open() snapshots it
+// around LoadLibrary to detect whether the DLL registered here.
+//
+//go:linkname chainTail
+func chainTail() uintptr
 
 // doInit is defined in package runtime.
 //

@@ -51,8 +51,10 @@ func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 	}
 	pluginEntries := unsafe.Slice((*modulehash)(unsafe.Pointer(hdr[0])), int(n))
 	// The candidate is already chained — its DllMain ran addmoduledata
-	// before this check. It is the last non-bad module: exclude it from
-	// the peer scan below, and identify it for detachment on mismatch.
+	// before this check (open() verified the chain grew across
+	// LoadLibrary, so the newest node is this plugin's). It is the last
+	// non-bad module: exclude it from the peer scan below, and identify
+	// it for detachment on mismatch.
 	var cand *moduledata
 	for pmd := firstmoduledata.next; pmd != nil; pmd = pmd.next {
 		if !pmd.bad {
@@ -689,6 +691,33 @@ func detachModule(md *moduledata) {
 			break
 		}
 	}
+}
+
+// plugin_chainTail reports the address of the last moduledata on the
+// chain. plugin.Open on Windows snapshots it before LoadLibrary and
+// compares after: addmoduledata (run from the plugin's DllMain inside
+// LoadLibrary) appends exactly one node, so an unchanged tail means the
+// DLL never registered in THIS process — typically because it was
+// linked against another program's import library and PE bound its
+// imports by module name elsewhere. The caller must refuse such a load
+// instead of validating: plugin_validatePkghashes takes the last
+// non-bad module as the just-loaded candidate, and on a chain that did
+// not grow that is a healthy earlier plugin — the peer scan would
+// exclude the true owner, silently passing a divergent build, or a
+// host-carrier mismatch would mark and detach the WRONG moduledata
+// while the offender's image is unmapped. Observed in CI while building
+// the trendvidia/go#24 peer-lock fixture (trendvidia/go#31).
+//
+// Caller holds pluginsMu (as open does), which serialises chain
+// mutation against concurrent loads and closes.
+//
+//go:linkname plugin_chainTail plugin.chainTail
+func plugin_chainTail() uintptr {
+	tail := &firstmoduledata
+	for tail.next != nil {
+		tail = tail.next
+	}
+	return uintptr(unsafe.Pointer(tail))
 }
 
 // pluginDependentsMsg formats the Close-refusal error. It names each

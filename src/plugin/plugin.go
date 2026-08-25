@@ -127,12 +127,12 @@
 // different layout) is rejected with a clean error before any of its
 // code runs, instead of being loaded and faulting. After LoadLibrary,
 // the module actually mapped is checked against the request: its
-// loader-recorded path must match the opened path (the loader matches
-// candidates by base name, so two different plugins sharing one file
-// name cannot be told apart — the second Open is refused with an error
-// naming both paths rather than silently aliased), and the marker is
-// re-read through GetProcAddress so what was judged is what was mapped,
-// not what the file held moments earlier. A module that fails only the
+// loader-recorded path must match the opened path — a request that
+// resolves to an already-mapped module from another directory is
+// refused with an error naming both paths rather than silently aliased
+// — and the marker is re-read through GetProcAddress so what was
+// judged is what was mapped, not what the file held moments earlier.
+// A module that fails only the
 // post-load checks has already chained its moduledata into the host
 // runtime, so it is refused but left mapped — unloading it safely needs
 // the runtime-side detach that exists solely for pkghash mismatches.

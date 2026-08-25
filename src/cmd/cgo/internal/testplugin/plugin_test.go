@@ -477,9 +477,10 @@ func TestPluginABIMarker(t *testing.T) {
 // fence (trendvidia/go#40): two DIFFERENT plugins sharing one base
 // file name must never collapse onto one OS module. The platform
 // loader's matching rule decides which good outcome occurs — B loads
-// as its own module, or the second Open is refused with the named
-// base-name error — and the fixture fails on the forbidden third
-// outcome: a successful open whose symbols answer A.
+// as its own module (measured on Windows 11 arm64 and on POSIX), or
+// the second Open is refused with the named "already loaded from"
+// rejection — and the fixture fails on the forbidden third outcome: a
+// successful open whose symbols answer A.
 func TestSameBaseNameDistinctDirs(t *testing.T) {
 	globalSkip(t)
 	run(t, "./samename.exe")

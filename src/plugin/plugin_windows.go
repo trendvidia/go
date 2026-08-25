@@ -62,9 +62,9 @@ func open(name string) (*Plugin, error) {
 	//
 	// Judging file bytes alone cannot tell WHICH module the loader will
 	// return: the file may be swapped between this read and the load,
-	// and an already-mapped module with the same base name comes back
-	// in its place (trendvidia/go#40). The two post-load checks below —
-	// the handle's recorded path against the request, and the marker
+	// and a request can resolve to an already-mapped module elsewhere
+	// on disk (trendvidia/go#40). The two post-load checks below — the
+	// handle's recorded path against the request, and the marker
 	// re-read from the mapped image — are the authority on what was
 	// actually loaded; this stage remains the gate that keeps any
 	// rejected candidate's code from ever running.
@@ -103,15 +103,20 @@ func open(name string) (*Plugin, error) {
 	// The chain did not grow. Two distinct causes, distinguished by
 	// where the returned handle actually lives:
 	//
-	//   - The loader handed back an ALREADY-MAPPED module: it matches
-	//     candidates by base name, so Open(C:\b\p.dll) while C:\a\p.dll
-	//     is loaded returns the latter without running its DllMain again
-	//     (trendvidia/go#40). Rejecting with both paths named beats the
-	//     silent wrong-path→module association a success would cache —
-	//     and beats misreporting it as the no-module-data case below.
-	//     The FreeLibrary is still taken: an aliased module is held by
-	//     its original opener, so dropping only this call's own
-	//     reference can never unmap it.
+	//   - The returned handle belongs to a DIFFERENT module than
+	//     requested — an already-mapped DLL handed back instead of a
+	//     fresh map (the behaviour Microsoft documents for same-named
+	//     modules), leaving the process one DllMain short of what the
+	//     caller asked for (trendvidia/go#40). Rejecting with both
+	//     paths named beats the silent wrong-path→module association a
+	//     success would cache — and beats misreporting it as the
+	//     no-module-data case below. The FreeLibrary is still taken: an
+	//     aliased module is held by its original opener, so dropping
+	//     only this call's own reference can never unmap it. (Measured
+	//     on Windows 11 arm64, 2026-08: two plugins sharing one base
+	//     name in different directories both load as their own modules,
+	//     so this branch guards a rule other loaders/SKUs document
+	//     rather than one this build exhibits.)
 	//
 	//   - A freshly mapped DLL registered no Go module data in this
 	//     process (its runtime imports may be bound to another
@@ -129,8 +134,7 @@ func open(name string) (*Plugin, error) {
 	// images.
 	if chainTail() == prevTail {
 		if loaded := loadedModulePath(h); loaded != "" && !sameModulePath(loaded, pluginPath) {
-			aliased := pluginPath + " resolved to the module already loaded from " + loaded +
-				" (the Windows loader matches plugins by base name)"
+			aliased := pluginPath + " resolved to a different module, already loaded from " + loaded
 			plugins[pluginPath] = &Plugin{err: aliased}
 			syscall.FreeLibrary(h)
 			pluginsMu.Unlock()
@@ -380,13 +384,13 @@ func chainTail() uintptr
 // error, preserving pre-fence behaviour for that case.
 //
 // What file bytes cannot decide — WHICH module LoadLibrary will return
-// (a file swapped in after this read; base-name reuse of an
-// already-mapped module) — is settled after the load: open() compares
-// the returned handle's recorded path against the request and re-reads
-// this same marker from the mapped image via GetProcAddress
-// (checkLoadedABIMarker). This stage remains the only one that can
-// keep a rejected candidate's DllMain from ever running; the post-load
-// checks are the authority on what was mapped instead.
+// (a file swapped in after this read; a handle resolved to an
+// already-mapped module elsewhere on disk) — is settled after the
+// load: open() compares the returned handle's recorded path against
+// the request and re-reads this same marker from the mapped image via
+// GetProcAddress (checkLoadedABIMarker). This stage remains the only
+// one that can keep a rejected candidate's DllMain from ever running;
+// the post-load checks are the authority on what was mapped instead.
 func checkABIMarker(pluginPath string) error {
 	data, err := os.ReadFile(pluginPath)
 	if err != nil {

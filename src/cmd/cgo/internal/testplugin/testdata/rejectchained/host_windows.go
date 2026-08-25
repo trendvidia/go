@@ -42,7 +42,8 @@ func chainTail() uintptr
 //go:linkname rejectChainedModule plugin.rejectChainedModule
 func rejectChainedModule()
 
-func fatalf(format string, args ...any) {
+// interface{}, not any: testdata packages build with -lang=go1.16.
+func fatalf(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "rejectchained: "+format+"\n", args...)
 	os.Exit(1)
 }

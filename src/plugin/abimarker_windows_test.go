@@ -348,7 +348,11 @@ func loadablePE(t *testing.T, mutate func(p *peImage)) syscall.Handle {
 	p.u32(p.optOff+60, 0x200)      // SizeOfHeaders
 	p.u16(p.optOff+68, 3)          // Subsystem: IMAGE_SUBSYSTEM_WINDOWS_CUI
 	p.u32(p.optOff+108, 16)        // NumberOfRvaAndSizes (the export directory lives in slot 0)
-	for i := 0; i < 2; i++ {       // both sections: CNT_INITIALIZED_DATA | MEM_READ
+	// Without the DLL bit the loader reads the image as an EXE and
+	// rejects it ("not a valid Win32 application") before any of the
+	// header fields above are even consulted.
+	p.u16(p.coff+18, 0x2022) // Characteristics: EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE | DLL
+	for i := 0; i < 2; i++ { // both sections: CNT_INITIALIZED_DATA | MEM_READ
 		p.u32(p.sectTbl+i*40+36, 0x40000040)
 	}
 	if mutate != nil {

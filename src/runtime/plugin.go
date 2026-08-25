@@ -355,20 +355,32 @@ func skipHostSharedInits(md *moduledata) {
 
 // pkgFromInitName extracts a package path from an init-function name
 // like "testplugin/common.init.0" or "runtime.init". The compiler-
-// emitted form is `<pkg>.init` or `<pkg>.init.<n>`. We split on the
-// first '.' that is not part of the package path. Package paths in
-// Go contain '/' but never '.', so the last '/' partitions package
-// from function and the first '.' after that begins the function
-// name suffix.
+// emitted form is `<pkg>.init` or `<pkg>.init.<n>`. A package path may
+// itself contain dots ("gopkg.in/yaml.v2" emits "gopkg.in/yaml.v2.init.0"),
+// so the function-name suffix is matched at the END of the symbol and
+// stripped, rather than splitting at the first dot after the last '/'.
 func pkgFromInitName(name string) string {
-	slash := -1
-	for i := 0; i < len(name); i++ {
-		if name[i] == '/' {
-			slash = i
+	const fn = ".init"
+	// Find the last ".init" whose remainder is empty or "." + digits.
+	for i := len(name) - len(fn); i >= 0; i-- {
+		if name[i:i+len(fn)] != fn {
+			continue
 		}
-	}
-	for i := slash + 1; i < len(name); i++ {
-		if name[i] == '.' {
+		rest := name[i+len(fn):]
+		if rest == "" {
+			return name[:i]
+		}
+		if rest[0] != '.' {
+			continue
+		}
+		digits := true
+		for j := 1; j < len(rest); j++ {
+			if rest[j] < '0' || rest[j] > '9' {
+				digits = false
+				break
+			}
+		}
+		if digits && len(rest) > 1 {
 			return name[:i]
 		}
 	}

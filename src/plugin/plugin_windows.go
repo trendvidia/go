@@ -132,6 +132,7 @@ func open(name string) (*Plugin, error) {
 			aliased := pluginPath + " resolved to the module already loaded from " + loaded +
 				" (the Windows loader matches plugins by base name)"
 			plugins[pluginPath] = &Plugin{err: aliased}
+			syscall.FreeLibrary(h)
 			pluginsMu.Unlock()
 			return nil, errors.New(`plugin.Open("` + name + `"): ` + aliased)
 		}

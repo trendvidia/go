@@ -7,12 +7,11 @@
 package plugin
 
 import (
-	"encoding/binary"
 	"errors"
-	"fmt"
 	"internal/pluginabi"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"unsafe"
 )
@@ -272,17 +271,20 @@ func checkABIMarker(pluginPath string) error {
 	if err != nil {
 		return nil
 	}
+	// Little-endian readers with bounds guards; hand-rolled so package
+	// plugin stays below encoding/binary in go/build's dependency policy.
 	le16 := func(off int) uint32 {
 		if off < 0 || off+2 > len(data) {
 			return 0
 		}
-		return uint32(binary.LittleEndian.Uint16(data[off:]))
+		return uint32(data[off]) | uint32(data[off+1])<<8
 	}
 	le32 := func(off int) uint32 {
 		if off < 0 || off+4 > len(data) {
 			return 0
 		}
-		return binary.LittleEndian.Uint32(data[off:])
+		return uint32(data[off]) | uint32(data[off+1])<<8 |
+			uint32(data[off+2])<<16 | uint32(data[off+3])<<24
 	}
 
 	if len(data) < 0x40 || string(data[:2]) != "MZ" {
@@ -364,8 +366,9 @@ func checkABIMarker(pluginPath string) error {
 		case marker != pluginabi.Marker:
 			return errors.New("unrecognised go:plugin.abi marker (not built by this fork's toolchain)")
 		case version != pluginabi.Version:
-			return fmt.Errorf("plugin was built with an incompatible toolchain ABI (plugin ABI %d, host ABI %d)",
-				version, pluginabi.Version)
+			return errors.New("plugin was built with an incompatible toolchain ABI (plugin ABI " +
+				strconv.FormatUint(uint64(version), 10) +
+				", host ABI " + strconv.FormatUint(uint64(pluginabi.Version), 10) + ")")
 		}
 		return nil
 	}

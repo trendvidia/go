@@ -90,11 +90,15 @@
 //
 // [Open] rejects a plugin whose build of any package linked into both
 // the host and the plugin differs from the host's build of that same
-// package — not merely a single toolchain/compiler version. The lock
-// surface is every shared package: the runtime, google.golang.org/protobuf,
-// and any other dependency the host and plugin both link. A standalone
-// plugin build therefore loads only when the host resolves an identical
-// dependency graph.
+// package — not merely a single toolchain/compiler version. The same
+// comparison runs against every already-loaded plugin for packages the
+// host does not link (trendvidia/go#24), so two plugins built from
+// different sources of one dependency cannot coexist silently: the
+// first loader owns the package and later divergent builds are
+// refused. The lock surface is every shared package: the runtime,
+// google.golang.org/protobuf, and any other dependency the host and
+// plugin both link. A standalone plugin build therefore loads only
+// when the host resolves an identical dependency graph.
 //
 // The practical consequence: build the host and the plugin against the
 // same resolved module graph. If the host resolves dependencies through
@@ -104,12 +108,14 @@
 // workspace) so their per-package build hashes match.
 //
 // When a mismatch is detected, [Open] reports the offending package and
-// both build hashes, for example:
+// both build hashes, naming the already-loaded side, for example:
 //
 //	plugin was built with a different version of package google.golang.org/protobuf/internal/pragma (plugin build hash 1a2b…, host build hash 9f8e…)
+//	plugin was built with a different version of package example.com/shared (plugin build hash 1a2b…, peer /plugins/a build hash 9f8e…)
 //
-// so the diverging package — and which side is stale — is identifiable
-// without decoding the raw loader message. See trendvidia/go#7.
+// so the diverging package — and which loaded module holds the stale
+// build — is identifiable without decoding the raw loader message. See
+// trendvidia/go#7.
 package plugin
 
 import (

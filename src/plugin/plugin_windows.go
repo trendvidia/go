@@ -76,6 +76,11 @@ func open(name string) (*Plugin, error) {
 
 	if proc, err := syscall.GetProcAddress(h, "go:plugin.pkghashes"); err == nil {
 		if errstr, rejectedPath := validatePkghashes(uintptr(proc)); errstr != "" {
+			// rejectedPath's bytes live inside the rejected DLL's image;
+			// clone them before FreeLibrary unmaps those pages — the
+			// same dangling-header hazard closePlugin clones
+			// p.pluginpath against (see cloneString in plugin.go).
+			rejectedPath = cloneString(rejectedPath)
 			// validatePkghashes marked the rejected moduledata bad AND
 			// detached it from the chain — it lives inside this DLL's
 			// image, so it must be gone from the chain before the

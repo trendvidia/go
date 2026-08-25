@@ -1557,26 +1557,19 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		// triedVers controls which plugin sym version(s) to attempt
 		// for this host export name. With a suffix the choice is
 		// unambiguous; without one:
-		//   - external link converts only v=0. Type-descriptor
-		//     R_ADDRs target the ABIInternal method body (v=1) on
-		//     a non-shared host (mangleABIName leaves it unsuffixed);
-		//     converting v=1 here would orphan those relocs ("missing
-		//     section for relocation target ...") because the partial
-		//     PE has no body for a SHOSTOBJ. The plugin keeps its
-		//     local v=1 wrapper, which calls into host's `.abi0` body
-		//     through the converted v=0 sym.
-		//   - internal link converts both versions; the in-binary IAT
-		//     collapses them by name.
-		// triedVers controls which plugin sym version(s) to attempt
-		// for this host export name.
-		//
-		// External link normally converts only v=0. Type-descriptor
-		// R_METHODOFF/R_ADDROFF relocs target ABIInternal method bodies
-		// (v=1) on a non-shared host (mangleABIName leaves them
-		// unsuffixed); converting v=1 for those would orphan the relocs
-		// at "missing section for relocation target ..." in
-		// data.go:relocsym (the SWINDOWS branch at line 500 has special
-		// handling but SHOSTOBJ does not).
+		//   - method bodies (pkg.(*Recv).Method / pkg.Recv.Method)
+		//     convert at v=0 only, external link: type-descriptor
+		//     R_ADDR/R_METHODOFF/R_ADDROFF relocs target the ABIInternal
+		//     body (v=1) on a non-shared host (mangleABIName leaves it
+		//     unsuffixed), and converting v=1 here would orphan those
+		//     relocs ("missing section for relocation target ..." in
+		//     data.go:relocsym — its SWINDOWS branch has special handling
+		//     but SHOSTOBJ does not) because the partial PE has no body
+		//     for a SHOSTOBJ. The plugin keeps its local v=1 wrapper,
+		//     which calls into host's `.abi0` body through the converted
+		//     v=0 sym.
+		//   - everything else converts both versions [0, 1]; internal
+		//     link's in-binary IAT collapses them by name.
 		//
 		// peSharedV1Funcs is a curated allowlist of NON-METHOD package-
 		// level functions whose v=1 ABIInternal entry must be host-bound

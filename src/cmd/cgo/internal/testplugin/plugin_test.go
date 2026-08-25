@@ -201,7 +201,14 @@ func testMain(m *testing.M) int {
 		prettyPrintf("cd %s\n", altRoot)
 	}
 	os.Setenv("PWD", altRoot)
-	goCmdBuildPluginWithImplib(nil, hostImplib, "-o="+filepath.Join(modRoot, "pm-plugB"+pluginSuffix), "./peerlock/plugB")
+	// Must be For("peerlock"), not hostImplib: PE imports are name-bound,
+	// so an implib naming host.exe makes plugB's addmoduledata IAT-call
+	// land outside the peerlock.exe process — the DLL loads fine but its
+	// moduledata never reaches this host's chain (seen on the VM: chain
+	// held only plugA at plugB's validation, and lastmoduleinit fell back
+	// to initialized plugA reporting "plugin already loaded"). POSIX is
+	// unaffected (dlopen resolves symbols, not module names).
+	goCmdBuildPluginFor(nil, "peerlock", "-o="+filepath.Join(modRoot, "pm-plugB"+pluginSuffix), "./peerlock/plugB")
 
 	os.Setenv("GOPATH", GOPATH)
 	if err := os.Chdir(modRoot); err != nil {

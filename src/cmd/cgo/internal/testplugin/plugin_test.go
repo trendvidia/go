@@ -9,6 +9,7 @@ import (
 	"cmd/cgo/internal/cgotest"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -233,6 +234,20 @@ func testMain(m *testing.M) int {
 	}
 	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-a", "p"+pluginSuffix), "./samename/dira")
 	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-b", "p"+pluginSuffix), "./samename/dirb")
+
+	// Stage-2 ABI rejection residue: one plugin source built twice, so
+	// the rejectchained host can byte-patch one copy's marker to a
+	// foreign generation, load it raw, and prove the rejection leaves
+	// no walkable chain node behind. The host takes the correct
+	// {Marker, Version} pair as hex so nothing is hardcoded.
+	goCmd(nil, "build", "-o", "rejectchained.exe", "./rejectchained")
+	for _, d := range []string{"reject-a", "reject-b"} {
+		if err := os.MkdirAll(filepath.Join(modRoot, d), 0777); err != nil {
+			log.Panic(err)
+		}
+	}
+	goCmdBuildPluginFor(nil, "rejectchained", "-o="+filepath.Join("reject-a", "p"+pluginSuffix), "./rejectchained/victim")
+	goCmdBuildPluginFor(nil, "rejectchained", "-o="+filepath.Join("reject-b", "p"+pluginSuffix), "./rejectchained/victim")
 
 	return m.Run()
 }
@@ -484,6 +499,21 @@ func TestPluginABIMarker(t *testing.T) {
 func TestSameBaseNameDistinctDirs(t *testing.T) {
 	globalSkip(t)
 	run(t, "./samename.exe")
+}
+
+// TestRejectChainedModule pins the stage-2 ABI rejection's residue
+// handling on a REAL chained module: the host byte-patches a healthy
+// plugin's marker to a foreign generation and loads it raw, so its
+// DllMain chains its moduledata exactly as a swapped-in incompatible
+// build would, then verifies the rejection treatment detaches that
+// node and that a healthy sibling still loads afterwards. The host
+// prints skip on platforms without the Windows loader half.
+func TestRejectChainedModule(t *testing.T) {
+	globalSkip(t)
+	var pair [8]byte
+	binary.LittleEndian.PutUint32(pair[0:], pluginabi.Marker)
+	binary.LittleEndian.PutUint32(pair[4:], pluginabi.Version)
+	run(t, "./rejectchained.exe", hex.EncodeToString(pair[:]))
 }
 
 // TestPanicOnCallStub exercises v2's funcptr panic-on-call stub

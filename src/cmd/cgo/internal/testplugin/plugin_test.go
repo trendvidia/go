@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"cmd/cgo/internal/cgotest"
 	"context"
+	"debug/elf"
+	"debug/pe"
 	"encoding/binary"
 	"errors"
 	"flag"
@@ -378,6 +380,194 @@ func TestBuildID(t *testing.T) {
 	b := goCmd(t, "tool", "buildid", "plugin1"+pluginSuffix)
 	if len(b) == 0 {
 		t.Errorf("build id not found")
+	}
+}
+
+// peExportNames returns the names in image's PE export directory.
+// debug/pe does not expose IMAGE_EXPORT_DIRECTORY, so walk it by hand
+// through optional-header data directory entry 0, mapping each RVA to
+// its containing section. Go plugin images keep the directory and its
+// name strings in one section, so all reads below share dirSec.
+func peExportNames(t *testing.T, image string) map[string]bool {
+	t.Helper()
+	f, err := pe.Open(image)
+	if err != nil {
+		t.Fatalf("pe.Open(%s): %v", image, err)
+	}
+	defer f.Close()
+	var dd pe.DataDirectory
+	switch oh := f.OptionalHeader.(type) {
+	case *pe.OptionalHeader64:
+		dd = oh.DataDirectory[0] // IMAGE_DIRECTORY_ENTRY_EXPORT
+	case *pe.OptionalHeader32:
+		dd = oh.DataDirectory[0]
+	default:
+		t.Fatalf("%s: unexpected optional header type %T", image, f.OptionalHeader)
+	}
+	if dd.VirtualAddress == 0 {
+		t.Fatalf("%s: image has no export directory", image)
+	}
+	secAt := func(rva uint32) *pe.Section {
+		for _, s := range f.Sections {
+			if rva >= s.VirtualAddress && rva < s.VirtualAddress+max(s.VirtualSize, s.Size) {
+				return s
+			}
+		}
+		return nil
+	}
+	dirSec := secAt(dd.VirtualAddress)
+	if dirSec == nil {
+		t.Fatalf("%s: export directory RVA %#x not in any section", image, dd.VirtualAddress)
+	}
+	data, err := dirSec.Data()
+	if err != nil {
+		t.Fatalf("%s: reading section %s: %v", image, dirSec.Name, err)
+	}
+	u32 := func(rva uint32) uint32 {
+		off := int(rva - dirSec.VirtualAddress)
+		return binary.LittleEndian.Uint32(data[off : off+4])
+	}
+	numNames := u32(dd.VirtualAddress + 24) // IMAGE_EXPORT_DIRECTORY.NumberOfNames
+	namesArr := u32(dd.VirtualAddress + 32) // ...AddressOfNames
+	names := make(map[string]bool, numNames)
+	for i := uint32(0); i < numNames; i++ {
+		nameRVA := u32(namesArr + 4*i)
+		if secAt(nameRVA) != dirSec {
+			t.Fatalf("%s: export name RVA %#x outside directory section %s", image, nameRVA, dirSec.Name)
+		}
+		off := int(nameRVA - dirSec.VirtualAddress)
+		end := bytes.IndexByte(data[off:], 0)
+		if end < 0 {
+			t.Fatalf("%s: unterminated export name at RVA %#x", image, nameRVA)
+		}
+		names[string(data[off:off+end])] = true
+	}
+	return names
+}
+
+// elfDynsymNames returns the defined symbol names in image's .dynsym —
+// the ELF counterpart of the PE export directory. Undefined entries are
+// the image's own imports, not exports.
+func elfDynsymNames(t *testing.T, image string) map[string]bool {
+	t.Helper()
+	f, err := elf.Open(image)
+	if err != nil {
+		t.Fatalf("elf.Open(%s): %v", image, err)
+	}
+	defer f.Close()
+	syms, err := f.DynamicSymbols()
+	if err != nil {
+		t.Fatalf("%s: no dynamic symbol table: %v", image, err)
+	}
+	names := make(map[string]bool)
+	for _, s := range syms {
+		if s.Section != elf.SHN_UNDEF {
+			names[s.Name] = true
+		}
+	}
+	return names
+}
+
+// TestExportTableCompleteness pins the export mechanism's wire contract
+// (trendvidia/go#44): every symbol a plugin main package declares for
+// export must appear in the linked image's dynamic export table — the
+// PE export directory on Windows, .dynsym on ELF.
+//
+// Two independent layers:
+//
+//  1. Loader layer (exporttab.exe): on Windows, plugin.Open resolves
+//     every ptabs entry through GetProcAddress, so a missing .edata
+//     entry aborts with a named error right here. POSIX opens read
+//     ptabs from memory and prove nothing about the table.
+//
+//  2. Static layer (this test parses the image directly): the declared
+//     export set must be a subset of the table. On ELF this is the
+//     only defense there is — lastmoduleinit never consults .dynsym,
+//     so a dropped entry is invisible to Lookup and would otherwise
+//     surface only when a native dlopen consumer fails.
+//
+// Darwin is skipped: Mach-O carries exports in the dyld export trie,
+// which these parsers do not cover (gap noted on trendvidia/go#44).
+func TestExportTableCompleteness(t *testing.T) {
+	globalSkip(t)
+	if runtime.GOOS == "darwin" {
+		t.Skip("Mach-O dyld export trie not parsed; see trendvidia/go#44")
+	}
+
+	goCmd(t, "build", "-o", "exporttab.exe", "./exporttab")
+
+	// One fixture per export class that history or linkage makes
+	// interesting: plugin1 covers plain funcs plus a zero-initialized
+	// BSS var (the storage class mingw ld's --export-all-symbols
+	// auto-export once silently skipped); sub/plugin1 repeats a base
+	// name another fixture also uses and adds a func-valued var;
+	// mangle exercises generic and mangled export names. The table
+	// names carry the pluginpath prefix of each fixture (measured:
+	// cmd/go derives it from the package import path).
+	fixtures := []struct {
+		src     string
+		out     string
+		exports []string
+	}{
+		{
+			src: "./plugin1",
+			out: "et-plugin1",
+			exports: []string{
+				"testplugin/plugin1.F",
+				"testplugin/plugin1.ReadCommonX",
+				"testplugin/plugin1.Seven",
+				"testplugin/plugin1.UnexportedNameReuse",
+			},
+		},
+		{
+			src: "./sub/plugin1",
+			out: "et-sub-plugin1",
+			exports: []string{
+				"testplugin/sub/plugin1.F",
+				"testplugin/sub/plugin1.FuncVar",
+				"testplugin/sub/plugin1.ReadCommonX",
+			},
+		},
+		{
+			src: "./mangle",
+			out: "et-mangle",
+			exports: []string{
+				"testplugin/mangle.F",
+				"testplugin/mangle.G",
+				"testplugin/mangle.P",
+			},
+		},
+	}
+	for _, fx := range fixtures {
+		goCmdBuildPluginFor(t, "exporttab", "-o="+fx.out+pluginSuffix, fx.src)
+	}
+
+	// Loader layer: open everything in one host process.
+	paths := make([]string, len(fixtures))
+	for i, fx := range fixtures {
+		paths[i] = fx.out + pluginSuffix
+	}
+	out := run(t, "./exporttab.exe", paths...)
+	for _, p := range paths {
+		if !strings.Contains(out, "OPENED "+p) {
+			t.Errorf("host did not report opening %s:\n%s", p, out)
+		}
+	}
+
+	// Static layer: parse each image and require the declared set.
+	for _, fx := range fixtures {
+		image := fx.out + pluginSuffix
+		var table map[string]bool
+		if runtime.GOOS == "windows" {
+			table = peExportNames(t, image)
+		} else {
+			table = elfDynsymNames(t, image)
+		}
+		for _, want := range fx.exports {
+			if !table[want] {
+				t.Errorf("%s: export %q missing from image export table (%d entries present)", image, want, len(table))
+			}
+		}
 	}
 }
 

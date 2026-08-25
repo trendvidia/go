@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"cmd/cgo/internal/cgotest"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"internal/platform"
@@ -175,6 +176,12 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "refcount.exe", "./refcount/host")
 	goCmdBuildPluginFor(nil, "refcount", "-o=plugA"+pluginSuffix, "./refcount/plugA")
 	goCmdBuildPluginFor(nil, "refcount", "-o=plugB"+pluginSuffix, "./refcount/plugB")
+
+	// Post-Close hazard-envelope fixture (trendvidia/go#26): one host
+	// with subcommand-selected probes over an unprotected closure, an
+	// exported-variable pointer, and the reopen-aliasing cell.
+	goCmd(nil, "build", "-o", "hazards.exe", "./hazards")
+	goCmdBuildPluginFor(nil, "hazards", "-o=hazards-plugin"+pluginSuffix, "./hazards/hazard")
 
 	return m.Run()
 }
@@ -370,6 +377,63 @@ func TestPanicOnCallStub(t *testing.T) {
 func TestCloseUnloadsMemory(t *testing.T) {
 	globalSkip(t)
 	run(t, "./closeunmaps.exe")
+}
+
+// runExpectFault runs bin, requiring the child to die from an
+// unrecoverable runtime fault: the probe holds a reference class
+// Plugin.Close does not protect, and using it after Close must crash
+// the process ("fatal error: fault") rather than return. A clean exit
+// fails, as does a death without the fault marker — in particular a
+// recoverable "panic:" exit would mean the stub rewrite over-reached
+// onto an unprotected class.
+func runExpectFault(t *testing.T, bin string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	prettyPrintf("%s\n", asCommandLine(".", cmd))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err == nil {
+		t.Fatalf("%s %s: survived a post-Close use of an unprotected reference; want fatal error: fault\nstdout:\n%s",
+			bin, strings.Join(args, " "), out)
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("%#q: %v (want exit from runtime fault)\nstderr:\n%s", cmd, err, stderr.String())
+	}
+	if msg := stderr.String(); !strings.Contains(msg, "fatal error: fault") {
+		t.Fatalf("%s %s: died without \"fatal error: fault\"; want unrecoverable fault, got:\n%s",
+			bin, strings.Join(args, " "), msg)
+	}
+}
+
+// TestCloseHazardEnvelope pins the documented post-Close reference
+// envelope (trendvidia/go#26). Func values from Lookup panic
+// recoverably after Close — that class is covered by
+// TestPanicOnCallStub. The three unprotected classes must behave as
+// documented:
+//
+//   - a closure obtained by calling into the plugin kills the process
+//     with an unrecoverable fault when called after Close (the stub
+//     rewrite cannot reach its descriptor),
+//
+//   - a pointer to an exported variable likewise faults on use, and
+//     function values reached through such closures share the same
+//     call-into-unmapped-text mechanism,
+//
+//   - if the path is reopened instead, stale references silently
+//     alias the NEW instance because the loader maps it at the same
+//     addresses.
+//
+// The two fatal classes each run in their own subprocess via
+// runExpectFault; the aliasing cell runs in-process-safe subprocess
+// form too, so a future loader that stops reusing addresses turns the
+// test failure into reported output instead of a dead test binary.
+func TestCloseHazardEnvelope(t *testing.T) {
+	globalSkip(t)
+	runExpectFault(t, "./hazards.exe", "closure")
+	runExpectFault(t, "./hazards.exe", "dataptr")
+	run(t, "./hazards.exe", "alias")
 }
 
 // TestRefcountUnload exercises the cross-plugin dependency tracking

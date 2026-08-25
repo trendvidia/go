@@ -35,11 +35,14 @@ static int pluginCloseHandle(uintptr_t h, char** err) {
 	// dlclose returns 0 on success, non-zero on failure with the
 	// reason retrievable via dlerror. After a successful return the
 	// .so's mapping refcount is decremented; the OS unmaps once it
-	// reaches zero. v2's Plugin.Close ensures every held descriptor
-	// has already been rewritten to the runtime panic stub before
-	// this call, so even if a goroutine still holds a func value
-	// derived from this plugin, calling it lands in the stub (which
-	// is mapped in the host) rather than what we're about to unmap.
+	// reaches zero. v2's Plugin.Close rewrites every registered
+	// descriptor to the runtime panic stub before this call, so a
+	// goroutine holding a Lookup-obtained func value lands its call
+	// in the stub (mapped in the host) rather than in what we're
+	// about to unmap. References obtained any other way — closures
+	// returned by calls into the plugin, pointers to variables —
+	// are not registered anywhere Close can reach, and using one
+	// after this point faults unrecoverably.
 	if (dlclose((void*)h) != 0) {
 		*err = (char*)dlerror();
 		return 1;
@@ -152,7 +155,9 @@ func open(name string) (*Plugin, error) {
 			// stable reference to give to Plugin.Close — at
 			// Close, the runtime overwrites *holder with the
 			// pluginClosedFuncStub PC, converting any held call
-			// into a clean panic.
+			// through this Lookup func value into a clean panic.
+			// Runtime-created closures returned by calls into the
+			// plugin carry no such holder and stay unprotected.
 			holder := new(uintptr)
 			*holder = uintptr(dlp)
 			(*valp)[1] = unsafe.Pointer(holder)

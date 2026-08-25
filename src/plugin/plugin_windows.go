@@ -137,9 +137,12 @@ func open(name string) (*Plugin, error) {
 			// pattern). The func value's data pointer is the holder;
 			// calling the value loads holder[0] and indirects to it.
 			// At Close, the runtime overwrites *holder with the
-			// pluginClosedFuncStub PC, so any held call panics with a
-			// recognisable message instead of jumping into what
-			// FreeLibrary has just unmapped.
+			// pluginClosedFuncStub PC, so any held call through this
+			// Lookup func value panics with a recognisable message
+			// instead of jumping into what FreeLibrary has just
+			// unmapped. Runtime-created closures returned by calls
+			// into the plugin carry no such holder and stay
+			// unprotected.
 			holder := new(uintptr)
 			*holder = proc
 			(*valp)[1] = unsafe.Pointer(holder)
@@ -170,9 +173,13 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 // dlclose-based phase 2. Calls FreeLibrary on the HMODULE captured
 // at Open time, then drops the plugin from the global registry. The
 // runtime side of Plugin.Close (plugin_close in runtime/plugin.go)
-// already rewrote held func descriptors to pluginClosedFuncStub
-// before this point, so any held call panics with a recognisable
-// message instead of jumping into what FreeLibrary just unmapped.
+// already rewrote every registered func descriptor to
+// pluginClosedFuncStub before this point, so a held call through a
+// Lookup-obtained func value panics with a recognisable message
+// instead of jumping into what FreeLibrary just unmapped.
+// Unregistered references — closures returned by calls into the
+// plugin, pointers to exported variables — still point into this
+// image and fault unrecoverably if used now; see Plugin.Close.
 //
 // Caller (closePlugin) holds pluginsMu.
 func unloadPlugin(p *Plugin) error {

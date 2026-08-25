@@ -416,6 +416,15 @@ func plugin_dependents(pluginpath string) []string {
 // through descriptor.F; after the rewrite that indirect lands here
 // and panics with a recognisable message.
 //
+// The rewrite reaches only registered descriptors: static ·f
+// descriptors recorded in canonicalSyms, and the per-Lookup heap
+// holders threaded through plugin.Plugin.funcDescriptors. A closure
+// created at runtime inside the plugin and returned to the host is
+// registered nowhere, keeps pointing at the plugin's text, and kills
+// the process with an unrecoverable fault when called after Close —
+// as does dereferencing a pointer to any of the plugin's variables.
+// See plugin.Plugin.Close for the full envelope.
+//
 // The stub takes no arguments and returns nothing — caller's actual
 // signature can be anything. The ABI mismatch is harmless: panic
 // unwinds via deferred handlers before the caller's epilogue runs,
@@ -512,8 +521,8 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 		return pluginDependentsMsg(md)
 	}
 
-	// Convert every held func value pointing into this module to a
-	// panic-on-call. Two distinct sources:
+	// Convert every reachable held descriptor pointing into this
+	// module to a panic-on-call. Two distinct sources:
 	//
 	//   (1) Static closure descriptors emitted by the compiler for
 	//       the plugin's own PFUNC values. Reachable from anything
@@ -528,6 +537,10 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 	//       code address; the func value's data pointer points at
 	//       that holder, not at the static descriptor. The plugin
 	//       package threads the slice of holders to us.
+	//
+	// Closures created at runtime inside the plugin and returned to
+	// the host are reachable from neither source; their calls after
+	// Close fault fatally. See pluginClosedFuncStub's doc comment.
 	//
 	// Both rewrites must happen BEFORE dlclose (added in the second
 	// half of v2): once the plugin's text and data are unmapped we

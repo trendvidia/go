@@ -360,11 +360,15 @@ func runExitHooks(code int) {
 
 // start forcegc helper goroutine
 func init() {
-	if isPlugin {
-		// When loaded as a Go plugin, the host's runtime already runs
-		// a forcegchelper against the (host-shared) runtime.forcegc
-		// state. Spawning a second one here would race host's via the
+	if GOOS == "windows" && isPlugin {
+		// When loaded as a Go plugin on Windows, the plugin's runtime
+		// state is host-shared via IAT binding: the host's runtime
+		// already runs a forcegchelper against the same runtime.forcegc,
+		// and spawning a second one here would race host's via that
 		// shared state, manifesting as `forcegc: phase error`.
+		// POSIX plugins run an independent scheduler (no shared forcegc),
+		// so they keep their own helper — same gating as
+		// pluginSkipInitPkg("runtime") in plugin.go.
 		return
 	}
 	go forcegchelper()

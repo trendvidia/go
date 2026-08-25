@@ -2007,7 +2007,9 @@ func BuildInstallFunc(b *Builder, ctx context.Context, a *Action) (err error) {
 		implib := a1.built + ".a"
 		if _, err := os.Stat(implib); err == nil {
 			targetImplib := a.Target + ".a"
-			sh.moveOrCopyFile(targetImplib, implib, 0666, false)
+			if err := sh.moveOrCopyFile(targetImplib, implib, 0666, false); err != nil {
+				return err
+			}
 		}
 	}
 

@@ -1759,7 +1759,6 @@ func ensureglinkresolver(ctxt *ld.Link, ldr *loader.Loader) *loader.SymbolBuilde
 	return glink
 }
 
-
 // addressSpecialSymbols resolves the .TOC. anchor for every PPC64
 // object after segment addresses are assigned. Only one TOC region is
 // supported. If a GOT section is present, place the anchor as

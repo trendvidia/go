@@ -628,16 +628,13 @@ func TypeptrLsym(t *types.Type) *obj.LSym {
 	typeSym := TypeLinksym(t)
 	name := "go.typeptr." + typeSym.Name
 	s := base.Ctxt.Lookup(name)
-	// Guard against concurrent emission (signatmu mirrors how
-	// TypeLinksym protects type-descriptor metadata). Without this,
-	// two goroutines compiling packages in parallel can both see
-	// Size == 0, both call objw.Global, and the linker complains of
-	// a redeclared symbol.
+	// Record the slot for deferred, order-stable emission (see
+	// WriteTypetabSlots); we do NOT emit the data here. The Record is
+	// internally locked; the surrounding signatmu additionally mirrors
+	// how TypeLinksym protects type-descriptor metadata during parallel
+	// compilation.
 	signatmu.Lock()
-	if s.Size == 0 {
-		objw.SymPtr(s, 0, typeSym, 0)
-		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
-	}
+	typetabSlots.Record(s, typeSym)
 	signatmu.Unlock()
 	return s
 }
@@ -718,17 +715,31 @@ func itabptrLsym(typ, iface *types.Type) *obj.LSym {
 	itabSym := ITabLsym(typ, iface)
 	name := "go.itabptr." + typ.LinkString() + "," + iface.LinkString()
 	s := base.Ctxt.Lookup(name)
-	// Guard against concurrent emission (signatmu, as in TypeptrLsym).
-	// Without this, two parallel backend workers compiling the same
-	// (typ, iface) pair can both see Size == 0 and both call objw.Global,
-	// fatally redeclaring the slot or corrupting its relocations.
+	// Record the slot for deferred, order-stable emission (as in
+	// TypeptrLsym): two parallel backend workers hitting the same
+	// (typ, iface) pair both end up here, and the registry dedups them.
 	signatmu.Lock()
-	if s.Size == 0 {
-		objw.SymPtr(s, 0, itabSym, 0)
-		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
-	}
+	typetabSlots.Record(s, itabSym)
 	signatmu.Unlock()
 	return s
+}
+
+// typetabSlots records every -typetab slot referenced during
+// compilation (go.typeptr./go.itabptr.), mapping the slot symbol to
+// the target it points at. Populated by TypeptrLsym/itabptrLsym while
+// functions are compiled in parallel, then drained by
+// WriteTypetabSlots at dumpdata time.
+var typetabSlots staticdata.SlotRegistry
+
+// WriteTypetabSlots emits the deferred go.typeptr/go.itabptr slot data
+// recorded by TypeptrLsym/itabptrLsym, sorted by symbol name. Called
+// once, single-threaded, from gc.dumpdata alongside
+// staticdata.WriteFuncPtrSlots — see staticdata.SlotRegistry for why
+// emission is deferred and sorted (inline emission made plugin archives
+// non-reproducible: goroutine scheduling decided the object layout,
+// trendvidia/go#27).
+func WriteTypetabSlots() {
+	typetabSlots.Write()
 }
 
 // needkeyupdate reports whether map updates with t as a key

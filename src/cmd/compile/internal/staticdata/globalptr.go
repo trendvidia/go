@@ -5,15 +5,10 @@
 package staticdata
 
 import (
-	"slices"
 	"strings"
-	"sync"
 
 	"cmd/compile/internal/base"
-	"cmd/compile/internal/objw"
-	"cmd/compile/internal/types"
 	"cmd/internal/obj"
-	"cmd/internal/objabi"
 )
 
 // FuncPtrLsym returns the linker symbol for the go.funcptr.<orig.Name>
@@ -65,41 +60,21 @@ func slotLsym(prefix string, orig *obj.LSym) *obj.LSym {
 	// end of compilation instead. The caller only needs the symbol to
 	// exist (as a relocation target); its data is filled in before the
 	// object is written — the same deferred pattern WriteFuncSyms uses.
-	slotMu.Lock()
-	if _, ok := pendingSlots[s]; !ok {
-		pendingSlots[s] = orig
-	}
-	slotMu.Unlock()
+	funcPtrSlots.Record(s, orig)
 	return s
 }
+
+// funcPtrSlots records every go.funcptr slot referenced during
+// compilation; drained, sorted, by WriteFuncPtrSlots.
+var funcPtrSlots SlotRegistry
 
 // WriteFuncPtrSlots emits the deferred go.funcptr slot data recorded by
 // slotLsym, in a deterministic order (sorted by symbol name). Must be
 // called once, single-threaded, after all functions are compiled — from
-// gc.dumpdata, alongside WriteFuncSyms.
-//
-// Emission order affects only object layout, not semantics: the slots
-// are DUPOK and are resolved by name by the linker and by the runtime's
-// module-load canonicalisation, so a stable sort is transparent to
-// plugin loading and Plugin.Close.
+// gc.dumpdata, alongside WriteFuncSyms. See SlotRegistry.Write for why
+// emission is deferred and what the emitted slot looks like.
 func WriteFuncPtrSlots() {
-	slots := make([]*obj.LSym, 0, len(pendingSlots))
-	for s := range pendingSlots {
-		slots = append(slots, s)
-	}
-	slices.SortFunc(slots, func(a, b *obj.LSym) int {
-		return strings.Compare(a.Name, b.Name)
-	})
-	for _, s := range slots {
-		objw.SymPtr(s, 0, pendingSlots[s], 0)
-		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
-		// Force SNOPTRDATA so the slot lives in writable .noptrdata
-		// rather than being promoted to a RELRO read-only section by
-		// makeRelroForSharedLib (which boosts ReadOnly symbol kinds
-		// with relocations to *RELRO variants). The runtime needs to
-		// write to the slot during canonicalisation at module load.
-		s.Type = objabi.SNOPTRDATA
-	}
+	funcPtrSlots.Write()
 }
 
 // isCompilerInternal reports whether name identifies a per-module
@@ -138,15 +113,3 @@ func isCompilerInternal(name string) bool {
 	}
 	return false
 }
-
-// slotMu serialises access to pendingSlots. slotLsym is called from
-// goroutines compiling functions in parallel, so recording a slot needs
-// mutual exclusion.
-var slotMu sync.Mutex
-
-// pendingSlots records every go.funcptr slot referenced during
-// compilation, mapping the slot symbol to the original it points at.
-// Populated (under slotMu) by slotLsym during parallel compilation and
-// drained, sorted, by WriteFuncPtrSlots at dumpdata time. The map keys
-// deduplicate slots referenced from multiple functions.
-var pendingSlots = map[*obj.LSym]*obj.LSym{}

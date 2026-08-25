@@ -573,7 +573,6 @@ func itabptrsinit(md *moduledata) {
 	}
 }
 
-
 type _typePair struct {
 	t1 *_type
 	t2 *_type

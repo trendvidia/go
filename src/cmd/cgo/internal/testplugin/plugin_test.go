@@ -413,11 +413,23 @@ func TestPluginABIMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	magic := make([]byte, 4)
+	// Locate the marker by the full 8-byte {Marker, Version} pair the
+	// linker emits, and require it to be unique. The 4-byte Marker
+	// alone is a sequence a multi-megabyte image hits by coincidence
+	// with non-trivial probability, and bytes.Index takes the FIRST
+	// occurrence — .text and pclntab precede .edata in file order — so
+	// searching for it could deterministically tamper with unrelated
+	// bytes, leave the real marker intact, and report the resulting
+	// unrelated load failure as "want incompatible-ABI rejection".
+	magic := make([]byte, 8)
 	binary.LittleEndian.PutUint32(magic, pluginabi.Marker)
+	binary.LittleEndian.PutUint32(magic[4:], pluginabi.Version)
 	idx := bytes.Index(src, magic)
 	if idx < 0 {
 		t.Fatal("freshly built plugin lacks the go:plugin.abi marker")
+	}
+	if dup := bytes.Index(src[idx+1:], magic); dup >= 0 {
+		t.Fatalf("go:plugin.abi marker bytes occur at both %d and %d; tampering would be ambiguous", idx, idx+1+dup)
 	}
 
 	// Wrong generation: bump Version past ours; Open must refuse.

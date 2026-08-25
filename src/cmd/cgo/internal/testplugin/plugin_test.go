@@ -529,7 +529,10 @@ func TestExportTableCompleteness(t *testing.T) {
 			},
 		},
 		{
-			src: "./mangle",
+			// File argument, matching TestSymbolNameMangle: a directory
+			// build resolves this package against the module's implicit
+			// -lang=go1.16 and rejects the generics below.
+			src: "./mangle/plugin.go",
 			out: "et-mangle",
 			exports: []string{
 				"testplugin/mangle.F",

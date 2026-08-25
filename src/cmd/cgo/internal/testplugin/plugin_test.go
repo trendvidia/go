@@ -221,6 +221,19 @@ func testMain(m *testing.M) int {
 	}
 	os.Setenv("PWD", modRoot)
 
+	// Same-base-name fixture (trendvidia/go#40): two different plugins
+	// installed under ONE base file name in two directories, plus the
+	// host that opens both. go build -o does not create directories,
+	// so make them first.
+	goCmd(nil, "build", "-o", "samename.exe", "./samename")
+	for _, d := range []string{"same-a", "same-b"} {
+		if err := os.MkdirAll(filepath.Join(modRoot, d), 0777); err != nil {
+			log.Panic(err)
+		}
+	}
+	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-a", "p"+pluginSuffix), "./samename/dira")
+	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-b", "p"+pluginSuffix), "./samename/dirb")
+
 	return m.Run()
 }
 
@@ -458,6 +471,18 @@ func TestPluginABIMarker(t *testing.T) {
 	if !strings.Contains(err.Error(), "missing go:plugin.abi") {
 		t.Fatalf("error = %q; want missing-marker rejection", err)
 	}
+}
+
+// TestSameBaseNameDistinctDirs pins the post-load half of the ABI
+// fence (trendvidia/go#40): two DIFFERENT plugins sharing one base
+// file name must never collapse onto one OS module. The platform
+// loader's matching rule decides which good outcome occurs — B loads
+// as its own module, or the second Open is refused with the named
+// base-name error — and the fixture fails on the forbidden third
+// outcome: a successful open whose symbols answer A.
+func TestSameBaseNameDistinctDirs(t *testing.T) {
+	globalSkip(t)
+	run(t, "./samename.exe")
 }
 
 // TestPanicOnCallStub exercises v2's funcptr panic-on-call stub

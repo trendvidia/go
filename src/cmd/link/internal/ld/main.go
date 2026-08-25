@@ -66,11 +66,11 @@ var (
 	flagBuildid = flag.String("buildid", "", "record `id` as Go toolchain build id")
 	flagBindNow = flag.Bool("bindnow", false, "mark a dynamically linked ELF object for immediate function binding")
 
-	flagOutfile        = flag.String("o", "", "write output to `file`")
-	flagPluginPath     = flag.String("pluginpath", "", "full path name for plugin")
-	flagPluginImplib   = flag.String("pluginimplib", "", "host import library for plugin linking on windows")
-	flagPluginExeName  = flag.String("pluginexename", "", "host executable name for import library on windows")
-	flagFipso          = flag.String("fipso", "", "write fips module to `file`")
+	flagOutfile       = flag.String("o", "", "write output to `file`")
+	flagPluginPath    = flag.String("pluginpath", "", "full path name for plugin")
+	flagPluginImplib  = flag.String("pluginimplib", "", "host import library for plugin linking on windows")
+	flagPluginExeName = flag.String("pluginexename", "", "host executable name for import library on windows")
+	flagFipso         = flag.String("fipso", "", "write fips module to `file`")
 
 	flagInstallSuffix = flag.String("installsuffix", "", "set package directory `suffix`")
 	flagDumpDep       = flag.Bool("dumpdep", false, "dump symbol dependency graph")

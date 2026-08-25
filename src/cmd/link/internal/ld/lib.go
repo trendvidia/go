@@ -1521,7 +1521,7 @@ func (ctxt *Link) hostlink() {
 	// downstream ASLR/export/mingw blocks. Linux/FreeBSD/Plan9/etc. fall
 	// through with no extension (pickHostlinkExtender returns nil).
 	st := &hostlinkState{
-		argv: argv,
+		argv:         argv,
 		combineDwarf: machoShouldCombineDwarf(ctxt),
 		wlPrefix:     "-Wl,--",
 	}

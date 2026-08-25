@@ -152,17 +152,17 @@ var peSectionMarkers = map[string]bool{
 // and per-binary type descriptors / closure captures.
 var peSharedRuntimeData = map[string]bool{
 	// Memory allocator + page management.
-	"runtime.mheap_":          true,
-	"runtime.memstats":        true,
-	"runtime.MemProfileRate":  true,
-	"runtime.physPageSize":    true,
+	"runtime.mheap_":           true,
+	"runtime.memstats":         true,
+	"runtime.MemProfileRate":   true,
+	"runtime.physPageSize":     true,
 	"runtime.physHugePageSize": true,
 	"runtime.persistentChunks": true,
-	"runtime.globalAlloc":     true,
-	"runtime.gcBitsArenas":    true,
-	"runtime.scavenger":       true,
-	"runtime.scavenge":        true,
-	"runtime.zerobase":        true,
+	"runtime.globalAlloc":      true,
+	"runtime.gcBitsArenas":     true,
+	"runtime.scavenger":        true,
+	"runtime.scavenge":         true,
+	"runtime.zerobase":         true,
 
 	// Sentinel mspan stored in mcache.alloc[spc] when no span is cached.
 	// Plugin's mcache.refill compares `c.alloc[spc] != &emptymspan`. When
@@ -171,7 +171,7 @@ var peSharedRuntimeData = map[string]bool{
 	// plugin-local &emptymspan would be unequal — falling through to the
 	// sweepgen check on a zeroed dummy span and throwing "bad sweepgen
 	// in refill". Sharing aligns the sentinel pointer across modules.
-	"runtime.emptymspan":      true,
+	"runtime.emptymspan": true,
 
 	// Scheduler.
 	"runtime.sched":               true,
@@ -191,10 +191,10 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.numCPUStartup":       true,
 
 	// Goroutine table.
-	"runtime.allgs":     true,
-	"runtime.allgptr":   true,
-	"runtime.allglen":   true,
-	"runtime.allglock":  true,
+	"runtime.allgs":    true,
+	"runtime.allgptr":  true,
+	"runtime.allglen":  true,
+	"runtime.allglock": true,
 
 	// GC state.
 	"runtime.gcController":          true,
@@ -214,25 +214,25 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.gcDebugMarkDone":       true,
 
 	// Lifecycle.
-	"runtime.forcegc":       true,
-	"runtime.forcegcperiod": true,
-	"runtime.freezing":      true,
-	"runtime.exiting":       true,
-	"runtime.panicking":     true,
-	"runtime.paniclk":       true,
+	"runtime.forcegc":         true,
+	"runtime.forcegcperiod":   true,
+	"runtime.freezing":        true,
+	"runtime.exiting":         true,
+	"runtime.panicking":       true,
+	"runtime.paniclk":         true,
 	"runtime.runtimeInitTime": true,
-	"runtime.ticks":         true,
+	"runtime.ticks":           true,
 
 	// Finalizer queue.
-	"runtime.allfin":      true,
-	"runtime.finalizer1":  true,
-	"runtime.finc":        true,
-	"runtime.fing":        true,
-	"runtime.fingStatus":  true,
-	"runtime.finlock":     true,
-	"runtime.finptrmask":  true,
-	"runtime.finq":        true,
-	"runtime.finqueued":   true,
+	"runtime.allfin":         true,
+	"runtime.finalizer1":     true,
+	"runtime.finc":           true,
+	"runtime.fing":           true,
+	"runtime.fingStatus":     true,
+	"runtime.finlock":        true,
+	"runtime.finptrmask":     true,
+	"runtime.finq":           true,
+	"runtime.finqueued":      true,
 	"runtime.userArenaState": true,
 
 	// Module list (paired with lastmoduledatap above). Note:
@@ -278,7 +278,7 @@ var peSharedRuntimeData = map[string]bool{
 	// asmcgocall. Plugin's runtime.osinit doesn't run, so plugin's
 	// local copy is NULL — leading to `asmcgocall(NULL, ...)` →
 	// landingpad CALL AX with AX=0 fault on first VirtualAlloc/etc.
-	"runtime.asmstdcallAddr":   true,
+	"runtime.asmstdcallAddr":    true,
 	"runtime.asyncPreemptStack": true,
 
 	// Trace ring.
@@ -289,27 +289,27 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.traceback_cache":   true,
 
 	// Misc process-wide state.
-	"runtime.hashkey":                    true,
-	"runtime.globalRand":                 true,
-	"runtime.heapRandSeed":               true,
-	"runtime.heapRandSeedBitsRemaining":  true,
-	"runtime.crashFD":                    true,
-	"runtime.faketime":                   true,
-	"runtime.haveHighResTimer":           true,
-	"runtime.semtable":                   true,
-	"runtime.poolcleanup":                true,
-	"runtime.cgoHasExtraM":               true,
-	"runtime.extraMInUse":                true,
-	"runtime.extraMLength":               true,
-	"runtime.canonicalSyms":              true,
-	"runtime.deadlock":                   true,
-	"runtime.printBacklog":               true,
-	"runtime.printBacklogIndex":          true,
-	"runtime.suspendLock":                true,
-	"runtime.isWaitingForSuspendG":       true,
-	"runtime.didothers":                  true,
-	"runtime.boringCaches":               true,
-	"runtime.reflectOffs":                true,
+	"runtime.hashkey":                   true,
+	"runtime.globalRand":                true,
+	"runtime.heapRandSeed":              true,
+	"runtime.heapRandSeedBitsRemaining": true,
+	"runtime.crashFD":                   true,
+	"runtime.faketime":                  true,
+	"runtime.haveHighResTimer":          true,
+	"runtime.semtable":                  true,
+	"runtime.poolcleanup":               true,
+	"runtime.cgoHasExtraM":              true,
+	"runtime.extraMInUse":               true,
+	"runtime.extraMLength":              true,
+	"runtime.canonicalSyms":             true,
+	"runtime.deadlock":                  true,
+	"runtime.printBacklog":              true,
+	"runtime.printBacklogIndex":         true,
+	"runtime.suspendLock":               true,
+	"runtime.isWaitingForSuspendG":      true,
+	"runtime.didothers":                 true,
+	"runtime.boringCaches":              true,
+	"runtime.reflectOffs":               true,
 
 	// User-package globals shared from the host binary. Pairs with
 	// runtime.pluginSkipInitPkgs in src/runtime/plugin.go: when a
@@ -1765,4 +1765,3 @@ func peMarkHostExports(ctxt *Link) {
 		ldr.SetAttrCgoExportDynamic(s.sym, true)
 	}
 }
-

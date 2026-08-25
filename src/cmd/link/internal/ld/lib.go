@@ -1697,7 +1697,7 @@ func (ctxt *Link) hostlink() {
 
 	argv, altLinker := elfDynlinkArgs(ctxt, argv)
 
-	argv = elfBuildIDArgs(ctxt, argv)
+	argv = elfBuildIDArgs(ctxt, argv, altLinker)
 
 	// On Windows, given -o foo, GCC will append ".exe" to produce
 	// "foo.exe".  We have decided that we want to honor the -o

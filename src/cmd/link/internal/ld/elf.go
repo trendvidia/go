@@ -166,11 +166,11 @@ func elfDynlinkArgs(ctxt *Link, argv []string) ([]string, string) {
 
 // elfBuildIDArgs appends --build-id flags to argv for ELF targets.
 // Solaris ld doesn't support --build-id, so the flag is probed first.
-func elfBuildIDArgs(ctxt *Link, argv []string) []string {
+func elfBuildIDArgs(ctxt *Link, argv []string, altLinker string) []string {
 	if !ctxt.IsELF {
 		return argv
 	}
-	if linkerFlagSupported(ctxt.Arch, argv[0], "", "-Wl,--build-id=0x1234567890abcdef") {
+	if linkerFlagSupported(ctxt.Arch, argv[0], altLinker, "-Wl,--build-id=0x1234567890abcdef") {
 		if len(buildinfo) > 0 {
 			argv = append(argv, fmt.Sprintf("-Wl,--build-id=0x%x", buildinfo))
 		} else if *flagHostBuildid == "none" {

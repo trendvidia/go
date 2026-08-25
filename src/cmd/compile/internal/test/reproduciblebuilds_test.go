@@ -104,3 +104,41 @@ func TestIssue38068(t *testing.T) {
 		t.Fatalf("concurrent and serial builds produced different output")
 	}
 }
+
+// TestTypetabSlotsReproducible pins the deferred, sorted emission of
+// the -typetab go.typeptr./go.itabptr. slots: they are recorded while
+// functions are compiled in parallel and emitted once at dumpdata
+// time. Emitting them inline made object layout follow goroutine
+// scheduling, so consecutive compiles differed byte-for-byte
+// (trendvidia/go#27).
+func TestTypetabSlotsReproducible(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	t.Parallel()
+	iters := 10
+	if testing.Short() {
+		iters = 4
+	}
+	src := filepath.Join("testdata", "reproducible", "typetabslots.go")
+	tmp := filepath.Join(t.TempDir(), "typetab.a")
+	var want []byte
+	for i := 0; i < iters; i++ {
+		// Note: use -c 2 to expose any nondeterminism which is the result
+		// of the runtime scheduler, as in TestReproducibleBuilds.
+		cmd := testenv.Command(t, testenv.GoToolPath(t), "tool", "compile",
+			"-p=typetabslots", "-buildid=", "-c=2", "-typetab",
+			"-o", tmp, src)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %v:\n%s", cmd.Args, err, out)
+		}
+		obj, err := os.ReadFile(tmp)
+		if err != nil {
+			t.Fatalf("failed to read object file: %v", err)
+		}
+		if i == 0 {
+			want = obj
+		} else if !bytes.Equal(want, obj) {
+			t.Fatalf("builds produced different output after %d iters (%d bytes vs %d bytes)", i, len(want), len(obj))
+		}
+	}
+}

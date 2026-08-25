@@ -2104,4 +2104,6 @@ var (
 	Float32Bytes    = float32Bytes
 	Complex128Bytes = complex128Bytes
 	Complex64Bytes  = complex64Bytes
+
+	PkgFromInitName = pkgFromInitName
 )

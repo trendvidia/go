@@ -330,7 +330,15 @@ func checkABIMarker(pluginPath string) error {
 		return errors.New("plugin binary has an unreadable export directory")
 	}
 	numNames := le32(expOff + 24)
-	funcsRVA, namesRVA, ordsRVA := le32(expOff+28), le32(expOff+32), le32(expOff+36)
+	// The three export arrays are RVAs too — convert their starts to
+	// file offsets once, then index within the mapped file. Indexing by
+	// the raw RVA would read past EOF (bounds-guarded reads return 0).
+	funcsTbl := rvaToOff(le32(expOff + 28))
+	namesTbl := rvaToOff(le32(expOff + 32))
+	ordsTbl := rvaToOff(le32(expOff + 36))
+	if funcsTbl < 0 || namesTbl < 0 || ordsTbl < 0 {
+		return errors.New("plugin binary has an unreadable export directory")
+	}
 
 	cstr := func(off int) string {
 		if off < 0 || off >= len(data) {
@@ -343,12 +351,12 @@ func checkABIMarker(pluginPath string) error {
 		return string(data[off:end])
 	}
 	for i := uint32(0); i < numNames; i++ {
-		nameOff := rvaToOff(le32(int(namesRVA) + int(i)*4))
+		nameOff := rvaToOff(le32(namesTbl + int(i)*4))
 		if cstr(nameOff) != "go:plugin.abi" {
 			continue
 		}
-		ordIdx := int(le16(int(ordsRVA) + int(i)*2))
-		valOff := rvaToOff(le32(int(funcsRVA) + ordIdx*4))
+		ordIdx := int(le16(ordsTbl + int(i)*2))
+		valOff := rvaToOff(le32(funcsTbl + ordIdx*4))
 		marker, version := le32(valOff), le32(valOff+4)
 		switch {
 		case valOff < 0:

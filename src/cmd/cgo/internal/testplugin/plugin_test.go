@@ -8,15 +8,18 @@ import (
 	"bytes"
 	"cmd/cgo/internal/cgotest"
 	"context"
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
 	"internal/platform"
+	"internal/pluginabi"
 	"internal/testenv"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"plugin"
 	"runtime"
 	"strings"
 	"testing"
@@ -388,6 +391,73 @@ func TestRunHost(t *testing.T) {
 func TestCloseAPI(t *testing.T) {
 	globalSkip(t)
 	run(t, "./closeapi.exe")
+}
+
+// TestPluginABIMarker pins the cross-toolchain ABI fence
+// (trendvidia/go#24 part 2): on Windows, plugin.Open must reject a
+// candidate DLL whose go:plugin.abi export is absent or names another
+// ABI generation. The check reads static file bytes before LoadLibrary
+// maps anything, so both negative cases are exercised in-process — no
+// foreign code runs, and nothing touches this process's module chain.
+// Positive control is structural only (marker bytes present in a
+// freshly built plugin); full load success is covered by every other
+// test in this suite, which would fail if the fence rejected good
+// binaries.
+func TestPluginABIMarker(t *testing.T) {
+	globalSkip(t)
+	if runtime.GOOS != "windows" {
+		t.Skip("ABI marker fence is Windows-only")
+	}
+
+	src, err := os.ReadFile("plugin1" + pluginSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Locate the marker by the full 8-byte {Marker, Version} pair the
+	// linker emits, and require it to be unique. The 4-byte Marker
+	// alone is a sequence a multi-megabyte image hits by coincidence
+	// with non-trivial probability, and bytes.Index takes the FIRST
+	// occurrence — .text and pclntab precede .edata in file order — so
+	// searching for it could deterministically tamper with unrelated
+	// bytes, leave the real marker intact, and report the resulting
+	// unrelated load failure as "want incompatible-ABI rejection".
+	magic := make([]byte, 8)
+	binary.LittleEndian.PutUint32(magic, pluginabi.Marker)
+	binary.LittleEndian.PutUint32(magic[4:], pluginabi.Version)
+	idx := bytes.Index(src, magic)
+	if idx < 0 {
+		t.Fatal("freshly built plugin lacks the go:plugin.abi marker")
+	}
+	if dup := bytes.Index(src[idx+1:], magic); dup >= 0 {
+		t.Fatalf("go:plugin.abi marker bytes occur at both %d and %d; tampering would be ambiguous", idx, idx+1+dup)
+	}
+
+	// Wrong generation: bump Version past ours; Open must refuse.
+	bad := append([]byte(nil), src...)
+	binary.LittleEndian.PutUint32(bad[idx+4:], pluginabi.Version+1)
+	if err := os.WriteFile("abi-mismatch"+pluginSuffix, bad, 0444); err != nil {
+		t.Fatal(err)
+	}
+	_, err = plugin.Open("abi-mismatch" + pluginSuffix)
+	if err == nil {
+		t.Fatal("Open accepted a plugin from a different toolchain ABI")
+	}
+	if !strings.Contains(err.Error(), "incompatible toolchain ABI") {
+		t.Fatalf("error = %q; want incompatible-ABI rejection", err)
+	}
+
+	// Absent marker: rename the export out of the directory entirely.
+	noabi := bytes.ReplaceAll(src, []byte("go:plugin.abi"), []byte("xo:plugin.abi"))
+	if err := os.WriteFile("abi-missing"+pluginSuffix, noabi, 0444); err != nil {
+		t.Fatal(err)
+	}
+	_, err = plugin.Open("abi-missing" + pluginSuffix)
+	if err == nil {
+		t.Fatal("Open accepted a plugin without an ABI marker")
+	}
+	if !strings.Contains(err.Error(), "missing go:plugin.abi") {
+		t.Fatalf("error = %q; want missing-marker rejection", err)
+	}
 }
 
 // TestPanicOnCallStub exercises v2's funcptr panic-on-call stub

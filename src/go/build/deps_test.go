@@ -413,7 +413,10 @@ var depsRules = `
 	# The prohibition stops at net and os/user.
 	C !< fmt, go/types, CRYPTO-MATH, log/slog;
 
-	CGO, OS
+	# The Windows plugin ABI marker is a leaf: two constants, no imports.
+	NONE < internal/pluginabi;
+
+	CGO, OS, internal/pluginabi
 	< plugin;
 
 	CGO, FMT

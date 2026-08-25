@@ -116,6 +116,23 @@
 // so the diverging package — and which loaded module holds the stale
 // build — is identifiable without decoding the raw loader message. See
 // trendvidia/go#7.
+//
+// # Toolchain ABI fence (fork note)
+//
+// On Windows, [Open] additionally verifies a go:plugin.abi marker
+// carried by every plugin DLL — an export identifying the toolchain
+// generation that built it — by reading the candidate file's export
+// table before anything is mapped. A binary built by another fork or
+// toolchain generation (whose runtime data structures may have a
+// different layout) is rejected with a clean error before its image is
+// mapped and before any of its code runs, instead of being loaded and
+// faulting. The check judges the bytes at the given path: a file
+// replaced between the check and the load, or a path whose base name
+// matches an already-loaded module (which the Windows loader resolves
+// to the loaded one), are outside it. The generation number's bump
+// rules live in internal/pluginabi. POSIX needs no
+// equivalent: the dynamic linker resolves symbols across modules at
+// load time, so incompatible binaries already fail there.
 package plugin
 
 import (

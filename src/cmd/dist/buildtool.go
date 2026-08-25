@@ -88,6 +88,7 @@ var bootstrapDirs = []string{
 	"internal/lazyregexp",
 	"internal/pkgbits",
 	"internal/platform",
+	"internal/pluginabi",
 	"internal/profile",
 	"internal/race",
 	"internal/runtime/gc",

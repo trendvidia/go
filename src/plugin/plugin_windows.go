@@ -38,6 +38,12 @@ func open(name string) (*Plugin, error) {
 		return p, nil
 	}
 
+	// Snapshot BEFORE loading: addmoduledata chains the DLL's
+	// moduledata from its entry point inside LoadLibrary (measured on
+	// windows/arm64: the tail always moves across this call for a
+	// healthy plugin), so an unchanged tail afterwards means the DLL
+	// never initialized here.
+	prevTail := chainTail()
 	h, loadErr := syscall.LoadLibrary(pluginPath)
 	if loadErr != nil {
 		pluginsMu.Unlock()
@@ -51,13 +57,7 @@ func open(name string) (*Plugin, error) {
 		plugins = make(map[string]*Plugin)
 	}
 
-	// A Go plugin DLL chains its moduledata into this process from its
-	// DllMain during LoadLibrary (addmoduledata runs while this
-	// function holds pluginsMu). If the chain did not grow, the DLL
-	// never initialized HERE — e.g. it was linked against another
-	// program's import library and PE bound its imports by module name
-	// elsewhere (observed building the peerlock fixture,
-	// trendvidia/go#24/#31). Refuse before validating:
+	// The chain did not grow: refuse before validating.
 	// validatePkghashes identifies the candidate as the newly chained
 	// module, and on a chain that did not grow it would take the last
 	// healthy peer for one — silently passing a divergent build, or
@@ -65,7 +65,7 @@ func open(name string) (*Plugin, error) {
 	// below unmaps only the offender. No syncBeforeUnmap is needed:
 	// the module never entered activeModules, so no GC root references
 	// this image.
-	if prevTail := chainTail(); chainTail() == prevTail {
+	if chainTail() == prevTail {
 		const noModData = "plugin DLL registered no Go module data in this process" +
 			" (its runtime imports may be bound to another program's image)"
 		syscall.FreeLibrary(h)

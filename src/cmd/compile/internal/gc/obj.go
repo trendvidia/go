@@ -128,6 +128,7 @@ func dumpdata() {
 
 	staticdata.WriteFuncSyms()
 	staticdata.WriteFuncPtrSlots()
+	reflectdata.WriteTypetabSlots()
 	addGCLocals()
 }
 

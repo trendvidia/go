@@ -628,16 +628,13 @@ func TypeptrLsym(t *types.Type) *obj.LSym {
 	typeSym := TypeLinksym(t)
 	name := "go.typeptr." + typeSym.Name
 	s := base.Ctxt.Lookup(name)
-	// Guard against concurrent emission (signatmu mirrors how
-	// TypeLinksym protects type-descriptor metadata). Without this,
-	// two goroutines compiling packages in parallel can both see
-	// Size == 0, both call objw.Global, and the linker complains of
-	// a redeclared symbol.
+	// Record the slot for deferred, order-stable emission (see
+	// WriteTypetabSlots); we do NOT emit the data here. signatmu
+	// serialises the record (mirroring how TypeLinksym protects
+	// type-descriptor metadata), since this runs while functions are
+	// compiled in parallel.
 	signatmu.Lock()
-	if s.Size == 0 {
-		objw.SymPtr(s, 0, typeSym, 0)
-		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
-	}
+	typetabSlot(s, typeSym)
 	signatmu.Unlock()
 	return s
 }
@@ -718,17 +715,58 @@ func itabptrLsym(typ, iface *types.Type) *obj.LSym {
 	itabSym := ITabLsym(typ, iface)
 	name := "go.itabptr." + typ.LinkString() + "," + iface.LinkString()
 	s := base.Ctxt.Lookup(name)
-	// Guard against concurrent emission (signatmu, as in TypeptrLsym).
-	// Without this, two parallel backend workers compiling the same
-	// (typ, iface) pair can both see Size == 0 and both call objw.Global,
-	// fatally redeclaring the slot or corrupting its relocations.
+	// Record the slot for deferred, order-stable emission (signatmu, as
+	// in TypeptrLsym): without it, two parallel backend workers hitting
+	// the same (typ, iface) pair could race on the pending-slot map.
 	signatmu.Lock()
-	if s.Size == 0 {
-		objw.SymPtr(s, 0, itabSym, 0)
-		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
-	}
+	typetabSlot(s, itabSym)
 	signatmu.Unlock()
 	return s
+}
+
+// typetabSlots records every -typetab slot referenced during
+// compilation, mapping the slot symbol to the target it points at.
+// Populated under signatmu by TypeptrLsym/itabptrLsym while functions
+// are compiled in parallel, then drained by WriteTypetabSlots at
+// dumpdata time. The keys deduplicate slots referenced from multiple
+// places — the same job s.Size == 0 did back when emission was inline.
+var typetabSlots = map[*obj.LSym]*obj.LSym{}
+
+func typetabSlot(slot, target *obj.LSym) {
+	if _, ok := typetabSlots[slot]; !ok {
+		typetabSlots[slot] = target
+	}
+}
+
+// WriteTypetabSlots emits the deferred go.typeptr/go.itabptr slot data
+// recorded by TypeptrLsym/itabptrLsym, in a deterministic order (sorted
+// by symbol name). Must be called once, single-threaded, after all
+// functions are compiled — from gc.dumpdata, alongside
+// staticdata.WriteFuncPtrSlots, whose deferred-sorted pattern this
+// mirrors (inline emission made plugin archives non-reproducible:
+// goroutine scheduling decided the object layout, trendvidia/go#27).
+//
+// Emission order affects only object layout, not semantics: the slots
+// are DUPOK and are resolved by name by the linker and the runtime's
+// module-load canonicalisation.
+//
+// As with the go.funcptr slots, each slot is forced to SNOPTRDATA so it
+// lives in writable .noptrdata rather than being promoted to a RELRO
+// read-only section by makeRelroForSharedLib; the runtime needs to
+// write to the slot during canonicalisation at module load.
+func WriteTypetabSlots() {
+	slots := make([]*obj.LSym, 0, len(typetabSlots))
+	for s := range typetabSlots {
+		slots = append(slots, s)
+	}
+	slices.SortFunc(slots, func(a, b *obj.LSym) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	for _, s := range slots {
+		objw.SymPtr(s, 0, typetabSlots[s], 0)
+		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
+		s.Type = objabi.SNOPTRDATA
+	}
 }
 
 // needkeyupdate reports whether map updates with t as a key

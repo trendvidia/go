@@ -473,18 +473,20 @@ func elfDynsymNames(t *testing.T, image string) map[string]bool {
 // export must appear in the linked image's dynamic export table — the
 // PE export directory on Windows, .dynsym on ELF.
 //
-// Two independent layers:
+// Two layers:
 //
-//  1. Loader layer (exporttab.exe): on Windows, plugin.Open resolves
-//     every ptabs entry through GetProcAddress, so a missing .edata
-//     entry aborts with a named error right here. POSIX opens read
-//     ptabs from memory and prove nothing about the table.
+//  1. Loader layer (exporttab.exe): on every platform, plugin.Open
+//     resolves each ptabs symbol through the dynamic symbol table —
+//     dlsym on POSIX (plugin_dlopen.go), GetProcAddress on Windows —
+//     so an export missing from the linked image aborts the open with
+//     a named error.
 //
-//  2. Static layer (this test parses the image directly): the declared
-//     export set must be a subset of the table. On ELF this is the
-//     only defense there is — lastmoduleinit never consults .dynsym,
-//     so a dropped entry is invisible to Lookup and would otherwise
-//     surface only when a native dlopen consumer fails.
+//  2. Static layer: this test parses each image directly and requires
+//     the declared export set to be a subset of its export table,
+//     without loading anything. That pins completeness at build-test
+//     time against the source-level declaration, lets CI judge an
+//     artifact it has not loaded, and holds even if the loader-side
+//     resolution strategy changes underneath it.
 //
 // Darwin is skipped: Mach-O carries exports in the dyld export trie,
 // which these parsers do not cover (gap noted on trendvidia/go#44).
@@ -507,7 +509,7 @@ func TestExportTableCompleteness(t *testing.T) {
 	// linux/arm64, 2026-08): directory builds derive it from the
 	// package import path ("testplugin/..."), while a file-list build
 	// is an unnamed package whose path embeds a source hash — so
-	// mangle's expectations are suffixes rather than exact names.
+	// mangle's expectations are fragments rather than exact names.
 	// Measured there too: a declared generic function gets no table
 	// entry of its own (Lookup("F") fails on POSIX too) — only its
 	// instantiated, mangled form appears, alongside the plain exports.

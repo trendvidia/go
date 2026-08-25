@@ -501,13 +501,21 @@ func TestExportTableCompleteness(t *testing.T) {
 	// BSS var (the storage class mingw ld's --export-all-symbols
 	// auto-export once silently skipped); sub/plugin1 repeats a base
 	// name another fixture also uses and adds a func-valued var;
-	// mangle exercises generic and mangled export names. The table
-	// names carry the pluginpath prefix of each fixture (measured:
-	// cmd/go derives it from the package import path).
+	// mangle exercises generic and mangled export names.
+	//
+	// Table names carry each fixture's pluginpath prefix (measured on
+	// linux/arm64, 2026-08): directory builds derive it from the
+	// package import path ("testplugin/..."), while a file-list build
+	// is an unnamed package whose path embeds a source hash — so
+	// mangle's expectations are suffixes rather than exact names.
+	// Measured there too: a declared generic function gets no table
+	// entry of its own (Lookup("F") fails on POSIX too) — only its
+	// instantiated, mangled form appears, alongside the plain exports.
 	fixtures := []struct {
 		src     string
 		out     string
-		exports []string
+		exports []string // exact table names required
+		suff    []string // table names required to end with these
 	}{
 		{
 			src: "./plugin1",
@@ -532,13 +540,9 @@ func TestExportTableCompleteness(t *testing.T) {
 			// File argument, matching TestSymbolNameMangle: a directory
 			// build resolves this package against the module's implicit
 			// -lang=go1.16 and rejects the generics below.
-			src: "./mangle/plugin.go",
-			out: "et-mangle",
-			exports: []string{
-				"testplugin/mangle.F",
-				"testplugin/mangle.G",
-				"testplugin/mangle.P",
-			},
+			src:  "./mangle/plugin.go",
+			out:  "et-mangle",
+			suff: []string{".P", ".G", ".F["},
 		},
 	}
 	for _, fx := range fixtures {
@@ -569,6 +573,18 @@ func TestExportTableCompleteness(t *testing.T) {
 		for _, want := range fx.exports {
 			if !table[want] {
 				t.Errorf("%s: export %q missing from image export table (%d entries present)", image, want, len(table))
+			}
+		}
+		for _, suf := range fx.suff {
+			found := false
+			for name := range table {
+				if strings.HasSuffix(name, suf) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s: no export name ending %q in image export table (%d entries present)", image, suf, len(table))
 			}
 		}
 	}

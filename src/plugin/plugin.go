@@ -11,7 +11,8 @@
 //
 // When a plugin is first opened, the init functions of all packages not
 // already part of the program are called. The main function is not run.
-// A plugin is only initialized once, and cannot be closed.
+// A plugin is only initialized once; [Plugin.Close] can later unload it
+// (fork extension).
 //
 // # Warnings
 //
@@ -177,10 +178,28 @@ func (p *Plugin) Lookup(symName string) (Symbol, error) {
 // (see [Plugin.Dependents]); the caller must Close those plugins
 // first.
 //
-// After a successful Close, [Plugin.Lookup] returns an error and
-// function values previously obtained via Lookup must NOT be called
-// — doing so is undefined behaviour. The application is responsible
-// for releasing or never invoking such references across Close.
+// After a successful Close, [Plugin.Lookup] returns an error. The
+// protection Close provides depends on how a reference into the
+// plugin was obtained:
+//
+//   - Function values returned by [Plugin.Lookup] remain safe to
+//     call: each call panics with a recoverable "plugin: function
+//     value invoked after Plugin.Close" error instead of executing
+//     plugin code.
+//
+//   - Any other reference has no protection: closures returned by
+//     calls into the plugin, function values reached through such
+//     closures, and pointers to the plugin's variables all point at
+//     memory the OS unmaps during Close. Using one after Close
+//     faults unrecoverably (the process dies even under defer/
+//     recover). If the same path is re-opened afterwards, stale
+//     pointers may additionally alias the new instance, because the
+//     loader can map it at the same addresses.
+//
+// A call that was already in flight when Close began may still be
+// executing plugin code as its image unmaps; the application must
+// ensure every goroutine has returned from calls into the plugin
+// before invoking Close.
 func (p *Plugin) Close() error {
 	return closePlugin(p)
 }

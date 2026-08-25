@@ -169,6 +169,9 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "panicstub.exe", "./panicstub")
 	goCmdBuildPluginFor(nil, "panicstub", "-o=panicstub-plugin1"+pluginSuffix, "./plugin1")
 
+	goCmd(nil, "build", "-o", "lookuprace.exe", "./lookuprace")
+	goCmdBuildPluginFor(nil, "lookuprace", "-o=lookuprace-plugin1"+pluginSuffix, "./plugin1")
+
 	goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
 	goCmdBuildPluginFor(nil, "closeunmaps", "-o=closeunmaps-plugin1"+pluginSuffix, "./plugin1")
 
@@ -357,6 +360,19 @@ func TestCloseAPI(t *testing.T) {
 func TestPanicOnCallStub(t *testing.T) {
 	globalSkip(t)
 	run(t, "./panicstub.exe")
+}
+
+// TestLookupDuringClose races concurrent Lookup calls against Close
+// (trendvidia/go#23). lookup() must serialise p.syms/p.pluginpath
+// access on pluginsMu; the fixture hammers Lookup from four goroutines
+// while the main goroutine closes, then checks every outcome: results
+// are successes or clean errors only, sampled func values panic via
+// the closed-plugin stub when called afterwards, and a second Close
+// is an idempotent no-op. Under a -race build of this suite, the
+// pre-fix unlocked map read is reported as a data race.
+func TestLookupDuringClose(t *testing.T) {
+	globalSkip(t)
+	run(t, "./lookuprace.exe")
 }
 
 // TestCloseUnloadsMemory verifies that v2's Plugin.Close actually

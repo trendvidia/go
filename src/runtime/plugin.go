@@ -59,6 +59,24 @@ func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 			cand = pmd
 		}
 	}
+	// Temporary #24 diagnosis: dump the chain the peer scan will see.
+	// Gated so normal runs are unaffected; remove once the Windows
+	// append question is settled.
+	if gogetenv("GOPLUGIN_TRACE") != "" {
+		println("plugin: validatePkghashes entries=", int(n), " hostcarrier=", len(firstmoduledata.pkghashes))
+		for pmd := firstmoduledata.next; pmd != nil; pmd = pmd.next {
+			print("plugin:   md ", pmd.pluginpath, " bad=")
+			println(pmd.bad, " pkghashes=", len(pmd.pkghashes))
+		}
+		if cand != nil {
+			println("plugin:   cand=", cand.pluginpath)
+		} else {
+			println("plugin:   cand=nil")
+		}
+		for i := range pluginEntries {
+			println("plugin:   entry ", pluginEntries[i].modulename)
+		}
+	}
 	var mismatchPkg, pluginHash, otherHash, peerPath string
 	for i := range pluginEntries {
 		e := &pluginEntries[i]
@@ -184,6 +202,10 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	}
 	if md.pluginpath == "" {
 		throw("runtime: plugin has empty pluginpath")
+	}
+	if gogetenv("GOPLUGIN_TRACE") != "" {
+		print("plugin: lastmoduleinit md=", md.pluginpath, " typemapnil=")
+		println(md.typemap == nil)
 	}
 	if md.typemap != nil {
 		return "", nil, nil, "plugin already loaded"

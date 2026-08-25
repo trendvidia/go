@@ -332,11 +332,13 @@ func TestCheckABIMarkerUnreadable(t *testing.T) {
 // NumberOfRvaAndSizes, readable sections, an executable section, the
 // DLL characteristic — and a machine type matching the running
 // process. Returns the loaded handle; the caller must FreeLibrary it.
-// Skips rather than fails if
-// the running loader still refuses the synthetic shape: the mapped
-// pins stay green wherever the loader accepts it, and the kernel32
-// subtest keeps the essential missing-marker case universal.
-func loadablePE(t *testing.T, mutate func(p *peImage)) syscall.Handle {
+// A loader refusal comes back as an error rather than a skip so that
+// exactly one caller — the probe in TestCheckLoadedABIMarker — decides
+// whether the synthetic shape is loadable at all; letting each case
+// skip on its own would let a stricter loader empty the accept/reject
+// matrix while the suite stayed green. The kernel32 subtest keeps the
+// essential missing-marker case universal either way.
+func loadablePE(t *testing.T, mutate func(p *peImage)) (syscall.Handle, error) {
 	t.Helper()
 	p := newPE(3)
 	switch runtime.GOARCH {
@@ -374,11 +376,7 @@ func loadablePE(t *testing.T, mutate func(p *peImage)) syscall.Handle {
 	if err := os.WriteFile(path, p.buf, 0o666); err != nil {
 		t.Fatal(err)
 	}
-	h, err := syscall.LoadLibrary(path)
-	if err != nil {
-		t.Skipf("running loader refused the synthetic image (%v); skipping mapped-marker cases", err)
-	}
-	return h
+	return syscall.LoadLibrary(path)
 }
 
 // TestCheckLoadedABIMarker exercises the stage-2 half of the fence
@@ -398,6 +396,18 @@ func TestCheckLoadedABIMarker(t *testing.T) {
 			t.Fatalf("checkLoadedABIMarker(kernel32) = %v; want the missing-marker rejection", err)
 		}
 	})
+	// One probe decides the whole value-level set. Either the running
+	// loader accepts the synthetic shape — and then every case below
+	// must load, a refusal there being a real failure — or none of them
+	// can, and the set skips once with the loader's reason. Per-case
+	// skipping would let a stricter loader leave checkLoadedABIMarker's
+	// accept/reject matrix entirely unexercised with the suite green.
+	probe, err := loadablePE(t, nil)
+	if err != nil {
+		t.Skipf("running loader refused the synthetic image (%v); skipping the mapped-marker cases", err)
+	}
+	syscall.FreeLibrary(probe)
+
 	cases := []struct {
 		name    string
 		mutate  func(p *peImage)
@@ -428,9 +438,12 @@ func TestCheckLoadedABIMarker(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			h := loadablePE(t, tt.mutate)
+			h, err := loadablePE(t, tt.mutate)
+			if err != nil {
+				t.Fatalf("loader refused the synthetic image (%v) though the unmutated one loaded", err)
+			}
 			defer syscall.FreeLibrary(h)
-			err := checkLoadedABIMarker(h)
+			err = checkLoadedABIMarker(h)
 			switch {
 			case tt.wantErr == "" && err != nil:
 				t.Fatalf("checkLoadedABIMarker = %v; want acceptance", err)

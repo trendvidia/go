@@ -137,9 +137,11 @@
 // freshly mapped also has the marker re-read through GetProcAddress,
 // catching a candidate file swapped in between the two reads; by then
 // the module's DllMain has chained its moduledata, so that rejection
-// refuses the load but leaves the image mapped — marked bad and
-// detached from the runtime chain so no later walk reads it — because
-// unloading safely needs the stop-the-world barrier Close takes. The
+// refuses the load but leaves the image mapped — detached from the
+// runtime chain, so walks starting afterwards do not read it — because
+// unloading safely needs the stop-the-world barrier Close takes. A
+// walk already under way when the load is refused is not covered: that
+// window opens inside the loader, before [Open] regains control. The
 // generation number's bump rules live in internal/pluginabi.
 // POSIX needs no equivalent: the dynamic linker resolves symbols
 // across modules at load time, so incompatible binaries already fail

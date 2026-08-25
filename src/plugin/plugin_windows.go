@@ -132,6 +132,15 @@ func open(name string) (*Plugin, error) {
 	// below unmaps only the offender. No syncBeforeUnmap is needed:
 	// nothing entered activeModules, so no GC root references these
 	// images.
+	//
+	// The path comparison belongs HERE and not above the chain-growth
+	// test. A load that DID grow the chain mapped a fresh image, so
+	// stage 2 below judges that image's own marker and no aliasing is
+	// possible; all a path comparison could add there is a rejection of
+	// spellings the loader resolved legitimately — an 8.3 short name, a
+	// junction, a symlink — which today load fine. Rejection is the
+	// right answer only where it replaces a silent alias, which is this
+	// branch.
 	if chainTail() == prevTail {
 		if loaded := loadedModulePath(h); loaded != "" && !sameModulePath(loaded, pluginPath) {
 			aliased := pluginPath + " resolved to a different module, already loaded from " + loaded
@@ -162,13 +171,16 @@ func open(name string) (*Plugin, error) {
 	// pluginabi.Version bumps precisely when moduledata layout
 	// assumptions change, so every later chain walk reading that node
 	// at host offsets is exactly the fatal-fault hazard the fence
-	// exists to prevent. rejectChainedModule therefore marks it bad,
-	// detaches it and rebuilds activeModules — the same treatment
-	// validatePkghashes gives a pkghash mismatch. This check runs
-	// before validatePkghashes and the cgo-notify poke so neither
-	// touches a module we are about to refuse.
+	// exists to prevent. rejectChainedModule therefore truncates the
+	// chain back to prevTail and rebuilds activeModules, identifying
+	// the residue by position rather than by reading any field of it.
+	// That bounds every walk starting after the truncation; the window
+	// opened at DllMain, before Open could check anything, and cannot
+	// be closed from here. This check runs before validatePkghashes and
+	// the cgo-notify poke so neither touches a module we are about to
+	// refuse.
 	if err := checkLoadedABIMarker(h); err != nil {
-		rejectChainedModule()
+		rejectChainedModule(prevTail)
 		plugins[pluginPath] = &Plugin{err: err.Error()}
 		pluginsMu.Unlock()
 		return nil, errors.New(`plugin.Open("` + name + `"): ` + err.Error())
@@ -372,12 +384,15 @@ func chainTail() uintptr
 // rejectChainedModule is defined in package runtime via go:linkname.
 // The stage-2 ABI check rejects a module whose DllMain has already
 // chained its moduledata but which must not be freed (see open); this
-// marks that node bad and detaches it so no later chain walk, peer
-// scan or activeModules rebuild ever reads its foreign-layout memory
-// at host offsets.
+// truncates the chain back to prevTail — open's pre-LoadLibrary
+// chainTail snapshot — so no chain walk, peer scan or activeModules
+// rebuild that starts afterwards reads the rejected module's
+// foreign-layout memory at host offsets. The node is identified by
+// position, never by inspecting it: its fields are exactly what the
+// generation mismatch says may have moved.
 //
 //go:linkname rejectChainedModule
-func rejectChainedModule()
+func rejectChainedModule(prevTail uintptr)
 
 // checkABIMarker enforces the cross-toolchain ABI fence: parse
 // pluginPath's PE export table from the raw FILE bytes and require a
@@ -606,14 +621,25 @@ func checkLoadedABIMarker(h syscall.Handle) error {
 // back to their pre-check behaviour rather than rejecting on missing
 // evidence).
 func loadedModulePath(h syscall.Handle) string {
-	for size := uintptr(1024); size <= 65536; size *= 2 {
+	for size := uint32(1024); size <= 65536; size *= 2 {
 		buf := make([]uint16, size)
-		n, _, callErr := procGetModuleFileNameW.Call(uintptr(h), uintptr(unsafe.Pointer(&buf[0])), size)
-		if callErr == syscall.ERROR_INSUFFICIENT_BUFFER {
-			continue // truncated; retry with a larger buffer
-		}
+		r0, _, _ := procGetModuleFileNameW.Call(uintptr(h), uintptr(unsafe.Pointer(&buf[0])), uintptr(size))
+		// GetModuleFileNameW returns a DWORD, and the Windows x64 ABI
+		// leaves the upper half of RAX undefined for one; narrow before
+		// using it as a length, exactly as the generated wrappers in
+		// internal/syscall/windows do. An unnarrowed value would index
+		// out of range, and open holds pluginsMu across this call with
+		// no deferred unlock, so that panic would wedge every later
+		// Open, Lookup and Close in the process.
+		n := uint32(r0)
 		if n == 0 {
 			return ""
+		}
+		if n >= size {
+			// Truncated (os.getModuleFileName's idiom): the result
+			// filled the buffer, so retry with a larger one rather than
+			// trusting the last-error report.
+			continue
 		}
 		return syscall.UTF16ToString(buf[:n])
 	}

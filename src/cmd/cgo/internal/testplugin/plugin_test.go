@@ -248,6 +248,9 @@ func testMain(m *testing.M) int {
 	}
 	goCmdBuildPluginFor(nil, "rejectchained", "-o="+filepath.Join("reject-a", "p"+pluginSuffix), "./rejectchained/victim")
 	goCmdBuildPluginFor(nil, "rejectchained", "-o="+filepath.Join("reject-b", "p"+pluginSuffix), "./rejectchained/victim")
+	// A third, differently-named plugin so the rejection can happen on
+	// a chain whose tail is a peer plugin rather than the host.
+	goCmdBuildPluginFor(nil, "rejectchained", "-o=reject-peer"+pluginSuffix, "./rejectchained/peer")
 
 	return m.Run()
 }

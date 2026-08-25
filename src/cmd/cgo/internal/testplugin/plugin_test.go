@@ -186,6 +186,38 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "hazards.exe", "./hazards")
 	goCmdBuildPluginFor(nil, "hazards", "-o=hazards-plugin"+pluginSuffix, "./hazards/hazard")
 
+	// Peer-plugin version-lock fixture (trendvidia/go#24). plugA and
+	// plugC come from the main tree; plugB is built below from the
+	// alternate root carrying a divergent build of the same
+	// peerlock/peerlib import path that the host never links.
+	goCmd(nil, "build", "-o", "peerlock.exe", "./peerlock")
+	goCmdBuildPluginFor(nil, "peerlock", "-o=pm-plugA"+pluginSuffix, "./peerlock/plugA")
+	goCmdBuildPluginFor(nil, "peerlock", "-o=pm-plugC"+pluginSuffix, "./peerlock/plugC")
+
+	os.Setenv("GOPATH", filepath.Join(GOPATH, "alt"))
+	if err := os.Chdir(altRoot); err != nil {
+		log.Panic(err)
+	} else {
+		prettyPrintf("cd %s\n", altRoot)
+	}
+	os.Setenv("PWD", altRoot)
+	// Must be For("peerlock"), not hostImplib: PE imports are name-bound,
+	// so an implib naming host.exe makes plugB's addmoduledata IAT-call
+	// land outside the peerlock.exe process — the DLL loads fine but its
+	// moduledata never reaches this host's chain (seen on the VM: chain
+	// held only plugA at plugB's validation, and lastmoduleinit fell back
+	// to initialized plugA reporting "plugin already loaded"). POSIX is
+	// unaffected (dlopen resolves symbols, not module names).
+	goCmdBuildPluginFor(nil, "peerlock", "-o="+filepath.Join(modRoot, "pm-plugB"+pluginSuffix), "./peerlock/plugB")
+
+	os.Setenv("GOPATH", GOPATH)
+	if err := os.Chdir(modRoot); err != nil {
+		log.Panic(err)
+	} else {
+		prettyPrintf("cd %s\n", modRoot)
+	}
+	os.Setenv("PWD", modRoot)
+
 	return m.Run()
 }
 
@@ -450,6 +482,21 @@ func TestCloseHazardEnvelope(t *testing.T) {
 	runExpectFault(t, "./hazards.exe", "closure")
 	runExpectFault(t, "./hazards.exe", "dataptr")
 	run(t, "./hazards.exe", "alias")
+}
+
+// TestPeerVersionLock exercises the peer-plugin half of the version
+// lock (trendvidia/go#24). peerlock/peerlib is linked into the plugins
+// but not into the host, so host-side validation never sees it:
+// pm-plugA loads first and owns the package; pm-plugB carries a
+// divergent build of the same import path and must be REJECTED with
+// the standard named-package error rather than silently binding to A's
+// instance; pm-plugC (same build as A) is the positive control and
+// must load and share. On POSIX the runtimehash-pointer interposition
+// of plugin_lastmoduleinit already fences this; on Windows only the
+// explicit peer scan in validatePkghashes does.
+func TestPeerVersionLock(t *testing.T) {
+	globalSkip(t)
+	run(t, "./peerlock.exe")
 }
 
 // TestRefcountUnload exercises the cross-plugin dependency tracking

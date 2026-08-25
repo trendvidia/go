@@ -38,6 +38,12 @@ func open(name string) (*Plugin, error) {
 		return p, nil
 	}
 
+	// Snapshot BEFORE loading: addmoduledata chains the DLL's
+	// moduledata from its entry point inside LoadLibrary (measured on
+	// windows/arm64: the tail always moves across this call for a
+	// healthy plugin), so an unchanged tail afterwards means the DLL
+	// never initialized here.
+	prevTail := chainTail()
 	h, loadErr := syscall.LoadLibrary(pluginPath)
 	if loadErr != nil {
 		pluginsMu.Unlock()
@@ -51,8 +57,30 @@ func open(name string) (*Plugin, error) {
 		plugins = make(map[string]*Plugin)
 	}
 
+	// The chain did not grow: refuse before validating.
+	// validatePkghashes identifies the candidate as the newly chained
+	// module, and on a chain that did not grow it would take the last
+	// healthy peer for one — silently passing a divergent build, or
+	// marking/detaching that peer's moduledata while the FreeLibrary
+	// below unmaps only the offender. No syncBeforeUnmap is needed:
+	// the module never entered activeModules, so no GC root references
+	// this image.
+	if chainTail() == prevTail {
+		const noModData = "plugin DLL registered no Go module data in this process" +
+			" (its runtime imports may be bound to another program's image)"
+		syscall.FreeLibrary(h)
+		plugins[pluginPath] = &Plugin{err: noModData}
+		pluginsMu.Unlock()
+		return nil, errors.New(`plugin.Open("` + name + `"): ` + noModData)
+	}
+
 	if proc, err := syscall.GetProcAddress(h, "go:plugin.pkghashes"); err == nil {
 		if errstr, rejectedPath := validatePkghashes(uintptr(proc)); errstr != "" {
+			// rejectedPath's bytes live inside the rejected DLL's image;
+			// clone them before FreeLibrary unmaps those pages — the
+			// same dangling-header hazard closePlugin clones
+			// p.pluginpath against (see cloneString in plugin.go).
+			rejectedPath = cloneString(rejectedPath)
 			// validatePkghashes marked the rejected moduledata bad AND
 			// detached it from the chain — it lives inside this DLL's
 			// image, so it must be gone from the chain before the
@@ -233,6 +261,13 @@ func lastmoduleinit() (pluginpath string, syms map[string]any, inittasks []*init
 //
 //go:linkname validatePkghashes
 func validatePkghashes(addr uintptr) (errstr string, rejectedPath string)
+
+// chainTail is defined in package runtime via go:linkname. It returns
+// the address of the last moduledata on the chain; open() snapshots it
+// around LoadLibrary to detect whether the DLL registered here.
+//
+//go:linkname chainTail
+func chainTail() uintptr
 
 // doInit is defined in package runtime.
 //

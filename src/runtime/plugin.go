@@ -707,9 +707,11 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 }
 
 // detachModule unlinks md from the firstmoduledata chain. Shared by
-// plugin_close and rejectLoadedPlugin (the Windows version-mismatch
-// path), which must both remove a module before its backing image can
-// go away.
+// plugin_close, plugin_validatePkghashes (the Windows pkghash-mismatch
+// path) and plugin_rejectChainedModule (the Windows post-load ABI
+// rejection), which must remove a module from the chain — before its
+// backing image goes away in the first two cases, and so no later walk
+// reads foreign-layout memory in the third.
 //
 // If md is the chain tail, addmoduledata's append cursor still points
 // at it; retreat the cursor to the new tail. Without this, the next

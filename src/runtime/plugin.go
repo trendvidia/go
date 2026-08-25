@@ -11,18 +11,29 @@ import (
 )
 
 // plugin_validatePluginPkghashes validates a freshly-loaded Windows
-// plugin's per-package fingerprints against host's. addr is the address
-// of the plugin's go:plugin.pkghashes export — a slice header
-// (ptr, len, cap) referencing the plugin's go:link.pkghashes carrier
-// (a []modulehash). For each plugin entry we look up the same package
-// in firstmoduledata.pkghashes (host's carrier, populated by symtab.go
-// for hosts that import the plugin package) and compare linktimehash.
-// A mismatch returns an error string; absent (host doesn't link the
-// package) is OK.
+// plugin's per-package fingerprints against every module already in
+// the address space: the host first, then any loaded peer plugin.
+// addr is the address of the plugin's go:plugin.pkghashes export — a
+// slice header (ptr, len, cap) referencing the plugin's
+// go:link.pkghashes carrier (a []modulehash).
 //
-// This replaces the upstream runtimehash-pointer rebinding that ld.so
-// performs on linux/darwin but Windows PE has no equivalent of —
-// see plans/i-am-still-not-velvet-hummingbird.md for the rationale.
+// For each candidate entry we look up the same package in
+// firstmoduledata.pkghashes (the host's carrier, populated by symtab.go
+// for hosts that import the plugin package) and compare linktimehash;
+// a difference names the host as the stale side. If the host does not
+// link the package at all, the entry is compared against every other
+// loaded module's own pkghashes (trendvidia/go#24): two plugins built
+// from different sources of a host-absent package must not both load,
+// because the cross-module binding machinery (canonicalSyms /
+// userDataInit, keyed by bare symbol name) would silently converge the
+// second loader onto the first loader's instance. On linux/darwin this
+// peer fence comes for free — ld.so rebinds each pkghash.runtimehash
+// pointer to the first definition in the global namespace, which
+// plugin_lastmoduleinit then compares against — but Windows PE has no
+// equivalent, so the scan here replaces it.
+//
+// A mismatch returns an error string naming the offending package and
+// both sides' fingerprints; absent everywhere is OK.
 //
 // Empty addr (plugin built with an older toolchain that lacks the
 // export) returns "" so loading proceeds without a check, matching the
@@ -39,18 +50,55 @@ func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 		return "", ""
 	}
 	pluginEntries := unsafe.Slice((*modulehash)(unsafe.Pointer(hdr[0])), int(n))
-	var mismatchPkg, pluginHash, hostHash string
+	// The candidate is already chained — its DllMain ran addmoduledata
+	// before this check (open() verified the chain grew across
+	// LoadLibrary, so the newest node is this plugin's). It is the last
+	// non-bad module: exclude it from the peer scan below, and identify
+	// it for detachment on mismatch.
+	var cand *moduledata
+	for pmd := firstmoduledata.next; pmd != nil; pmd = pmd.next {
+		if !pmd.bad {
+			cand = pmd
+		}
+	}
+	var mismatchPkg, pluginHash, otherHash, peerPath string
 	for i := range pluginEntries {
+		e := &pluginEntries[i]
+		hostHas := false
 		for j := range firstmoduledata.pkghashes {
-			if firstmoduledata.pkghashes[j].modulename != pluginEntries[i].modulename {
+			h := &firstmoduledata.pkghashes[j]
+			if h.modulename != e.modulename {
 				continue
 			}
-			if firstmoduledata.pkghashes[j].linktimehash != pluginEntries[i].linktimehash {
-				mismatchPkg = pluginEntries[i].modulename
-				pluginHash = pluginEntries[i].linktimehash
-				hostHash = firstmoduledata.pkghashes[j].linktimehash
+			hostHas = true
+			if h.linktimehash != e.linktimehash {
+				mismatchPkg, pluginHash = e.modulename, e.linktimehash
+				otherHash = h.linktimehash
 			}
 			break
+		}
+		if mismatchPkg != "" {
+			break
+		}
+		if hostHas {
+			continue
+		}
+		// Host-absent: compare against loaded peers (trendvidia/go#24).
+		for pmd := firstmoduledata.next; pmd != nil; pmd = pmd.next {
+			if pmd.bad || pmd == cand {
+				continue
+			}
+			for k := range pmd.pkghashes {
+				ph := &pmd.pkghashes[k]
+				if ph.modulename == e.modulename && ph.linktimehash != e.linktimehash {
+					mismatchPkg, pluginHash = e.modulename, e.linktimehash
+					otherHash, peerPath = ph.linktimehash, pmd.pluginpath
+					break
+				}
+			}
+			if mismatchPkg != "" {
+				break
+			}
 		}
 		if mismatchPkg != "" {
 			break
@@ -59,10 +107,15 @@ func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 	if mismatchPkg == "" {
 		return "", ""
 	}
+	// Name which already-loaded module holds the divergent build:
+	// "host", or the peer plugin's path.
+	side := "host"
+	if peerPath != "" {
+		side = "peer " + peerPath
+	}
+	msg := pluginVersionMismatchMsg(mismatchPkg, pluginHash, side, otherHash)
 	// Mark the just-loaded plugin's moduledata as bad and detach it
-	// from the chain. The freshly-loaded module is the last non-bad
-	// entry in the chain (addmoduledata, run from plugin's DllMain,
-	// appended it). resolveTypeOff / resolveNameOff / textOff in
+	// from the chain. resolveTypeOff / resolveNameOff / textOff in
 	// runtime/type.go skip bad modules so the half-initialized typemap
 	// of a rejected plugin doesn't poison subsequent reflect
 	// operations; detaching goes further so the caller can FreeLibrary
@@ -72,37 +125,37 @@ func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 	// (validation precedes plugin_lastmoduleinit), so there is nothing
 	// else to unwind. Caller holds pluginsMu, which serialises chain
 	// mutation against concurrent loads.
-	var md *moduledata
-	for pmd := firstmoduledata.next; pmd != nil; pmd = pmd.next {
-		if !pmd.bad {
-			md = pmd
-		}
-	}
-	if md != nil {
-		md.bad = true
-		detachModule(md)
+	if cand != nil {
+		cand.bad = true
+		detachModule(cand)
 		modulesinit()
-		return pluginVersionMismatchMsg(mismatchPkg, pluginHash, hostHash), md.pluginpath
+		return msg, cand.pluginpath
 	}
-	return pluginVersionMismatchMsg(mismatchPkg, pluginHash, hostHash), ""
+	return msg, ""
 }
 
 // pluginVersionMismatchMsg formats the plugin.Open version-lock error.
 // The version lock spans every package linked into both host and
 // plugin — not just govm's CompilerVersion — so a bare package name is
 // often not enough to diagnose which side is stale. We name the
-// package and both build fingerprints (plugin vs host) so a standalone
-// plugin build that resolved a package differently from the host is
+// package and both build fingerprints so a standalone plugin build
+// that resolved a package differently from an already-loaded module is
 // diagnosable without decoding the raw plugin.Open message or
-// re-deriving hashes by hand. See trendvidia/go#7.
+// re-deriving hashes by hand. See trendvidia/go#7 and trendvidia/go#24.
+//
+// side names the already-loaded holder of the divergent build:
+// "host" for the host carrier, "peer <pluginpath>" when a previously-
+// loaded plugin owns it (trendvidia/go#24), or "loaded" where the
+// check cannot tell which module a rebound runtimehash pointer
+// resolved against (the POSIX path in plugin_lastmoduleinit).
 //
 // linktimehash carries the raw package fingerprint bytes (see the
 // linker's go:link.pkghash emission in cmd/link/internal/ld/symtab.go),
 // which are not printable, so both are rendered as hex.
-func pluginVersionMismatchMsg(pkg, pluginHash, hostHash string) string {
+func pluginVersionMismatchMsg(pkg, pluginHash, side, hash string) string {
 	return "plugin was built with a different version of package " + pkg +
 		" (plugin build hash " + pkghashHex(pluginHash) +
-		", host build hash " + pkghashHex(hostHash) + ")"
+		", " + side + " build hash " + pkghashHex(hash) + ")"
 }
 
 // pkghashHex renders a raw package fingerprint (the byte string carried
@@ -163,7 +216,7 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	for _, pkghash := range md.pkghashes {
 		if pkghash.linktimehash != *pkghash.runtimehash {
 			md.bad = true
-			return "", nil, nil, pluginVersionMismatchMsg(pkghash.modulename, pkghash.linktimehash, *pkghash.runtimehash)
+			return "", nil, nil, pluginVersionMismatchMsg(pkghash.modulename, pkghash.linktimehash, "loaded", *pkghash.runtimehash)
 		}
 	}
 
@@ -638,6 +691,33 @@ func detachModule(md *moduledata) {
 			break
 		}
 	}
+}
+
+// plugin_chainTail reports the address of the last moduledata on the
+// chain. plugin.Open on Windows snapshots it before LoadLibrary and
+// compares after: addmoduledata (run from the plugin's DllMain inside
+// LoadLibrary) appends exactly one node, so an unchanged tail means the
+// DLL never registered in THIS process — typically because it was
+// linked against another program's import library and PE bound its
+// imports by module name elsewhere. The caller must refuse such a load
+// instead of validating: plugin_validatePkghashes takes the last
+// non-bad module as the just-loaded candidate, and on a chain that did
+// not grow that is a healthy earlier plugin — the peer scan would
+// exclude the true owner, silently passing a divergent build, or a
+// host-carrier mismatch would mark and detach the WRONG moduledata
+// while the offender's image is unmapped. Observed in CI while building
+// the trendvidia/go#24 peer-lock fixture (trendvidia/go#31).
+//
+// Caller holds pluginsMu (as open does), which serialises chain
+// mutation against concurrent loads and closes.
+//
+//go:linkname plugin_chainTail plugin.chainTail
+func plugin_chainTail() uintptr {
+	tail := &firstmoduledata
+	for tail.next != nil {
+		tail = tail.next
+	}
+	return uintptr(unsafe.Pointer(tail))
 }
 
 // pluginDependentsMsg formats the Close-refusal error. It names each

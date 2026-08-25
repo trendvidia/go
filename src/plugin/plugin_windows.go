@@ -7,7 +7,11 @@
 package plugin
 
 import (
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"internal/pluginabi"
+	"os"
 	"path/filepath"
 	"syscall"
 	"unsafe"
@@ -19,6 +23,17 @@ func open(name string) (*Plugin, error) {
 		return nil, errors.New(`plugin.Open("` + name + `"): ` + err.Error())
 	}
 	pluginPath := filepath.Clean(absPath)
+
+	// Cross-toolchain ABI fence (trendvidia/go#24, part 2): reject a
+	// binary from an incompatible toolchain generation by reading its
+	// go:plugin.abi marker straight from the file — before LoadLibrary
+	// maps anything, so the candidate's DllMain (which appends its
+	// moduledata and can run arbitrary constructors) never executes for
+	// a rejected DLL. Unreadable files fall through so LoadLibrary
+	// keeps producing the canonical OS error.
+	if err := checkABIMarker(pluginPath); err != nil {
+		return nil, errors.New(`plugin.Open("` + name + `"): ` + err.Error())
+	}
 
 	pluginsMu.Lock()
 	if p := plugins[pluginPath]; p != nil {
@@ -233,6 +248,121 @@ func lastmoduleinit() (pluginpath string, syms map[string]any, inittasks []*init
 //
 //go:linkname validatePkghashes
 func validatePkghashes(addr uintptr) (errstr string, rejectedPath string)
+
+// checkABIMarker enforces the cross-toolchain ABI fence: parse
+// pluginPath's PE export table from the raw FILE bytes and require a
+// go:plugin.abi export whose {pluginabi.Marker, pluginabi.Version}
+// matches this toolchain's constants. Everything is resolved through
+// static file offsets — nothing is mapped and no code from the DLL
+// runs — so rejection precedes the DLL's DllMain entirely.
+//
+// The marker exists because every later check assumes both sides agree
+// on moduledata layout: a DLL built by a different fork/toolchain
+// generation appends its moduledata without complaint (its DllMain
+// touches only its own image), and the process then dies fatally when
+// the host walks that foreign memory at its own field offsets. The
+// bump rules for Version live in internal/pluginabi.
+//
+// Fail-closed for anything that IS readable: malformed PE, missing or
+// unrecognised marker, or wrong version all reject. Only an unreadable
+// file (missing path, permissions) returns nil so LoadLibrary reports
+// its canonical OS error, preserving pre-fence behaviour for that case.
+func checkABIMarker(pluginPath string) error {
+	data, err := os.ReadFile(pluginPath)
+	if err != nil {
+		return nil
+	}
+	le16 := func(off int) uint32 {
+		if off < 0 || off+2 > len(data) {
+			return 0
+		}
+		return uint32(binary.LittleEndian.Uint16(data[off:]))
+	}
+	le32 := func(off int) uint32 {
+		if off < 0 || off+4 > len(data) {
+			return 0
+		}
+		return binary.LittleEndian.Uint32(data[off:])
+	}
+
+	if len(data) < 0x40 || string(data[:2]) != "MZ" {
+		return errors.New("plugin binary is not a PE image")
+	}
+	peOff := int(le32(0x3c))
+	if peOff <= 0 || peOff+24 > len(data) || string(data[peOff:peOff+4]) != "PE\x00\x00" {
+		return errors.New("plugin binary is not a PE image")
+	}
+	coff := peOff + 4
+	nsect := int(le16(coff + 2))
+	optOff := coff + 20
+	optSize := int(le16(coff + 16))
+	if le16(optOff) != 0x20b { // IMAGE_NT_OPTIONAL_HDR64_MAGIC
+		return errors.New("plugin binary is not a PE32+ image")
+	}
+
+	// Section table: build the RVA→file-offset mapping. Export-table
+	// structures are addressed by RVA; their bytes live in sections.
+	type section struct{ va, raw, ptr uint32 }
+	sects := make([]section, nsect)
+	for i := range sects {
+		h := optOff + optSize + i*40
+		va, raw, ptr := le32(h+12), le32(h+16), le32(h+20)
+		if va == 0 || ptr == 0 {
+			return errors.New("plugin binary has a malformed section table")
+		}
+		sects[i] = section{va: va, raw: raw, ptr: ptr}
+	}
+	rvaToOff := func(rva uint32) int {
+		for _, s := range sects {
+			if s.va <= rva && rva < s.va+s.raw {
+				return int(s.ptr) + int(rva-s.va)
+			}
+		}
+		return -1
+	}
+
+	expRVA := le32(optOff + 112) // data directory[0]: export table
+	if expRVA == 0 {
+		return errors.New("missing go:plugin.abi marker (not built by this fork's toolchain?)")
+	}
+	expOff := rvaToOff(expRVA)
+	if expOff < 0 {
+		return errors.New("plugin binary has an unreadable export directory")
+	}
+	numNames := le32(expOff + 24)
+	funcsRVA, namesRVA, ordsRVA := le32(expOff+28), le32(expOff+32), le32(expOff+36)
+
+	cstr := func(off int) string {
+		if off < 0 || off >= len(data) {
+			return ""
+		}
+		end := off
+		for end < len(data) && data[end] != 0 && end-off < 128 {
+			end++
+		}
+		return string(data[off:end])
+	}
+	for i := uint32(0); i < numNames; i++ {
+		nameOff := rvaToOff(le32(int(namesRVA) + int(i)*4))
+		if cstr(nameOff) != "go:plugin.abi" {
+			continue
+		}
+		ordIdx := int(le16(int(ordsRVA) + int(i)*2))
+		valOff := rvaToOff(le32(int(funcsRVA) + ordIdx*4))
+		marker, version := le32(valOff), le32(valOff+4)
+		switch {
+		case valOff < 0:
+			return errors.New("go:plugin.abi marker is unreadable")
+		case marker != pluginabi.Marker:
+			return errors.New("unrecognised go:plugin.abi marker (not built by this fork's toolchain)")
+		case version != pluginabi.Version:
+			return fmt.Errorf("plugin was built with an incompatible toolchain ABI (plugin ABI %d, host ABI %d)",
+				version, pluginabi.Version)
+		}
+		return nil
+	}
+	return errors.New("missing go:plugin.abi marker (not built by this fork's toolchain?)")
+}
 
 // doInit is defined in package runtime.
 //

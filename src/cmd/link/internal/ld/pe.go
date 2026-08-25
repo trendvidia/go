@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"internal/buildcfg"
+	"internal/pluginabi"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1983,6 +1984,7 @@ func (ctxt *Link) dope() {
 	// host's at plugin.Open time (Bug A).
 	if ctxt.BuildMode == BuildModePlugin && ctxt.HeadType == objabi.Hwindows {
 		addPluginPkghashesExport(ctxt)
+		addPluginAbiExport(ctxt)
 	}
 	// Pick a plugin host's exports here, in both link modes, so the export
 	// table, the host.exe.a plugins link against, and the .def handed to
@@ -2027,6 +2029,25 @@ func addPluginPkghashesExport(ctxt *Link) {
 	export.AddAddr(ctxt.Arch, carrier)
 	export.AddUint(ctxt.Arch, uint64(len(ctxt.Library)))
 	export.AddUint(ctxt.Arch, uint64(len(ctxt.Library)))
+	ldr.SetAttrReachable(export.Sym(), true)
+	ldr.SetAttrCgoExportDynamic(export.Sym(), true)
+}
+
+// addPluginAbiExport creates the go:plugin.abi well-known export — an
+// 8-byte {pluginabi.Marker, pluginabi.Version} pair identifying the
+// toolchain generation that built this DLL. package plugin on Windows
+// reads it from the candidate FILE's export table before LoadLibrary
+// and rejects binaries from an incompatible generation before their
+// DllMain runs (trendvidia/go#24, part 2; the bump rules live in
+// internal/pluginabi). Same routing as go:plugin.pkghashes: reachable
+// + CgoExportDynamic so every export-table writer (internal linking
+// here, .def for external) picks it up.
+func addPluginAbiExport(ctxt *Link) {
+	ldr := ctxt.loader
+	export := ldr.CreateSymForUpdate("go:plugin.abi", 0)
+	export.SetType(sym.SRODATA)
+	export.AddUint32(ctxt.Arch, pluginabi.Marker)
+	export.AddUint32(ctxt.Arch, pluginabi.Version)
 	ldr.SetAttrReachable(export.Sym(), true)
 	ldr.SetAttrCgoExportDynamic(export.Sym(), true)
 }

@@ -12,8 +12,19 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
+)
+
+// kernel32!GetModuleFileNameW resolves a loaded module handle back to
+// the path the loader recorded for it; open uses it to detect the
+// base-name aliasing described on trendvidia/go#40. A LazyDLL keeps
+// package plugin off internal/syscall/windows, whose import would put
+// it in cmd/dist's bootstrap copy set (buildtool.go).
+var (
+	modkernel32            = syscall.NewLazyDLL("kernel32.dll")
+	procGetModuleFileNameW = modkernel32.NewProc("GetModuleFileNameW")
 )
 
 func open(name string) (*Plugin, error) {
@@ -41,13 +52,22 @@ func open(name string) (*Plugin, error) {
 		return p, nil
 	}
 
-	// Cross-toolchain ABI fence (trendvidia/go#24, part 2): reject a
-	// binary from an incompatible toolchain generation by reading its
-	// go:plugin.abi marker straight from the file — before LoadLibrary
-	// maps anything, so the candidate's DllMain (which appends its
-	// moduledata and can run arbitrary constructors) never executes for
-	// a rejected DLL. Unreadable files fall through so LoadLibrary
-	// keeps producing the canonical OS error.
+	// Cross-toolchain ABI fence, stage 1 (trendvidia/go#24, part 2):
+	// reject a binary from an incompatible toolchain generation by
+	// reading its go:plugin.abi marker straight from the file — before
+	// LoadLibrary maps anything, so the candidate's DllMain (which
+	// appends its moduledata and can run arbitrary constructors) never
+	// executes for a rejected DLL. Unreadable files fall through so
+	// LoadLibrary keeps producing the canonical OS error.
+	//
+	// Judging file bytes alone cannot tell WHICH module the loader will
+	// return: the file may be swapped between this read and the load,
+	// and an already-mapped module with the same base name comes back
+	// in its place (trendvidia/go#40). The two post-load checks below —
+	// the handle's recorded path against the request, and the marker
+	// re-read from the mapped image — are the authority on what was
+	// actually loaded; this stage remains the gate that keeps any
+	// rejected candidate's code from ever running.
 	//
 	// This sits AFTER the cache lookup above and before LoadLibrary, not
 	// ahead of both: Open documents that "if a path has already been
@@ -80,21 +100,68 @@ func open(name string) (*Plugin, error) {
 		plugins = make(map[string]*Plugin)
 	}
 
-	// The chain did not grow: refuse before validating.
-	// validatePkghashes identifies the candidate as the newly chained
-	// module, and on a chain that did not grow it would take the last
-	// healthy peer for one — silently passing a divergent build, or
+	// The chain did not grow. Two distinct causes, distinguished by
+	// where the returned handle actually lives:
+	//
+	//   - The loader handed back an ALREADY-MAPPED module: it matches
+	//     candidates by base name, so Open(C:\b\p.dll) while C:\a\p.dll
+	//     is loaded returns the latter without running its DllMain again
+	//     (trendvidia/go#40). Rejecting with both paths named beats the
+	//     silent wrong-path→module association a success would cache —
+	//     and beats misreporting it as the no-module-data case below.
+	//     The FreeLibrary is still taken: an aliased module is held by
+	//     its original opener, so dropping only this call's own
+	//     reference can never unmap it.
+	//
+	//   - A freshly mapped DLL registered no Go module data in this
+	//     process (its runtime imports may be bound to another
+	//     program's image); nothing chained here, so unmapping it is
+	//     safe. If GetModuleFileNameW could not tell us where the
+	//     handle lives, this is the behaviour we fall back to — for an
+	//     undetected alias that drop is equally harmless.
+	//
+	// validatePkghashes must not run in either case: on a chain that
+	// did not grow it would take the last healthy peer for the newly
+	// chained module — silently passing a divergent build, or
 	// marking/detaching that peer's moduledata while the FreeLibrary
 	// below unmaps only the offender. No syncBeforeUnmap is needed:
-	// the module never entered activeModules, so no GC root references
-	// this image.
+	// nothing entered activeModules, so no GC root references these
+	// images.
 	if chainTail() == prevTail {
+		if loaded := loadedModulePath(h); loaded != "" && !sameModulePath(loaded, pluginPath) {
+			aliased := pluginPath + " resolved to the module already loaded from " + loaded +
+				" (the Windows loader matches plugins by base name)"
+			plugins[pluginPath] = &Plugin{err: aliased}
+			pluginsMu.Unlock()
+			return nil, errors.New(`plugin.Open("` + name + `"): ` + aliased)
+		}
 		const noModData = "plugin DLL registered no Go module data in this process" +
 			" (its runtime imports may be bound to another program's image)"
 		syscall.FreeLibrary(h)
 		plugins[pluginPath] = &Plugin{err: noModData}
 		pluginsMu.Unlock()
 		return nil, errors.New(`plugin.Open("` + name + `"): ` + noModData)
+	}
+
+	// Cross-toolchain ABI fence, stage 2: re-read the marker from the
+	// module the loader ACTUALLY mapped, through its live export table.
+	// This closes what judging file bytes cannot: a file swapped in
+	// between the stage-1 read and LoadLibrary has its replacement
+	// mapped and judged here by its real contents (trendvidia/go#40).
+	// Reaching this point means the chain grew above, i.e. the module's
+	// DllMain ran and appended its moduledata — so on mismatch we cache
+	// the failure WITHOUT calling FreeLibrary: unmapping an
+	// already-chained image needs the runtime-side detach that
+	// validatePkghashes performs, which trendvidia/go#24 option B
+	// declined to generalise beyond pkghashes. One rejected mapping
+	// stays resident instead; repeat Opens hit the cached failure and
+	// never map again. This check runs before validatePkghashes and the
+	// cgo-notify poke so neither touches a module we are about to
+	// refuse.
+	if err := checkLoadedABIMarker(h); err != nil {
+		plugins[pluginPath] = &Plugin{err: err.Error()}
+		pluginsMu.Unlock()
+		return nil, errors.New(`plugin.Open("` + name + `"): ` + err.Error())
 	}
 
 	if proc, err := syscall.GetProcAddress(h, "go:plugin.pkghashes"); err == nil {
@@ -311,13 +378,14 @@ func chainTail() uintptr
 // or a denied open returns nil so LoadLibrary reports its canonical OS
 // error, preserving pre-fence behaviour for that case.
 //
-// What the fence does NOT cover, both inherent to judging file bytes
-// from outside the loader: the file may be replaced between this read
-// and the LoadLibrary that follows, and LoadLibrary resolves an already
-// mapped module by BASE NAME, so opening C:\b\p.dll while C:\a\p.dll is
-// loaded verifies the former and hands back the latter. Neither is
-// reachable without a concurrent writer or two same-named plugins, and
-// closing them needs a loader-side identity the OS does not offer.
+// What file bytes cannot decide — WHICH module LoadLibrary will return
+// (a file swapped in after this read; base-name reuse of an
+// already-mapped module) — is settled after the load: open() compares
+// the returned handle's recorded path against the request and re-reads
+// this same marker from the mapped image via GetProcAddress
+// (checkLoadedABIMarker). This stage remains the only one that can
+// keep a rejected candidate's DllMain from ever running; the post-load
+// checks are the authority on what was mapped instead.
 func checkABIMarker(pluginPath string) error {
 	data, err := os.ReadFile(pluginPath)
 	if err != nil {
@@ -475,6 +543,69 @@ func checkABIMarker(pluginPath string) error {
 		return nil
 	}
 	return errors.New("missing go:plugin.abi marker (not built by this fork's toolchain?)")
+}
+
+// checkLoadedABIMarker is stage 2 of the cross-toolchain ABI fence:
+// read {pluginabi.Marker, pluginabi.Version} back from the module the
+// loader actually mapped — h, not the file at any path — and require
+// this toolchain's generation. It runs after open()'s chain-growth
+// check, so reaching it means the DLL initialized in this process;
+// callers must therefore NEVER FreeLibrary on its rejection (see the
+// stage-2 comment in open).
+func checkLoadedABIMarker(h syscall.Handle) error {
+	proc, err := syscall.GetProcAddress(h, "go:plugin.abi")
+	if err != nil {
+		return errors.New("the loaded plugin module exports no go:plugin.abi marker" +
+			" (not built by this fork's toolchain?)")
+	}
+	marker := *(*uint32)(unsafe.Pointer(proc))
+	version := *(*uint32)(unsafe.Pointer(proc + 4))
+	switch {
+	case marker != pluginabi.Marker:
+		return errors.New("unrecognised go:plugin.abi marker in the loaded module" +
+			" (not built by this fork's toolchain)")
+	case version != pluginabi.Version:
+		return errors.New("the loaded plugin module was built with an incompatible toolchain ABI (plugin ABI " +
+			strconv.FormatUint(uint64(version), 10) +
+			", host ABI " + strconv.FormatUint(uint64(pluginabi.Version), 10) + ")")
+	}
+	return nil
+}
+
+// loadedModulePath returns the full path the loader recorded for the
+// mapped module h, or "" if that cannot be determined (callers fall
+// back to their pre-check behaviour rather than rejecting on missing
+// evidence).
+func loadedModulePath(h syscall.Handle) string {
+	for size := uintptr(1024); size <= 65536; size *= 2 {
+		buf := make([]uint16, size)
+		n, _, callErr := procGetModuleFileNameW.Call(uintptr(h), uintptr(unsafe.Pointer(&buf[0])), size)
+		if callErr == syscall.ERROR_INSUFFICIENT_BUFFER {
+			continue // truncated; retry with a larger buffer
+		}
+		if n == 0 {
+			return ""
+		}
+		return syscall.UTF16ToString(buf[:n])
+	}
+	return ""
+}
+
+// sameModulePath compares a loader-recorded module path with the path
+// Open was given, forgiving spelling differences that do not name a
+// different file: letter case (Windows paths are case-insensitive),
+// forward slashes, and the \\?\ literal-device prefix. A mismatch is
+// therefore a genuinely different module. Exotic-but-equivalent
+// spellings this comparison does not model (8.3 short names,
+// junctions, \\?\UNC\) degrade to a rejection whose message names both
+// spellings — loud and diagnosable, never a silent alias.
+func sameModulePath(a, b string) bool {
+	norm := func(p string) string {
+		p = strings.ReplaceAll(p, "/", "\\")
+		p = strings.TrimPrefix(p, `\\?\`)
+		return p
+	}
+	return strings.EqualFold(norm(a), norm(b))
 }
 
 // doInit is defined in package runtime.

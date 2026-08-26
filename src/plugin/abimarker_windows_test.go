@@ -355,13 +355,22 @@ func loadablePE(t *testing.T, mutate func(p *peImage)) (syscall.Handle, error) {
 	// and every real DLL has one.
 	p.sectionHeader(2, ".text", textRVA, 0x200, 0x200, textPtr)
 	p.u32(p.sectTbl+2*40+36, 0x60000020) // CODE | MEM_EXECUTE | MEM_READ
+	p.u32(p.optOff+4, 0x200)             // SizeOfCode
+	p.u32(p.optOff+20, textRVA)          // BaseOfCode
 	p.u32(p.optOff+24, 0x10000000)       // ImageBase low dword (high dword stays 0); free base needs no relocations
 	p.u32(p.optOff+32, 0x1000)           // SectionAlignment
 	p.u32(p.optOff+36, 0x200)            // FileAlignment
-	p.u32(p.optOff+56, 0x4000)           // SizeOfImage (covers .text ending at RVA 0x3200, multiple of SectionAlignment)
-	p.u32(p.optOff+60, 0x200)            // SizeOfHeaders
-	p.u16(p.optOff+68, 3)                // Subsystem: IMAGE_SUBSYSTEM_WINDOWS_CUI
-	p.u32(p.optOff+108, 16)              // NumberOfRvaAndSizes (the export directory lives in slot 0)
+	// A zero subsystem version is what actually made windows/arm64
+	// answer "%1 is not a valid Win32 application" for the shape this
+	// helper first shipped: the loader refuses an image that claims to
+	// predate NT. 6.0 is Vista, comfortably below any host that runs
+	// this fork.
+	p.u16(p.optOff+40, 6)      // MajorOperatingSystemVersion
+	p.u16(p.optOff+48, 6)      // MajorSubsystemVersion
+	p.u32(p.optOff+56, 0x4000) // SizeOfImage (covers .text ending at RVA 0x3200, multiple of SectionAlignment)
+	p.u32(p.optOff+60, 0x200)  // SizeOfHeaders
+	p.u16(p.optOff+68, 3)      // Subsystem: IMAGE_SUBSYSTEM_WINDOWS_CUI
+	p.u32(p.optOff+108, 16)    // NumberOfRvaAndSizes (the export directory lives in slot 0)
 	// Without the DLL bit the loader reads the image as an EXE and
 	// rejects it ("not a valid Win32 application") before any of the
 	// header fields above are even consulted.

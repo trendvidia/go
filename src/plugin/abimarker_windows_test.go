@@ -499,6 +499,18 @@ func TestLoadedModulePath(t *testing.T) {
 	if !sameModulePath(got, got) {
 		t.Errorf("sameModulePath(%q, %q) = false; want true", got, got)
 	}
+
+	// The unknown answer, which open() reads as "do not reject": a
+	// handle that names no module. 1 is not page-aligned, so it cannot
+	// be any image's base address, and GetModuleFileNameW answers 0
+	// (ERROR_MOD_NOT_FOUND) rather than filling the buffer. This is the
+	// return that makes the alias comparison stand down instead of
+	// refusing a load, so it is worth pinning that it is produced —
+	// quietly, without the panic LazyProc.Call raises for a missing
+	// procedure while open holds pluginsMu.
+	if got := loadedModulePath(syscall.Handle(1)); got != "" {
+		t.Errorf("loadedModulePath(1) = %q; want %q for a handle that names no module", got, "")
+	}
 }
 
 func TestSameModulePath(t *testing.T) {

@@ -621,6 +621,14 @@ func checkLoadedABIMarker(h syscall.Handle) error {
 // back to their pre-check behaviour rather than rejecting on missing
 // evidence).
 func loadedModulePath(h syscall.Handle) string {
+	// Resolve explicitly: LazyProc.Call panics when the DLL or the
+	// procedure cannot be found, and open holds pluginsMu across this
+	// call with no deferred unlock, so a panic here would wedge every
+	// later Open, Lookup and Close in the process. "Cannot be
+	// determined" is a documented answer; a deadlock is not.
+	if err := procGetModuleFileNameW.Find(); err != nil {
+		return ""
+	}
 	for size := uint32(1024); size <= 65536; size *= 2 {
 		buf := make([]uint16, size)
 		r0, _, _ := procGetModuleFileNameW.Call(uintptr(h), uintptr(unsafe.Pointer(&buf[0])), uintptr(size))

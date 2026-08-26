@@ -455,3 +455,64 @@ func TestCheckLoadedABIMarker(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadedModulePath pins the two loader-identity helpers the
+// post-load check is built on. Neither had a test: the only fixture
+// that reaches them is the end-to-end samename host, and on a loader
+// that maps same-named plugins separately (measured on Windows 11
+// arm64) that host never takes the comparison branch at all.
+func TestLoadedModulePath(t *testing.T) {
+	// Handle 0 is the calling process's own image, so os.Executable is
+	// the independent oracle — it reaches the same API through
+	// internal/syscall/windows' generated wrapper, whose DWORD
+	// narrowing and r < n truncation test loadedModulePath mirrors.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	if got := loadedModulePath(0); got != self {
+		t.Errorf("loadedModulePath(0) = %q; want %q", got, self)
+	}
+
+	h, err := syscall.LoadLibrary("kernel32.dll")
+	if err != nil {
+		t.Skipf("kernel32 unavailable: %v", err)
+	}
+	defer syscall.FreeLibrary(h)
+	got := loadedModulePath(h)
+	if !strings.EqualFold(filepath.Base(got), "kernel32.dll") {
+		t.Errorf("loadedModulePath(kernel32) = %q; want a path whose base is kernel32.dll", got)
+	}
+	if !sameModulePath(got, got) {
+		t.Errorf("sameModulePath(%q, %q) = false; want true", got, got)
+	}
+}
+
+func TestSameModulePath(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical", `C:\dir\p.dll`, `C:\dir\p.dll`, true},
+		{"case differs", `C:\Dir\P.DLL`, `c:\dir\p.dll`, true},
+		{"forward slashes", `C:/dir/p.dll`, `C:\dir\p.dll`, true},
+		{"literal device prefix", `\\?\C:\dir\p.dll`, `C:\dir\p.dll`, true},
+		// The alias trendvidia/go#40 is about: one base name, two
+		// directories. Rejecting this is the whole point.
+		{"same base, other directory", `C:\a\p.dll`, `C:\b\p.dll`, false},
+		{"different base", `C:\dir\p.dll`, `C:\dir\q.dll`, false},
+		// loadedModulePath's "unknown" answer must never compare equal
+		// to a real path; open guards on it separately, and this keeps
+		// that guard from being the only thing standing between an
+		// unanswered query and a silent match.
+		{"unknown against a path", ``, `C:\dir\p.dll`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sameModulePath(tt.a, tt.b); got != tt.want {
+				t.Errorf("sameModulePath(%q, %q) = %v; want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}

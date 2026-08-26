@@ -119,20 +119,33 @@
 //
 // # Toolchain ABI fence (fork note)
 //
-// On Windows, [Open] additionally verifies a go:plugin.abi marker
-// carried by every plugin DLL — an export identifying the toolchain
-// generation that built it — by reading the candidate file's export
-// table before anything is mapped. A binary built by another fork or
-// toolchain generation (whose runtime data structures may have a
-// different layout) is rejected with a clean error before its image is
-// mapped and before any of its code runs, instead of being loaded and
-// faulting. The check judges the bytes at the given path: a file
-// replaced between the check and the load, or a path whose base name
-// matches an already-loaded module (which the Windows loader resolves
-// to the loaded one), are outside it. The generation number's bump
-// rules live in internal/pluginabi. POSIX needs no
-// equivalent: the dynamic linker resolves symbols across modules at
-// load time, so incompatible binaries already fail there.
+// On Windows, [Open] verifies a go:plugin.abi marker carried by every
+// plugin DLL — an export identifying the toolchain generation that
+// built it — twice. Before anything is mapped, the candidate file's
+// export table is parsed directly, so a binary built by another fork
+// or toolchain generation (whose runtime data structures may have a
+// different layout) is rejected with a clean error before any of its
+// code runs, instead of being loaded and faulting. What the file bytes
+// cannot decide — WHICH module LoadLibrary will return — is settled
+// after the load, by two checks that cover its two failure modes.
+// When the loader hands back an already-mapped module instead of a
+// fresh map (detected because the runtime chain did not grow), the
+// handle's loader-recorded path is compared with the opened path, and
+// a request that resolved to a module from another directory is
+// refused with an error naming both paths rather than silently aliased;
+// nothing chained in this case, so the handle is freed. Whatever WAS
+// freshly mapped also has the marker re-read through GetProcAddress,
+// catching a candidate file swapped in between the two reads; by then
+// the module's DllMain has chained its moduledata, so that rejection
+// refuses the load but leaves the image mapped — detached from the
+// runtime chain, so walks starting afterwards do not read it — because
+// unloading safely needs the stop-the-world barrier Close takes. A
+// walk already under way when the load is refused is not covered: that
+// window opens inside the loader, before [Open] regains control. The
+// generation number's bump rules live in internal/pluginabi.
+// POSIX needs no equivalent: the dynamic linker resolves symbols
+// across modules at load time, so incompatible binaries already fail
+// there.
 package plugin
 
 import (

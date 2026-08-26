@@ -7,13 +7,16 @@
 //
 // The linker embeds [Marker] followed by [Version] into each
 // -buildmode=plugin DLL as the go:plugin.abi export. Package plugin on
-// Windows parses the candidate file's export table and rejects
-// binaries whose marker is absent or whose Version differs — before
-// LoadLibrary maps the image, and therefore before the DLL's DllMain
-// has executed any code. Without this fence, a DLL built by a
-// different fork/toolchain generation appends its moduledata fine (it
-// touches only its own image), and the fatal fault comes later, when
-// the host walks that foreign memory at its own field offsets.
+// Windows reads that pair twice: parsed from the candidate file's
+// export table before LoadLibrary maps the image — so a binary whose
+// marker is absent or whose Version differs never executes its DllMain
+// — and re-read from the mapped module via GetProcAddress, so what is
+// judged after the load is the image actually mapped, not whatever the
+// file held when it was read (trendvidia/go#40). Without this fence, a
+// DLL built by a different fork/toolchain generation appends its
+// moduledata fine (it touches only its own image), and the fatal fault
+// comes later, when the host walks that foreign memory at its own
+// field offsets.
 //
 // This is the decision recorded on trendvidia/go#24: no ABI pin inside
 // moduledata/pcHeader; the marker's only consumer is package plugin,

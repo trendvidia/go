@@ -134,6 +134,63 @@ func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 	return msg, ""
 }
 
+// plugin_rejectChainedModule unlinks everything a refused LoadLibrary
+// chained, and rebuilds activeModules without it. prevTail is the
+// caller's pre-load chainTail snapshot: every node after it was
+// appended by the load being refused, so truncating the chain there
+// removes exactly that load's residue.
+//
+// Identification is POSITIONAL, and that is the whole point. The
+// pkghash path can find its candidate by scanning for the last non-bad
+// module, because a module that reached that check already passed the
+// ABI fence and therefore has this host's moduledata layout. Here the
+// premise is the opposite one: pluginabi.Version bumps precisely when
+// moduledata layout assumptions change, so the rejected node's fields
+// are NOT at host offsets. Reading its bad or next word — let alone
+// writing bad into it — would interpret foreign memory at host offsets,
+// which is the fatal-fault hazard the fence exists to prevent, not a
+// step in cleaning it up. prevTail, by contrast, is the host module or
+// a plugin that already passed the fence, so prev.next is a field this
+// host may read and write. Marking bad is unnecessary as well as
+// unsafe: bad only ever suppresses nodes that are still ON the chain
+// (symtab.go, type.go), and after the truncation this one is not.
+//
+// Truncating rather than detaching one node also handles a load that
+// chained more than one module (a plugin whose own imports are
+// plugins): every node the refused load contributed goes, not just the
+// last. lastmoduledatap moves back to prevTail with it, so the next
+// real load links onto the live chain instead of behind it.
+//
+// Unlike the pkghash path this does NOT precede a FreeLibrary: the
+// rejected image stays mapped (unmapping safely needs syncBeforeUnmap,
+// which package plugin takes only for pkghash rejections), so no GC
+// barrier is needed here either. Detaching does not close the window
+// that opened at DllMain: a goroutine that already loaded the node into
+// a local keeps walking it, and the chain is walked without pluginsMu
+// (symtab.go, type.go, mfinal.go, stkframe.go). What this bounds is
+// every walk that STARTS after the truncation.
+//
+// A zero prevTail, or a chain that did not grow past it, is a no-op, so
+// a mis-timed call degrades to the pre-fix behaviour rather than
+// detaching an innocent module.
+//
+// Caller holds pluginsMu (as open does), which serialises chain
+// mutation against concurrent loads and closes.
+//
+//go:linkname plugin_rejectChainedModule plugin.rejectChainedModule
+func plugin_rejectChainedModule(prevTail uintptr) {
+	if prevTail == 0 {
+		return
+	}
+	prev := (*moduledata)(unsafe.Pointer(prevTail))
+	if prev.next == nil {
+		return
+	}
+	prev.next = nil
+	lastmoduledatap = prev
+	modulesinit()
+}
+
 // pluginVersionMismatchMsg formats the plugin.Open version-lock error.
 // The version lock spans every package linked into both host and
 // plugin — not just govm's CompilerVersion — so a bare package name is
@@ -678,9 +735,12 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 }
 
 // detachModule unlinks md from the firstmoduledata chain. Shared by
-// plugin_close and rejectLoadedPlugin (the Windows version-mismatch
-// path), which must both remove a module before its backing image can
-// go away.
+// plugin_close and plugin_validatePkghashes (the Windows
+// pkghash-mismatch path), which must both remove a module before its
+// backing image can go away. The post-load ABI rejection
+// (plugin_rejectChainedModule) does not use it: that path must not
+// dereference the rejected module at all, so it truncates the chain at
+// the caller's pre-load tail instead.
 //
 // If md is the chain tail, addmoduledata's append cursor still points
 // at it; retreat the cursor to the new tail. Without this, the next

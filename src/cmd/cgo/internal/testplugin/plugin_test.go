@@ -9,6 +9,7 @@ import (
 	"cmd/cgo/internal/cgotest"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -220,6 +221,36 @@ func testMain(m *testing.M) int {
 		prettyPrintf("cd %s\n", modRoot)
 	}
 	os.Setenv("PWD", modRoot)
+
+	// Same-base-name fixture (trendvidia/go#40): two different plugins
+	// installed under ONE base file name in two directories, plus the
+	// host that opens both. go build -o does not create directories,
+	// so make them first.
+	goCmd(nil, "build", "-o", "samename.exe", "./samename")
+	for _, d := range []string{"same-a", "same-b"} {
+		if err := os.MkdirAll(filepath.Join(modRoot, d), 0777); err != nil {
+			log.Panic(err)
+		}
+	}
+	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-a", "p"+pluginSuffix), "./samename/dira")
+	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-b", "p"+pluginSuffix), "./samename/dirb")
+
+	// Stage-2 ABI rejection residue: one plugin source built twice, so
+	// the rejectchained host can byte-patch one copy's marker to a
+	// foreign generation, load it raw, and prove the rejection leaves
+	// no walkable chain node behind. The host takes the correct
+	// {Marker, Version} pair as hex so nothing is hardcoded.
+	goCmd(nil, "build", "-o", "rejectchained.exe", "./rejectchained")
+	for _, d := range []string{"reject-a", "reject-b"} {
+		if err := os.MkdirAll(filepath.Join(modRoot, d), 0777); err != nil {
+			log.Panic(err)
+		}
+	}
+	goCmdBuildPluginFor(nil, "rejectchained", "-o="+filepath.Join("reject-a", "p"+pluginSuffix), "./rejectchained/victim")
+	goCmdBuildPluginFor(nil, "rejectchained", "-o="+filepath.Join("reject-b", "p"+pluginSuffix), "./rejectchained/victim")
+	// A third, differently-named plugin so the rejection can happen on
+	// a chain whose tail is a peer plugin rather than the host.
+	goCmdBuildPluginFor(nil, "rejectchained", "-o=reject-peer"+pluginSuffix, "./rejectchained/peer")
 
 	return m.Run()
 }
@@ -458,6 +489,34 @@ func TestPluginABIMarker(t *testing.T) {
 	if !strings.Contains(err.Error(), "missing go:plugin.abi") {
 		t.Fatalf("error = %q; want missing-marker rejection", err)
 	}
+}
+
+// TestSameBaseNameDistinctDirs pins the post-load half of the ABI
+// fence (trendvidia/go#40): two DIFFERENT plugins sharing one base
+// file name must never collapse onto one OS module. The platform
+// loader's matching rule decides which good outcome occurs — B loads
+// as its own module (measured on Windows 11 arm64 and on POSIX), or
+// the second Open is refused with the named "already loaded from"
+// rejection — and the fixture fails on the forbidden third outcome: a
+// successful open whose symbols answer A.
+func TestSameBaseNameDistinctDirs(t *testing.T) {
+	globalSkip(t)
+	run(t, "./samename.exe")
+}
+
+// TestRejectChainedModule pins the stage-2 ABI rejection's residue
+// handling on a REAL chained module: the host byte-patches a healthy
+// plugin's marker to a foreign generation and loads it raw, so its
+// DllMain chains its moduledata exactly as a swapped-in incompatible
+// build would, then verifies the rejection treatment detaches that
+// node and that a healthy sibling still loads afterwards. The host
+// prints skip on platforms without the Windows loader half.
+func TestRejectChainedModule(t *testing.T) {
+	globalSkip(t)
+	var pair [8]byte
+	binary.LittleEndian.PutUint32(pair[0:], pluginabi.Marker)
+	binary.LittleEndian.PutUint32(pair[4:], pluginabi.Version)
+	run(t, "./rejectchained.exe", hex.EncodeToString(pair[:]))
 }
 
 // TestPanicOnCallStub exercises v2's funcptr panic-on-call stub

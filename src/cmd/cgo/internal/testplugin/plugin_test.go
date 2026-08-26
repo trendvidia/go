@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"plugin"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -423,19 +424,35 @@ func peExportNames(t *testing.T, image string) map[string]bool {
 	if err != nil {
 		t.Fatalf("%s: reading section %s: %v", image, dirSec.Name, err)
 	}
-	u32 := func(rva uint32) uint32 {
-		off := int(rva - dirSec.VirtualAddress)
+	// Every read below is bounds-checked against dirSec's raw bytes.
+	// secAt admits RVAs up to max(VirtualSize, Size) while Data() returns
+	// only SizeOfRawData bytes, and RVA arithmetic here is unsigned — so
+	// an unchecked read of a malformed image either wraps to a huge
+	// offset or runs off the end, and panics. A panic escapes t.Fatalf's
+	// contract: it takes down the whole testplugin binary and every test
+	// after this one, instead of failing this test with a diagnosis.
+	offsetIn := func(what string, rva uint32, n int) int {
+		if rva < dirSec.VirtualAddress {
+			t.Fatalf("%s: %s RVA %#x below section %s base %#x", image, what, rva, dirSec.Name, dirSec.VirtualAddress)
+		}
+		off := int64(rva) - int64(dirSec.VirtualAddress)
+		if off+int64(n) > int64(len(data)) {
+			t.Fatalf("%s: %s RVA %#x runs past section %s data (%d bytes)", image, what, rva, dirSec.Name, len(data))
+		}
+		return int(off)
+	}
+	u32 := func(what string, rva uint32) uint32 {
+		off := offsetIn(what, rva, 4)
 		return binary.LittleEndian.Uint32(data[off : off+4])
 	}
-	numNames := u32(dd.VirtualAddress + 24) // IMAGE_EXPORT_DIRECTORY.NumberOfNames
-	namesArr := u32(dd.VirtualAddress + 32) // ...AddressOfNames
+	numNames := u32("NumberOfNames", dd.VirtualAddress+24) // IMAGE_EXPORT_DIRECTORY.NumberOfNames
+	namesArr := u32("AddressOfNames", dd.VirtualAddress+32)
 	names := make(map[string]bool, numNames)
 	for i := uint32(0); i < numNames; i++ {
-		nameRVA := u32(namesArr + 4*i)
-		if secAt(nameRVA) != dirSec {
-			t.Fatalf("%s: export name RVA %#x outside directory section %s", image, nameRVA, dirSec.Name)
-		}
-		off := int(nameRVA - dirSec.VirtualAddress)
+		// A corrupt NumberOfNames can overflow this RVA; offsetIn then
+		// reports it rather than indexing out of range.
+		nameRVA := u32("name pointer", namesArr+4*i)
+		off := offsetIn("export name", nameRVA, 1)
 		end := bytes.IndexByte(data[off:], 0)
 		if end < 0 {
 			t.Fatalf("%s: unterminated export name at RVA %#x", image, nameRVA)
@@ -448,6 +465,15 @@ func peExportNames(t *testing.T, image string) map[string]bool {
 // elfDynsymNames returns the defined symbol names in image's .dynsym —
 // the ELF counterpart of the PE export directory. Undefined entries are
 // the image's own imports, not exports.
+//
+// The two tables are counterparts but not equivalents, and callers must
+// anchor their assertions accordingly. A plugin is linked with
+// DynlinkingGo() true, which keeps every Go symbol STB_GLOBAL
+// (cmd/link/internal/ld/symtab.go putelfsym), so .dynsym holds the whole
+// linked program — 9701 defined entries for the mangle fixture on
+// linux/arm64, runtime and standard library included — not just the
+// package's declared exports. An unanchored substring match against this
+// table is therefore close to meaningless; see unnamedPluginPath.
 func elfDynsymNames(t *testing.T, image string) map[string]bool {
 	t.Helper()
 	f, err := elf.Open(image)
@@ -466,6 +492,53 @@ func elfDynsymNames(t *testing.T, image string) map[string]bool {
 		}
 	}
 	return names
+}
+
+// unnamedPluginPath recovers the pluginpath of a plugin built from a file
+// list rather than a directory. Such a package is unnamed, so cmd/go
+// derives its pluginpath by hashing the source files
+// ("plugin/unnamed-%x", cmd/go/internal/work/gc.go), which means the test
+// cannot know it before the build and has to read it back off the image.
+//
+// It exists so that expectations can be ANCHORED to the plugin that owns
+// them. The export table is not a fixture's own export list; it is every
+// symbol linked into the image. Measured on linux/arm64 at 0c08960e25,
+// et-mangle.so has 9701 defined .dynsym entries, and the bare fragments
+// this replaced matched things the fixture never declared: ".P" matched
+// 98 entries including reflect.(*sliceType).Pointers, ".G" matched 115
+// including runtime.Gosched. The proof they pinned nothing: run those two
+// fragments against et-plugin1.so, which declares neither P nor G, and
+// they still match 70 and 84 entries. Only ".F[" was self-anchoring.
+//
+// Fatalf rather than a sentinel: if the pluginpath shape ever changes,
+// silently failing to find it would send every dependent assertion back
+// to matching nothing in particular, which is the defect this removes.
+func unnamedPluginPath(t *testing.T, image string, table map[string]bool) string {
+	t.Helper()
+	const prefix = "plugin/unnamed-"
+	var paths []string
+	seen := make(map[string]bool)
+	for name := range table {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		// name is <pluginpath>.<something>; the hash runs to the first dot.
+		rest := name[len(prefix):]
+		i := strings.IndexByte(rest, '.')
+		if i < 0 {
+			continue
+		}
+		if path := prefix + rest[:i]; !seen[path] {
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) != 1 {
+		slices.Sort(paths)
+		t.Fatalf("%s: want exactly one %q pluginpath in export table, found %d: %q (%d entries present)",
+			image, prefix, len(paths), paths, len(table))
+	}
+	return paths[0]
 }
 
 // TestExportTableCompleteness pins the export mechanism's wire contract
@@ -488,6 +561,15 @@ func elfDynsymNames(t *testing.T, image string) map[string]bool {
 //     artifact it has not loaded, and holds even if the loader-side
 //     resolution strategy changes underneath it.
 //
+// What layer 2 pins differs by platform, and the ELF leg is the weaker
+// of the two. The PE export directory is built by the export path
+// itself, so the Windows leg pins that path directly. ELF .dynsym is
+// not: it carries every Go symbol in the image (see elfDynsymNames), so
+// the POSIX leg pins that each declared export survived deadcode and
+// kept global binding — a real regression net, but not evidence that
+// the go:plugin.exports/dynexp machinery ran. The loader layer covers
+// that on both.
+//
 // Darwin is skipped: Mach-O carries exports in the dyld export trie,
 // which these parsers do not cover (gap noted on trendvidia/go#44).
 func TestExportTableCompleteness(t *testing.T) {
@@ -505,46 +587,52 @@ func TestExportTableCompleteness(t *testing.T) {
 	// name another fixture also uses and adds a func-valued var;
 	// mangle exercises generic and mangled export names.
 	//
-	// Table names carry each fixture's pluginpath prefix (measured on
-	// linux/arm64, 2026-08): directory builds derive it from the
-	// package import path ("testplugin/..."), while a file-list build
-	// is an unnamed package whose path embeds a source hash — so
-	// mangle's expectations are fragments rather than exact names.
-	// Measured there too: a declared generic function gets no table
-	// entry of its own (Lookup("F") fails on POSIX too) — only its
-	// instantiated, mangled form appears, alongside the plain exports.
+	// Every expectation is a declared name qualified by its owning
+	// pluginpath, never a bare fragment: the table is the whole linked
+	// program, so an unanchored match proves nothing (elfDynsymNames,
+	// unnamedPluginPath). Directory builds derive the pluginpath from
+	// the package import path ("testplugin/..."); the file-list build is
+	// an unnamed package whose path embeds a source hash, so it leaves
+	// path empty and the test recovers it from the image.
 	fixtures := []struct {
-		src     string
-		out     string
-		exports []string // exact table names required
-		subs    []string // fragments some table name must contain
+		src  string
+		out  string
+		path string // owning pluginpath; "" means unnamed, so discover it
+
+		// Names declared for export by the fixture source. Each is
+		// required in the table verbatim, as path+"."+name.
+		exports []string
+
+		// Generic funcs declared by the fixture source. Measured on
+		// linux/arm64 (2026-08): these get no table entry under their
+		// own name — Lookup("F") fails on POSIX too, which is
+		// consistent compiler filtering rather than a dropped export.
+		// Only instantiations appear, under mangled names such as
+		// "F[C/NhSSEp]", so each is required as some entry prefixed
+		// path+"."+name+"[".
+		generics []string
 	}{
 		{
-			src: "./plugin1",
-			out: "et-plugin1",
-			exports: []string{
-				"testplugin/plugin1.F",
-				"testplugin/plugin1.ReadCommonX",
-				"testplugin/plugin1.Seven",
-				"testplugin/plugin1.UnexportedNameReuse",
-			},
+			src:     "./plugin1",
+			out:     "et-plugin1",
+			path:    "testplugin/plugin1",
+			exports: []string{"F", "ReadCommonX", "Seven", "UnexportedNameReuse"},
 		},
 		{
-			src: "./sub/plugin1",
-			out: "et-sub-plugin1",
-			exports: []string{
-				"testplugin/sub/plugin1.F",
-				"testplugin/sub/plugin1.FuncVar",
-				"testplugin/sub/plugin1.ReadCommonX",
-			},
+			src:     "./sub/plugin1",
+			out:     "et-sub-plugin1",
+			path:    "testplugin/sub/plugin1",
+			exports: []string{"F", "FuncVar", "ReadCommonX"},
 		},
 		{
 			// File argument, matching TestSymbolNameMangle: a directory
 			// build resolves this package against the module's implicit
-			// -lang=go1.16 and rejects the generics below.
-			src:  "./mangle/plugin.go",
-			out:  "et-mangle",
-			subs: []string{".P", ".G", ".F["},
+			// -lang=go1.16 and rejects the generics below. Building from
+			// a file list is also what makes it an unnamed package.
+			src:      "./mangle/plugin.go",
+			out:      "et-mangle",
+			exports:  []string{"P", "G"},
+			generics: []string{"F"},
 		},
 	}
 	for _, fx := range fixtures {
@@ -566,27 +654,40 @@ func TestExportTableCompleteness(t *testing.T) {
 	// Static layer: parse each image and require the declared set.
 	for _, fx := range fixtures {
 		image := fx.out + pluginSuffix
+		// A fixture at its zero value builds, loads and parses like any
+		// other and then requires nothing of the result, so it reports
+		// success having pinned nothing. Both loops below are no-ops on
+		// empty slices, which makes that failure completely silent.
+		if len(fx.exports) == 0 && len(fx.generics) == 0 {
+			t.Errorf("%s: fixture declares no exports and no generics, so it pins nothing", image)
+			continue
+		}
 		var table map[string]bool
 		if runtime.GOOS == "windows" {
 			table = peExportNames(t, image)
 		} else {
 			table = elfDynsymNames(t, image)
 		}
-		for _, want := range fx.exports {
-			if !table[want] {
+		path := fx.path
+		if path == "" {
+			path = unnamedPluginPath(t, image, table)
+		}
+		for _, name := range fx.exports {
+			if want := path + "." + name; !table[want] {
 				t.Errorf("%s: export %q missing from image export table (%d entries present)", image, want, len(table))
 			}
 		}
-		for _, sub := range fx.subs {
+		for _, name := range fx.generics {
+			want := path + "." + name + "["
 			found := false
-			for name := range table {
-				if strings.Contains(name, sub) {
+			for entry := range table {
+				if strings.HasPrefix(entry, want) {
 					found = true
 					break
 				}
 			}
 			if !found {
-				t.Errorf("%s: no export name containing %q in image export table (%d entries present)", image, sub, len(table))
+				t.Errorf("%s: generic %q has no instantiation in image export table: no entry with prefix %q (%d entries present)", image, name, want, len(table))
 			}
 		}
 	}

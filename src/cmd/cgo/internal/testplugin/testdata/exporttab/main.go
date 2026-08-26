@@ -19,12 +19,10 @@ func main() {
 		os.Exit(2)
 	}
 	for _, arg := range os.Args[1:] {
-		p, err := plugin.Open(arg)
-		if err != nil {
+		if _, err := plugin.Open(arg); err != nil {
 			fmt.Fprintf(os.Stderr, "exporttab: Open(%q): %v\n", arg, err)
 			os.Exit(1)
 		}
-		_ = p
 		fmt.Printf("OPENED %s\n", arg)
 	}
 }

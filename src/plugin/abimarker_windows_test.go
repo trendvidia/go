@@ -360,12 +360,16 @@ func loadablePE(t *testing.T, mutate func(p *peImage)) (syscall.Handle, error) {
 	p.u32(p.optOff+24, 0x10000000)       // ImageBase low dword (high dword stays 0); free base needs no relocations
 	p.u32(p.optOff+32, 0x1000)           // SectionAlignment
 	p.u32(p.optOff+36, 0x200)            // FileAlignment
-	// A zero subsystem version is what actually made windows/arm64
-	// answer "%1 is not a valid Win32 application" for the shape this
-	// helper first shipped: the loader refuses an image that claims to
-	// predate NT. 6.0 is Vista, comfortably below any host that runs
-	// this fork.
-	p.u16(p.optOff+40, 6)      // MajorOperatingSystemVersion
+	// The version fields below are what a well-formed PE32+ DLL carries,
+	// not a cure. Windows 11 arm64 still answers "%1 is not a valid
+	// Win32 application" for this image, so the value cases below skip
+	// there; measured as refused, individually and cumulatively: OS and
+	// subsystem versions 6.0, 6.1 and 10.0, a non-zero linker version,
+	// an entry point, SizeOfInitializedData, explicit stack and heap
+	// sizes, DllCharacteristics 0x8100 and 0x0160, and a .reloc section
+	// holding a terminating empty relocation block. Read
+	// trendvidia/go#48 before spending another round on header tweaks.
+	p.u16(p.optOff+40, 6)      // MajorOperatingSystemVersion (6.0 = Vista, under any host of this fork)
 	p.u16(p.optOff+48, 6)      // MajorSubsystemVersion
 	p.u32(p.optOff+56, 0x4000) // SizeOfImage (covers .text ending at RVA 0x3200, multiple of SectionAlignment)
 	p.u32(p.optOff+60, 0x200)  // SizeOfHeaders
@@ -413,7 +417,7 @@ func TestCheckLoadedABIMarker(t *testing.T) {
 	// accept/reject matrix entirely unexercised with the suite green.
 	probe, err := loadablePE(t, nil)
 	if err != nil {
-		t.Skipf("running loader refused the synthetic image (%v); skipping the mapped-marker cases", err)
+		t.Skipf("running loader refused the synthetic image (%v); skipping the mapped-marker cases (trendvidia/go#48)", err)
 	}
 	syscall.FreeLibrary(probe)
 

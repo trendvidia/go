@@ -191,6 +191,27 @@ func plugin_rejectChainedModule(prevTail uintptr) {
 	modulesinit()
 }
 
+// plugin_chainGrew reports whether prevTail — plugin.Open's
+// pre-LoadLibrary chainTail snapshot — has a successor. It is the
+// post-load half of the chain-growth check and deliberately reads ONE
+// word: prevTail.next. prevTail is the host module or a plugin that
+// already passed the ABI fence, so its layout is this host's; the node
+// a load appended after it has not been judged yet, and walking to the
+// new tail (plugin_chainTail) would read that node's next word at host
+// offsets — exactly the foreign-layout dereference the fence exists to
+// prevent, taken before the fence has run. A zero prevTail reports no
+// growth, matching plugin_rejectChainedModule's no-op.
+//
+// Caller holds pluginsMu (as open does).
+//
+//go:linkname plugin_chainGrew plugin.chainGrew
+func plugin_chainGrew(prevTail uintptr) bool {
+	if prevTail == 0 {
+		return false
+	}
+	return (*moduledata)(unsafe.Pointer(prevTail)).next != nil
+}
+
 // pluginVersionMismatchMsg formats the plugin.Open version-lock error.
 // The version lock spans every package linked into both host and
 // plugin — not just govm's CompilerVersion — so a bare package name is

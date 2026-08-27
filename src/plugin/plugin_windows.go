@@ -96,6 +96,9 @@ func open(name string) (*Plugin, error) {
 		pluginsMu.Unlock()
 		return nil, errors.New(`plugin.Open("` + name + `"): ` + err.Error())
 	}
+	if hook := testHookBetweenFenceStages; hook != nil {
+		callFenceHook(hook, pluginPath)
+	}
 
 	// Snapshot BEFORE loading: addmoduledata chains the DLL's
 	// moduledata from its entry point inside LoadLibrary (measured on
@@ -157,7 +160,14 @@ func open(name string) (*Plugin, error) {
 	// junction, a symlink — which today load fine. Rejection is the
 	// right answer only where it replaces a silent alias, which is this
 	// branch.
-	if chainTail() == prevTail {
+	//
+	// Growth is judged from prevTail's own next link and never by walking
+	// to the new tail: prevTail is host-shaped (the host module or a
+	// plugin that already passed the fence), but the node a foreign
+	// generation just appended is exactly what stage 2 below has not yet
+	// judged, and reading ITS next word at host offsets is the fault the
+	// fence exists to prevent.
+	if !chainGrew(prevTail) {
 		if loaded := loadedModulePath(h); loaded != "" && !sameModulePath(loaded, pluginPath) {
 			aliased := pluginPath + " resolved to a different module, already loaded from " + loaded
 			plugins[pluginPath] = &Plugin{err: aliased}
@@ -406,6 +416,47 @@ func validatePkghashes(addr uintptr) (errstr string, rejectedPath string)
 //
 //go:linkname chainTail
 func chainTail() uintptr
+
+// chainGrew is defined in package runtime via go:linkname. It reports
+// whether a node has been chained after prevTail — open's pre-
+// LoadLibrary chainTail snapshot — by reading only prevTail's next
+// link, which is a field of a module this host may read; nothing of
+// the appended node itself is inspected.
+//
+//go:linkname chainGrew
+func chainGrew(prevTail uintptr) bool
+
+// testHookBetweenFenceStages, when set, runs after stage 1 has judged
+// the plugin's file bytes and before LoadLibrary maps them, with
+// pluginsMu held. It exists so a test fixture can replace the file in
+// that window: a file the loader maps that differs from the one stage
+// 1 read is the only way stage 2 can reject without a second
+// toolchain generation, so without the hook open's post-load
+// rejection — its rejectChainedModule call, negative-cache write and
+// error text — is unreachable by any test (trendvidia/go#48). The
+// cmd/cgo/internal/testplugin rejectchained fixture sets it via
+// go:linkname; production code never does.
+//
+//go:linkname testHookBetweenFenceStages
+var testHookBetweenFenceStages func(pluginPath string)
+
+// callFenceHook runs an installed testHookBetweenFenceStages. open
+// holds pluginsMu across the call with no deferred unlock, so a panic
+// (or a runtime.Goexit) inside the hook would wedge every later Open,
+// Lookup and Close in the process — the same hazard loadedModulePath
+// resolves its procs explicitly to avoid. Release the lock on the way
+// out so a fixture bug surfaces as its own panic, with its own stack,
+// instead of as a deadlock in an unrelated goroutine.
+func callFenceHook(hook func(string), pluginPath string) {
+	returned := false
+	defer func() {
+		if !returned {
+			pluginsMu.Unlock()
+		}
+	}()
+	hook(pluginPath)
+	returned = true
+}
 
 // rejectChainedModule is defined in package runtime via go:linkname.
 // The stage-2 ABI check rejects a module whose DllMain has already

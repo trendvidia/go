@@ -864,13 +864,17 @@ func TestSameBaseNameDistinctDirs(t *testing.T) {
 	run(t, "./samename.exe")
 }
 
-// TestRejectChainedModule pins the stage-2 ABI rejection's residue
-// handling on a REAL chained module: the host byte-patches a healthy
-// plugin's marker to a foreign generation and loads it raw, so its
-// DllMain chains its moduledata exactly as a swapped-in incompatible
-// build would, then verifies the rejection treatment detaches that
-// node and that a healthy sibling still loads afterwards. The host
-// prints skip on platforms without the Windows loader half.
+// TestRejectChainedModule drives the stage-2 ABI rejection end to end
+// and pins its residue handling (trendvidia/go#48). The host swaps the
+// plugin file between the fence's two reads through package plugin's
+// test hook, so plugin.Open maps a marker from a foreign generation
+// whose DllMain chains a REAL moduledata; it asserts the stage-2
+// error, the negative-cache "(previous failure)" answer, the resident
+// mapping and the restored chain tail. It then links a PAGE_NOACCESS
+// page as the rejected node and runs the same treatment, so any read
+// of a foreign-layout residue faults the fixture. A healthy sibling
+// must still load afterwards. The host prints skip on platforms
+// without the Windows loader half.
 func TestRejectChainedModule(t *testing.T) {
 	globalSkip(t)
 	var pair [8]byte

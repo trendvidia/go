@@ -333,11 +333,12 @@ func TestCheckABIMarkerUnreadable(t *testing.T) {
 // DLL characteristic — and a machine type matching the running
 // process. Returns the loaded handle; the caller must FreeLibrary it.
 // A loader refusal comes back as an error rather than a skip so that
-// exactly one caller — the probe in TestCheckLoadedABIMarker — decides
-// whether the synthetic shape is loadable at all; letting each case
-// skip on its own would let a stricter loader empty the accept/reject
-// matrix while the suite stayed green. The kernel32 subtest keeps the
-// essential missing-marker case universal either way.
+// exactly one caller — the probe in TestCheckLoadedABIMarker — judges
+// whether the synthetic shape is loadable at all, and fails the test
+// if not: the shape is measured loadable on windows/amd64 and
+// windows/arm64, so a refusal is a regression in this fixture or a
+// loader rule worth knowing about, never a reason to leave the
+// accept/reject matrix unexercised with the suite green.
 func loadablePE(t *testing.T, mutate func(p *peImage)) (syscall.Handle, error) {
 	t.Helper()
 	p := newPE(3)
@@ -357,24 +358,29 @@ func loadablePE(t *testing.T, mutate func(p *peImage)) (syscall.Handle, error) {
 	p.u32(p.sectTbl+2*40+36, 0x60000020) // CODE | MEM_EXECUTE | MEM_READ
 	p.u32(p.optOff+4, 0x200)             // SizeOfCode
 	p.u32(p.optOff+20, textRVA)          // BaseOfCode
-	p.u32(p.optOff+24, 0x10000000)       // ImageBase low dword (high dword stays 0); free base needs no relocations
-	p.u32(p.optOff+32, 0x1000)           // SectionAlignment
-	p.u32(p.optOff+36, 0x200)            // FileAlignment
-	// The version fields below are what a well-formed PE32+ DLL carries,
-	// not a cure. Windows 11 arm64 still answers "%1 is not a valid
-	// Win32 application" for this image, so the value cases below skip
-	// there; measured as refused, individually and cumulatively: OS and
-	// subsystem versions 6.0, 6.1 and 10.0, a non-zero linker version,
-	// an entry point, SizeOfInitializedData, explicit stack and heap
-	// sizes, DllCharacteristics 0x8100 and 0x0160, and a .reloc section
-	// holding a terminating empty relocation block. Read
-	// trendvidia/go#48 before spending another round on header tweaks.
-	p.u16(p.optOff+40, 6)      // MajorOperatingSystemVersion (6.0 = Vista, under any host of this fork)
-	p.u16(p.optOff+48, 6)      // MajorSubsystemVersion
-	p.u32(p.optOff+56, 0x4000) // SizeOfImage (covers .text ending at RVA 0x3200, multiple of SectionAlignment)
-	p.u32(p.optOff+60, 0x200)  // SizeOfHeaders
-	p.u16(p.optOff+68, 3)      // Subsystem: IMAGE_SUBSYSTEM_WINDOWS_CUI
-	p.u32(p.optOff+108, 16)    // NumberOfRvaAndSizes (the export directory lives in slot 0)
+	// The three settings below are what the windows/arm64 loader
+	// demands beyond amd64's (measured on Windows 11 arm64, 2026-08-27,
+	// by mutating a clang-linked DLL that loads until it stopped: an
+	// ImageBase below 4 GiB or DllCharacteristics without both
+	// DYNAMIC_BASE and NX_COMPAT answers "%1 is not a valid Win32
+	// application"; amd64 accepts every combination). The relocation
+	// directory is a terminating empty block so a DYNAMIC_BASE image
+	// whose preferred base is taken relocates instead of failing.
+	p.u32(p.optOff+24, 0x80000000)         // ImageBase = 0x1_8000_0000, the default 64-bit DLL base
+	p.u32(p.optOff+28, 0x1)                // ... high dword
+	p.u16(p.optOff+70, 0x160)              // DllCharacteristics: HIGH_ENTROPY_VA | DYNAMIC_BASE | NX_COMPAT
+	p.u32(p.optOff+112+5*8, rdataRVA+0x40) // data directory[5]: base relocation table
+	p.u32(p.optOff+116+5*8, 8)             // ... one empty block
+	p.u32(rdataPtr+0x40, textRVA)          // IMAGE_BASE_RELOCATION.VirtualAddress
+	p.u32(rdataPtr+0x44, 8)                // IMAGE_BASE_RELOCATION.SizeOfBlock (header only)
+	p.u32(p.optOff+32, 0x1000)             // SectionAlignment
+	p.u32(p.optOff+36, 0x200)              // FileAlignment
+	p.u16(p.optOff+40, 6)                  // MajorOperatingSystemVersion (6.0 = Vista, under any host of this fork)
+	p.u16(p.optOff+48, 6)                  // MajorSubsystemVersion
+	p.u32(p.optOff+56, 0x4000)             // SizeOfImage (covers .text ending at RVA 0x3200, multiple of SectionAlignment)
+	p.u32(p.optOff+60, 0x200)              // SizeOfHeaders
+	p.u16(p.optOff+68, 3)                  // Subsystem: IMAGE_SUBSYSTEM_WINDOWS_CUI
+	p.u32(p.optOff+108, 16)                // NumberOfRvaAndSizes (the export directory lives in slot 0)
 	// Without the DLL bit the loader reads the image as an EXE and
 	// rejects it ("not a valid Win32 application") before any of the
 	// header fields above are even consulted.
@@ -409,15 +415,16 @@ func TestCheckLoadedABIMarker(t *testing.T) {
 			t.Fatalf("checkLoadedABIMarker(kernel32) = %v; want the missing-marker rejection", err)
 		}
 	})
-	// One probe decides the whole value-level set. Either the running
-	// loader accepts the synthetic shape — and then every case below
-	// must load, a refusal there being a real failure — or none of them
-	// can, and the set skips once with the loader's reason. Per-case
-	// skipping would let a stricter loader leave checkLoadedABIMarker's
-	// accept/reject matrix entirely unexercised with the suite green.
+	// One probe judges the whole value-level set: the running loader
+	// must accept the synthetic shape, and then every case below must
+	// load. The shape is measured loadable on both Windows
+	// architectures this fork supports (see loadablePE), so a refusal
+	// here is a failure and not a skip — skipping used to leave
+	// checkLoadedABIMarker's accept/reject matrix entirely unexercised
+	// on windows/arm64 with the suite green (trendvidia/go#48).
 	probe, err := loadablePE(t, nil)
 	if err != nil {
-		t.Skipf("running loader refused the synthetic image (%v); skipping the mapped-marker cases (trendvidia/go#48)", err)
+		t.Fatalf("running loader refused the synthetic image: %v", err)
 	}
 	syscall.FreeLibrary(probe)
 

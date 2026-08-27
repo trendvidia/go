@@ -61,6 +61,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           ./bin/go test -count=1 \
+            plugin \
             cmd/link/internal/ld \
             cmd/cgo/internal/testplugin \
             cmd/internal/testplugin
@@ -77,4 +78,4 @@ jobs:
       - name: Plugin validation (Windows)
         if: runner.os == 'Windows'
         shell: cmd
-        run: bin\go test -count=1 cmd/link/internal/ld cmd/cgo/internal/testplugin cmd/internal/testplugin
+        run: bin\go test -count=1 plugin cmd/link/internal/ld cmd/cgo/internal/testplugin cmd/internal/testplugin

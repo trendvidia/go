@@ -294,7 +294,12 @@ func main() {}
 	if err == nil {
 		t.Fatalf("oversized plugin link unexpectedly succeeded:\n%s", out)
 	}
-	wantErr := "symbols, more than the " + strconv.Itoa(peExportLimit) +
+	// The two abort sites word this differently on purpose (they bound
+	// different sets -- see TestPEExportLimitAborts), so match only the
+	// tail they share. This fixture takes the internal path today; if it
+	// ever reaches pePluginExportFile, the "pins" tolerance below must
+	// not be the only thing that moves.
+	wantErr := "more than the " + strconv.Itoa(peExportLimit) +
 		" a PE image can address; reduce the exported surface"
 	if !strings.Contains(string(out), wantErr) {
 		t.Errorf("link failure does not name the limit (%q). Output:\n%s", wantErr, out)
@@ -303,10 +308,10 @@ func main() {}
 	// objdir/a.out.dll and copies afterwards, so the linker's own output
 	// path is a temp file that is gone by the time anyone reads the
 	// error; -pluginexename carries the real name.
-	if !strings.Contains(string(out), "over.dll exports") {
+	if !strings.Contains(string(out), "over.dll exports") && !strings.Contains(string(out), "over.dll pins") {
 		t.Errorf("link failure does not name over.dll. Output:\n%s", out)
 	}
-	if strings.Contains(string(out), "a.out.dll exports") {
+	if strings.Contains(string(out), "a.out.dll exports") || strings.Contains(string(out), "a.out.dll pins") {
 		t.Errorf("link failure names the linker's temp output instead of over.dll. Output:\n%s", out)
 	}
 	// ...and leaves no artifact behind.
@@ -343,10 +348,27 @@ func TestPEExportLimitAborts(t *testing.T) {
 			if !errors.As(err, &ee) || ee.ExitCode() != 2 {
 				t.Errorf("child failed with %v, want exit status 2:\n%s", err, out)
 			}
-			// The message names the requested DLL and the limit, in both
-			// linking modes, so the two sites cannot drift apart.
+			// Both messages name the requested DLL and the limit, but
+			// they deliberately say different things, because the two
+			// sites bound different sets (trendvidia/go#59).
+			//
+			// initdynexport counts the export table it is about to
+			// emit, so "exports N symbols" is literally true there.
+			// pePluginExportFile counts only the names it pins in the
+			// .def; mingw's auto-export publishes more, so claiming the
+			// image "exports" that number is the false confidence #59
+			// was filed about. The cap that binds the external image is
+			// peVerifyImageExportCount, after hostlink.
+			//
+			// Keep the wording distinct. Making these identical again
+			// would restore a message that misdescribes what was
+			// measured.
 			want := fmt.Sprintf("big.dll exports %d symbols, more than the %d a PE image can address; reduce the exported surface",
 				peExportLimit+1, peExportLimit)
+			if mode == "external" {
+				want = fmt.Sprintf("big.dll pins %d symbols in its export .def, more than the %d a PE image can address; reduce the exported surface",
+					peExportLimit+1, peExportLimit)
+			}
 			if !strings.Contains(string(out), want) {
 				t.Errorf("child output does not contain %q:\n%s", want, out)
 			}

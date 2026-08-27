@@ -2277,13 +2277,16 @@ func pePluginExportFile(ctxt *Link) string {
 		return ""
 	}
 	sort.Strings(names)
-	// Same policy as initdynexport's internal-linking check
-	// (trendvidia/go#39): a plugin over the PE export limit fails the
-	// link here, naming the limit, rather than handing mingw ld an
-	// EXPORTS list it rejects with its own opaque "export ordinal too
-	// large" error. Abort outright for the same reason as there.
+	// An early guard on the PINNED list only -- not the cap on the image.
+	// Handing mingw ld an EXPORTS list does not switch its auto-export
+	// off, so what this file names and what the image publishes are
+	// different numbers (measured 6 vs 2195, trendvidia/go#59). The cap
+	// that binds is peVerifyImageExportCount, which reads the finished
+	// image after hostlink. This one only catches a pinned set so large
+	// it cannot fit, and it is worth keeping because it fails before the
+	// expensive link rather than after it.
 	if len(names) > peExportLimit {
-		Errorf("link: %s exports %d symbols, more than the %d a PE image can address; reduce the exported surface",
+		Errorf("link: %s pins %d symbols in its export .def, more than the %d a PE image can address; reduce the exported surface",
 			peOutputDisplayName(), len(names), peExportLimit)
 		errorexit()
 	}

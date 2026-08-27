@@ -514,6 +514,7 @@ func Main(arch *sys.Arch, theArch Arch) {
 
 	bench.Start("hostlink")
 	ctxt.hostlink()
+	peVerifyImageExportCount(ctxt)
 	if ctxt.Debugvlog != 0 {
 		ctxt.Logf("%s", ctxt.loader.Stat())
 		ctxt.Logf("%d liveness data\n", liveness)

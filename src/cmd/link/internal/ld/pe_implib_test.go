@@ -6,13 +6,11 @@ package ld
 
 import (
 	"bytes"
-	"debug/pe"
 	"encoding/binary"
 	"fmt"
 	"internal/testenv"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -76,30 +74,10 @@ func TestPEHostExportsMatchImportLibrary(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	t.Parallel()
 
-	dir := t.TempDir()
-	write := func(name, content string) {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0666); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("go.mod", "module pehost\n\ngo 1.26\n")
-	write("main.go", `package main
-
-import (
-	"fmt"
-	"plugin"
-)
-
-func main() { fmt.Println(plugin.Open) }
-`)
-
-	exe := filepath.Join(dir, "host.exe")
-	cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", exe, ".")
-	cmd.Dir = dir
-	cmd.Env = append(cmd.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+	// Same fixture as the export-count tests, built once by one helper:
+	// two copies of it meant two full windows/amd64 cross-builds per run
+	// of this package, and two places for the host source to drift.
+	exe := buildWindowsPE(t, peExportingMain)
 
 	exports := peExportedNames(t, exe)
 	if len(exports) == 0 {
@@ -163,57 +141,14 @@ func main() { fmt.Println(plugin.Open) }
 }
 
 // peExportedNames returns the names in a PE image's export directory.
+// Delegates to peImageExportNames so the linker's own export-count check
+// and every test that inspects an export table read the image the same
+// way — the divergence #53 was about started as three copies of one walk.
 func peExportedNames(t *testing.T, path string) []string {
 	t.Helper()
-	f, err := pe.Open(path)
+	names, err := peImageExportNames(path)
 	if err != nil {
 		t.Fatal(err)
-	}
-	defer f.Close()
-
-	var dd []pe.DataDirectory
-	switch oh := f.OptionalHeader.(type) {
-	case *pe.OptionalHeader64:
-		dd = oh.DataDirectory[:]
-	case *pe.OptionalHeader32:
-		dd = oh.DataDirectory[:]
-	default:
-		t.Fatalf("%s: no optional header", path)
-	}
-	ed := dd[pe.IMAGE_DIRECTORY_ENTRY_EXPORT]
-	if ed.Size == 0 {
-		return nil
-	}
-
-	var sect *pe.Section
-	for _, s := range f.Sections {
-		if s.VirtualAddress <= ed.VirtualAddress && ed.VirtualAddress < s.VirtualAddress+s.VirtualSize {
-			sect = s
-			break
-		}
-	}
-	if sect == nil {
-		t.Fatalf("%s: export directory RVA %#x is in no section", path, ed.VirtualAddress)
-	}
-	data, err := sect.Data()
-	if err != nil {
-		t.Fatal(err)
-	}
-	at := func(rva uint32) []byte {
-		off := rva - sect.VirtualAddress
-		if off >= uint32(len(data)) {
-			t.Fatalf("%s: RVA %#x outside %s", path, rva, sect.Name)
-		}
-		return data[off:]
-	}
-
-	hdr := at(ed.VirtualAddress)
-	nNames := binary.LittleEndian.Uint32(hdr[24:])
-	namePtrs := at(binary.LittleEndian.Uint32(hdr[32:]))
-	names := make([]string, 0, nNames)
-	for i := uint32(0); i < nNames; i++ {
-		s := at(binary.LittleEndian.Uint32(namePtrs[i*4:]))
-		names = append(names, string(s[:bytes.IndexByte(s, 0)]))
 	}
 	return names
 }

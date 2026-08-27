@@ -3,8 +3,13 @@ name: dist-test
 # Per-platform validation of the fork, built FROM SOURCE on each self-hosted box
 # (bootstrapped by the box's own installed go-plus, GOROOT_BOOTSTRAP=$(go env GOROOT)).
 #
-# darwin/arm64 + linux/{amd64,arm64}: the FULL Go dist test (src/all.bash) — the
+# darwin/arm64 + linux/arm64: the FULL Go dist test (src/all.bash) — the
 # rigorous check that the toolchain, runtime and whole stdlib are correct.
+#
+# linux/amd64 ran all.bash here too until its host was lost (#87) and the
+# replacement turned out to SIGILL in it (#88). That row is REMOVED, not
+# repointed, so no leg below runs all.bash on amd64 — the matrix comment
+# where the row used to be states the gap and the condition for restoring it.
 #
 # windows/{amd64,arm64}: build (make.bat) + a core-stdlib smoke, NOT full all.bat.
 # The full Windows dist test fails on OS-integration corners that self-hosted
@@ -21,7 +26,8 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    # Nightly 06:00 UTC sweep across all five boxes.
+    # Nightly 06:00 UTC sweep across every box in the matrix below
+    # (four while linux/amd64's row is out — #87/#88).
     - cron: '0 6 * * *'
 
 # A full all.bash per Unix leg is expensive; supersede in-flight runs for the ref.
@@ -40,7 +46,22 @@ jobs:
       matrix:
         include:
           - { runner: mini, goos: darwin, goarch: arm64 }
-          - { runner: trader, goos: linux, goarch: amd64 }
+          # TEMPORARY (trendvidia/go#87): linux/amd64 all.bash has no host.
+          # `trader` is throttled by its provider: a 9.3-minute run completed
+          # 2026-08-27 14:32 and nothing has completed since; the 18:01 run was
+          # killed at the 120-minute timeout. `maclin`, the replacement, cannot
+          # run this leg either -- all.bash SIGILLs there because the 128-bit
+          # simd compare tests are unguarded while their helper needs AVX2, and
+          # that CPU is pre-Haswell (trendvidia/go#88).
+          #
+          # Removed rather than left red, so PRs gate on checks that can pass.
+          # THE COVERAGE IS GONE, NOT RELOCATED: linux/arm64 still runs
+          # all.bash so Linux-generic behaviour is covered, and plugin-matrix
+          # still exercises linux/amd64 -- but amd64-specific all.bash coverage
+          # is absent until this row comes back.
+          #
+          # RESTORE when #87 (hardware) or #88 (the simd guard) resolves.
+          # Both issues name this line.
           - { runner: linux_parallels, goos: linux, goarch: arm64 }
           - { runner: windows_omen, goos: windows, goarch: amd64 }
           - { runner: windows_parallels, goos: windows, goarch: arm64 }

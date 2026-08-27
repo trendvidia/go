@@ -5,7 +5,7 @@
 # name; the matrix targets [self-hosted, <machine>]:
 #
 #   darwin/arm64   -> mini
-#   linux/amd64    -> trader
+#   linux/amd64    -> maclin
 #   linux/arm64    -> linux_parallels
 #   windows/amd64  -> windows_omen
 #   windows/arm64  -> windows_parallels
@@ -37,7 +37,7 @@ jobs:
           - platform: darwin/arm64
             runner: mini
           - platform: linux/amd64
-            runner: trader
+            runner: maclin
           - platform: linux/arm64
             runner: linux_parallels
           - platform: windows/amd64
@@ -57,6 +57,26 @@ jobs:
           export GOROOT_BOOTSTRAP="$(go env GOROOT)"
           ./make.bash
 
+      # Both POSIX plugin suites skip WHOLESALE when cgo is unavailable --
+      # cmd/cgo/internal/testplugin/plugin_test.go and
+      # cmd/internal/testplugin/plugin_test.go both set globalSkip on
+      # `!testenv.HasCGO() && runtime.GOOS != "windows"` -- and a run that
+      # skips everything still reports success. With dist-test's linux/amd64
+      # row removed (#87/#88) this leg is the only automated linux/amd64
+      # signal left, so assert the precondition instead of trusting a green
+      # tick that a missing C compiler would produce just as readily.
+      - name: Assert cgo is available (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cgo=$(./bin/go env CGO_ENABLED)
+          [ "$cgo" = 1 ] || { echo "::error::CGO_ENABLED=$cgo: the POSIX plugin suites would skip entirely, so this leg would pass without testing anything"; exit 1; }
+
+      # internal/buildcfg is in the list for the reason dist-test.yml gives at
+      # its Windows lane: the build above deliberately does NOT unset
+      # CGO_ENABLED, so TestDefaultCGOEnabledUnset (#9, #54) DETECTS a runner
+      # whose service environment exports it. The Unix legs used to get that
+      # pin from all.bash in dist-test; linux/amd64 no longer runs all.bash
+      # anywhere (#87/#88), which left `maclin` with no execution of it at all.
       - name: Plugin validation
         if: runner.os != 'Windows'
         run: |
@@ -64,7 +84,8 @@ jobs:
             plugin \
             cmd/link/internal/ld \
             cmd/cgo/internal/testplugin \
-            cmd/internal/testplugin
+            cmd/internal/testplugin \
+            internal/buildcfg
 
       # --- Windows (amd64, arm64) ---
       - name: Build toolchain (Windows)

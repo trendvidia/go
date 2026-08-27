@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"internal/abi"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -635,6 +636,7 @@ func TypeptrLsym(t *types.Type) *obj.LSym {
 	// compilation.
 	signatmu.Lock()
 	typetabSlots.Record(s, typeSym)
+	typetabStats.typeptr.count()
 	signatmu.Unlock()
 	return s
 }
@@ -724,13 +726,55 @@ func itabptrLsym(typ, iface *types.Type) *obj.LSym {
 	// wg.Wait, so no walk ever overlaps a live worker. Measured 0
 	// recordings in the parallel phase across a -typetab build of all of
 	// std (#33; the serial count moves with each rework, the zero does
-	// not). The lock is defensive uniformity with TypeptrLsym, not a fix
-	// for an observed race; the registry dedups repeated (typ, iface)
-	// pairs either way.
+	// not); TestTypetabStatsSerialItabptr pins that zero via
+	// -d=typetabstats. The lock is defensive uniformity with
+	// TypeptrLsym, not a fix for an observed race; the registry dedups
+	// repeated (typ, iface) pairs either way.
 	signatmu.Lock()
 	typetabSlots.Record(s, itabSym)
+	typetabStats.itabptr.count()
 	signatmu.Unlock()
 	return s
+}
+
+// typetabPhaseCounts counts slot recordings by whether the parallel
+// backend phase (base.Ctxt.InParallel) was in effect at the time.
+// Guarded by signatmu, like the registry it shadows.
+type typetabPhaseCounts struct {
+	serial, parallel int
+}
+
+func (c *typetabPhaseCounts) count() {
+	if base.Ctxt.InParallel {
+		c.parallel++
+	} else {
+		c.serial++
+	}
+}
+
+// typetabStats is the -d=typetabstats diagnostic: how many times each
+// slot recorder ran, split by compiler phase. It exists to pin the
+// itabptrLsym comment above — the claim that walk never reaches it
+// from a backend worker — against the tree rather than against a
+// one-off instrumented build (trendvidia/go#33, #55). It is a counter
+// reported at dumpdata time, deliberately not an assert: the claim was
+// measured on a darwin/arm64 std build and the mechanism stays correct
+// under signatmu even if it were false elsewhere, so a stale comment
+// must not become a compiler ICE on an unmeasured GOOS/GOARCH or
+// buildmode. TestTypetabStatsSerialItabptr reads the report.
+//
+// The report leads with the effective backend worker count, because
+// the phase split alone cannot distinguish a concurrent build from a
+// solo one: gc.compileFunctions sets base.Ctxt.InParallel around the
+// compile loop whether or not it starts any worker goroutines, so a
+// run clamped to one worker still reports parallel recordings. The
+// clamp is silent (base.ParseFlags sets Flag.LowerC = 1 whenever
+// concurrentBackendAllowed is false — GOEXPERIMENT=fieldtrack,
+// -dynlink, -race, -v, -live, or any -d= flag lacking concurrent:"ok"),
+// so without this number a reader — and the test — cannot tell whether
+// an itabptr parallel=0 was earned or trivial.
+var typetabStats struct {
+	typeptr, itabptr typetabPhaseCounts
 }
 
 // typetabSlots records every -typetab slot referenced during
@@ -750,6 +794,12 @@ var typetabSlots staticdata.SlotRegistry
 // trendvidia/go#27).
 func WriteTypetabSlots() {
 	typetabSlots.Write()
+	if base.Debug.TypetabStats != 0 {
+		fmt.Fprintf(os.Stderr, "typetabstats: workers=%d typeptr serial=%d parallel=%d itabptr serial=%d parallel=%d\n",
+			base.Flag.LowerC,
+			typetabStats.typeptr.serial, typetabStats.typeptr.parallel,
+			typetabStats.itabptr.serial, typetabStats.itabptr.parallel)
+	}
 }
 
 // needkeyupdate reports whether map updates with t as a key

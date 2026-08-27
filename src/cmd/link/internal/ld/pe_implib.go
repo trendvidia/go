@@ -647,7 +647,7 @@ func peSnapshotHostExports(ctxt *Link) {
 			"link: warning: the cross-module runtime ABI is exported in full, so plugins still load and run. "+
 			"Package-level symbols that were dropped (for example %s) stay module-local instead of resolving "+
 			"to the host's instance, so a plugin sharing one of those globals with the host will see its own copy.\n",
-			filepath.Base(*flagOutfile), len(symbols)+len(dropped), peExportLimit, len(dropped), dropped[0].name)
+			peOutputDisplayName(), len(symbols)+len(dropped), peExportLimit, len(dropped), dropped[0].name)
 	}
 
 	// Alphabetical order is the PE import library convention, and
@@ -683,10 +683,7 @@ func peGenerateImportLibrary(ctxt *Link) {
 	// Use the final executable name (not the temp build path) for the
 	// DLL name in the import library. This ensures the plugin DLL
 	// imports from "host.exe" instead of "a.out.exe".
-	dllName := filepath.Base(*flagOutfile)
-	if *flagPluginExeName != "" {
-		dllName = *flagPluginExeName
-	}
+	dllName := peOutputDisplayName()
 
 	var machine uint16
 	switch ctxt.Arch.Family {

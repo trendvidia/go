@@ -1689,11 +1689,8 @@ func initdynexport(ctxt *Link) {
 	// PE export ordinals are uint16, limiting exports to 65535, so this
 	// is a backstop the format imposes and not a policy choice. Plugin
 	// hosts never reach it: peHostExports already bounded their list by
-	// rank at peExportLimit. A plugin DLL exporting all of its reachable
-	// symbols can, so report it rather than quietly publishing whichever
-	// symbols the loader happened to visit first.
+	// rank at peExportLimit.
 	maxExports := peExportLimit
-	truncated := 0
 
 	// For Windows plugin support, export each ABI variant under its
 	// mangleABIName-produced name. A function with both ABI0 (ver=0)
@@ -1714,16 +1711,28 @@ func initdynexport(ctxt *Link) {
 			continue
 		}
 		seen[name] = true
-		if len(dexport) >= maxExports {
-			truncated++
-			continue
-		}
 		dexport = append(dexport, s)
 	}
-	if truncated > 0 {
+	if len(dexport) > maxExports {
+		total := len(dexport)
+		if ctxt.BuildMode == BuildModePlugin {
+			// A plugin over the cap cannot be published usefully:
+			// dropping symbols in loader-index order silently removes
+			// arbitrary exports (trendvidia/go#39), and since the ABI
+			// fence the dropped go:plugin.abi marker would have
+			// plugin.Open reject the DLL as "not built by this fork's
+			// toolchain" — a false statement about a DLL this link just
+			// built. Fail here instead, naming the limit, and abort the
+			// link outright rather than letting asmb continue toward an
+			// image that cannot be published.
+			Errorf("link: %s exports %d symbols, more than the %d a PE image can address; reduce the exported surface",
+				peOutputDisplayName(), total, maxExports)
+			errorexit()
+		}
 		fmt.Fprintf(os.Stderr, "link: warning: %s exports %d symbols, more than the %d a PE image can address; "+
 			"%d were dropped and cannot be resolved by GetProcAddress.\n",
-			filepath.Base(*flagOutfile), len(dexport)+truncated, maxExports, truncated)
+			peOutputDisplayName(), total, maxExports, total-maxExports)
+		dexport = dexport[:maxExports]
 	}
 
 	sort.Slice(dexport, func(i, j int) bool {
@@ -2198,6 +2207,24 @@ func hasPluginPkg(ctxt *Link) bool {
 	return false
 }
 
+// peOutputDisplayName returns the user-visible name of the image being
+// linked, for diagnostics. cmd/go links to objdir/a.out.exe (a.out.dll
+// for plugins) and copies to the requested path afterwards, passing the
+// real name via -pluginexename for every Windows link with -o, so the
+// output-file base is not what the user asked to build. Naming the temp
+// file in a diagnostic points the reader at a path that no longer exists
+// by the time they read it.
+//
+// peGenerateImportLibrary picks the DLL name the same way; keep the two
+// in step so a message and the import library agree on what to call the
+// image.
+func peOutputDisplayName() string {
+	if *flagPluginExeName != "" {
+		return *flagPluginExeName
+	}
+	return filepath.Base(*flagOutfile)
+}
+
 // pePluginExportFile creates a .def file listing every CgoExportDynamic
 // symbol in the plugin DLL. Returns the file path, or "" if no symbols
 // to export. The .def file's EXPORTS list overrides mingw ld's
@@ -2221,6 +2248,16 @@ func pePluginExportFile(ctxt *Link) string {
 		return ""
 	}
 	sort.Strings(names)
+	// Same policy as initdynexport's internal-linking check
+	// (trendvidia/go#39): a plugin over the PE export limit fails the
+	// link here, naming the limit, rather than handing mingw ld an
+	// EXPORTS list it rejects with its own opaque "export ordinal too
+	// large" error. Abort outright for the same reason as there.
+	if len(names) > peExportLimit {
+		Errorf("link: %s exports %d symbols, more than the %d a PE image can address; reduce the exported surface",
+			peOutputDisplayName(), len(names), peExportLimit)
+		errorexit()
+	}
 
 	fname := filepath.Join(*flagTmpdir, "plugin_exports.def")
 	var buf bytes.Buffer

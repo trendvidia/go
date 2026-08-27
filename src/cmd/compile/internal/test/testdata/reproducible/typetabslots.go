@@ -4,10 +4,16 @@
 
 package typetabslots
 
-// Interface-heavy fixture compiled by TestTypetabSlotsReproducible:
-// under -typetab each type-descriptor / itab reference below routes
-// through a go.typeptr./go.itabptr. slot that is recorded during
-// parallel compilation and emitted once at dumpdata time.
+// Interface-heavy fixture compiled by TestTypetabSlotsReproducible and
+// TestTypetabSlotsPresent: under -typetab each type-descriptor / itab
+// reference below routes through a go.typeptr./go.itabptr. slot that is
+// recorded during parallel compilation and emitted once at dumpdata
+// time.
+//
+// TestTypetabSlotsPresent names the exact slots this file must produce
+// (typetabSlotsWant in ../../typetab_test.go), including which compiler
+// path records each one, so editing the types or conversions here means
+// updating that list too.
 
 type Counter struct{ n int }
 

@@ -1199,6 +1199,14 @@ func writeBlocks(ctxt *Link, out *OutBuf, sem chan int, ldr *loader.Loader, syms
 				next = syms[idx+1]
 			}
 			length = ldr.SymValue(next) - addr
+			if length < 0 {
+				// syms is not sorted by address: a negative length
+				// would drive written/addr backwards and the next
+				// OutBuf.View offset would wrap (trendvidia/go#49).
+				// Name the symbol and stop instead.
+				ldr.Errorf(next, "phase error: writeBlocks: next symbol has val=%#x before current addr=%#x type=%v", ldr.SymValue(next), addr, ldr.SymType(next))
+				errorexit()
+			}
 		}
 		if length == 0 || length > lastAddr-addr {
 			length = lastAddr - addr
@@ -1247,7 +1255,17 @@ func writeBlock(ctxt *Link, out *OutBuf, ldr *loader.Loader, syms []loader.Sym, 
 			break
 		}
 		if val < addr {
-			ldr.Errorf(s, "phase error: addr=%#x but val=%#x sym=%s type=%v sect=%v sect.addr=%#x prev=%s", addr, val, ldr.SymName(s), ldr.SymType(s), ldr.SymSect(s).Name, ldr.SymSect(s).Vaddr, ldr.SymName(prev))
+			// This is the sibling of writeBlocks' sorted-input check, and
+			// it fires on the same shape of input: a symbol that landed in
+			// the block list below the write cursor. Such a symbol is
+			// typically one that never got a section (SymSect is nil until
+			// address() assigns one, and never does for TLS BSS), so the
+			// diagnostic must not dereference it (trendvidia/go#49).
+			sectName, sectAddr := "<nil>", uint64(0)
+			if sect := ldr.SymSect(s); sect != nil {
+				sectName, sectAddr = sect.Name, sect.Vaddr
+			}
+			ldr.Errorf(s, "phase error: addr=%#x but val=%#x sym=%s type=%v sect=%v sect.addr=%#x prev=%s", addr, val, ldr.SymName(s), ldr.SymType(s), sectName, sectAddr, ldr.SymName(prev))
 			errorexit()
 		}
 		prev = s
@@ -2422,12 +2440,34 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 		Errorf("read-only data segment too large: %d", state.datsize)
 	}
 
+	state.buildDatap(ctxt)
+}
+
+// buildDatap collects the allocated data symbols into ctxt.datap, in the
+// address order the segment-content writers require.
+//
+// datap drives writeBlocks, which requires it sorted by address. STLSBSS
+// symbols stay out: TLS BSS is never file-backed, and their values are
+// offsets within the TLS block (the .tbss section, where one exists, pins
+// Vaddr to 0), not image addresses. Appending them after the BSS symbols
+// hands writeBlocks a near-zero "address" at the tail of the list; on a
+// Windows plugin — whose .bss/.noptrbss are empty because the runtime's
+// data lives in the host — a block boundary inside the last .data symbol
+// then made runtime.tlsg the next block's start and drove the write offset
+// negative by the image base (trendvidia/go#49).
+func (state *dodataState) buildDatap(ctxt *Link) {
 	siz := 0
 	for symn := sym.SELFRXSECT; symn < sym.SFirstUnallocated; symn++ {
+		if symn == sym.STLSBSS {
+			continue
+		}
 		siz += len(state.data[symn])
 	}
 	ctxt.datap = make([]loader.Sym, 0, siz)
 	for symn := sym.SELFRXSECT; symn < sym.SFirstUnallocated; symn++ {
+		if symn == sym.STLSBSS {
+			continue
+		}
 		ctxt.datap = append(ctxt.datap, state.data[symn]...)
 	}
 }

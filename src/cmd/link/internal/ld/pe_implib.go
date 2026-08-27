@@ -308,8 +308,39 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.suspendLock":               true,
 	"runtime.isWaitingForSuspendG":      true,
 	"runtime.didothers":                 true,
-	"runtime.boringCaches":              true,
-	"runtime.reflectOffs":               true,
+	// Host-shared, and NOT guarded against a plugin-only registration
+	// dangling after Close (trendvidia/go#68).
+	//
+	// crypto/rsa and crypto/ecdsa register pointers to their package
+	// globals into this slice from init, through
+	// crypto/internal/boring/bcache. #66 stops a plugin re-running the init
+	// of a package the host also links, but a package linked ONLY by the
+	// plugin legitimately runs its init — so a plugin-only crypto/rsa puts
+	// plugin-resident data in this host-shared slice, and clearpools stores
+	// nil through it at the first GC after the image is unmapped. That is
+	// the runtime.poolcleanup fault of #61, one indirection later.
+	//
+	// MEASURED 2026-08-27 (go1.26.5): the configuration is reachable today,
+	// and #68's premise for calling it out of scope — "crypto/internal/boring
+	// is //go:build boringcrypto && linux && ..., so no Windows boringcrypto
+	// build can exist" — does not hold. That constraint covers the cgo
+	// BoringSSL binding, which decides whether the cache is USED; the
+	// registrants are gated on `boringcrypto` alone and bcache carries no
+	// constraint at all, so `GOEXPERIMENT=boringcrypto GOOS=windows go build`
+	// links crypto/rsa.pubCache, bcache.registerCache and
+	// runtime.boringCaches, with rsa's init calling Register()
+	// unconditionally. Nothing in cmd/go or cmd/link refuses boringcrypto
+	// with -buildmode=plugin, and the slice is not per-module: a plugin's
+	// runtime.boringCaches binds to the host's (that is what this entry
+	// does on PE; on ELF/Mach-O the symbol interposes) while an unshared
+	// crypto/rsa.pubCache stays plugin-resident.
+	//
+	// So this entry is not a guard, and the choice #68 has to make —
+	// unregister at Close, or refuse the configuration at link time — is
+	// still open. Pinned by TestBoringCachesRegistrantsAreNotPlatformGated,
+	// which fails if those constraints move in either direction.
+	"runtime.boringCaches": true,
+	"runtime.reflectOffs":  true,
 
 	// User-package globals shared from the host binary. Pairs with
 	// runtime.pluginSkipInitPkgs in src/runtime/plugin.go: when a

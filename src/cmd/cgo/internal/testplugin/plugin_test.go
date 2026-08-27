@@ -910,19 +910,35 @@ func runExpectFault(t *testing.T, bin string, args ...string) {
 //     function values reached through such closures share the same
 //     call-into-unmapped-text mechanism,
 //
-//   - if the path is reopened instead, stale references silently
-//     alias the NEW instance because the loader maps it at the same
-//     addresses.
+//   - if the path is reopened instead and the loader maps the new
+//     instance at the base the closed one occupied, stale references
+//     silently alias the NEW instance.
 //
 // The two fatal classes each run in their own subprocess via
-// runExpectFault; the aliasing cell runs in-process-safe subprocess
-// form too, so a future loader that stops reusing addresses turns the
-// test failure into reported output instead of a dead test binary.
+// runExpectFault. The aliasing cell runs as a subprocess too. It
+// first pins that the reopen really produced a fresh instance (the
+// reopened Counter reads its declared 0, not the 1 the closed
+// instance was left at), because every claim below rests on that.
+// The aliasing assertions themselves are then conditional: the
+// loader does not promise to reuse the base (on Windows it was
+// measured moving about 1 in 6 runs on arm64,
+// trendvidia/go#47), and a stale pointer into a moved-away range is
+// unmapped or aliases something unrelated, so the probe compares the
+// two Lookup addresses first and only asserts aliasing when they
+// match. Either outcome is a pass; the parent requires the probe to
+// say which it took so a silently non-asserting fixture cannot hide.
 func TestCloseHazardEnvelope(t *testing.T) {
 	globalSkip(t)
 	runExpectFault(t, "./hazards.exe", "closure")
 	runExpectFault(t, "./hazards.exe", "dataptr")
-	run(t, "./hazards.exe", "alias")
+	out := run(t, "./hazards.exe", "alias")
+	switch {
+	case strings.Contains(out, "hazards alias ok:"):
+	case strings.Contains(out, "hazards alias skipped:"):
+		t.Logf("alias cell not asserted this run: %s", strings.TrimSpace(out))
+	default:
+		t.Fatalf("hazards alias: neither \"ok\" nor \"skipped\" reported; output:\n%s", out)
+	}
 }
 
 // TestPeerVersionLock exercises the peer-plugin half of the version

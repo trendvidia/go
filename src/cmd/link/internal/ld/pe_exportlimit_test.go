@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -377,4 +378,152 @@ func TestPEExportLimitAbortChild(t *testing.T) {
 	// Reaching here means the link would have gone on to produce a DLL
 	// whose exports the loader cannot address.
 	t.Fatalf("%s over-limit link returned instead of aborting", mode)
+}
+
+// newExportABIPair returns a windows/amd64 plugin context whose loader
+// holds one function present under BOTH ABI versions -- an ABI0 text
+// symbol and an ABIInternal text symbol sharing a name -- plus three
+// single-ABI functions alongside it: one plain, one whose extname
+// differs from its symbol name, and one whose name peSkipSymName drops.
+//
+// The pair is the shape mangleABIName exists for: it renames the ABI0
+// entry to "X.abi0" and leaves the ABIInternal one as "X", so the two
+// are distinguishable in an export table. A walk keyed on the raw name
+// sees "X" twice instead.
+func newExportABIPair(t *testing.T) *Link {
+	t.Helper()
+	origGOARCH := buildcfg.GOARCH
+	buildcfg.GOARCH = sys.ArchAMD64.Name
+	// mangleABIName reads the package-level experiment set, not the
+	// context's arch, so a host whose GOARCH has no regabi support (or a
+	// GOEXPERIMENT=noregabiwrappers build) would otherwise see an
+	// unmangled export set and the pin would test nothing. A windows/amd64
+	// cross-link from such a host does mangle; set the flag the target
+	// implies rather than skipping.
+	origExp := buildcfg.Experiment
+	buildcfg.Experiment.RegabiWrappers = true
+	t.Cleanup(func() {
+		buildcfg.GOARCH = origGOARCH
+		buildcfg.Experiment = origExp
+	})
+	ctxt := setUpContext(sys.ArchAMD64, false, objabi.Hwindows, "plugin", "external")
+	ldr := ctxt.loader
+	for _, v := range []int{sym.SymVerABI0, sym.SymVerABIInternal} {
+		sb := ldr.CreateSymForUpdate("p.Both", v)
+		sb.SetType(sym.STEXT)
+		sb.SetReachable(true)
+		ldr.SetAttrCgoExportDynamic(sb.Sym(), true)
+	}
+	for _, name := range []string{"p.Solo", "p.Renamed", "_p.Underscore"} {
+		sb := ldr.CreateSymForUpdate(name, sym.SymVerABIInternal)
+		sb.SetType(sym.STEXT)
+		sb.SetReachable(true)
+		ldr.SetAttrCgoExportDynamic(sb.Sym(), true)
+	}
+	// What a two-argument //go:cgo_export_dynamic Local Remote leaves
+	// behind (go.go): extname is the name the directive asked for, while
+	// the object this link emits still defines the symbol under SymName.
+	ldr.SetSymExtname(ldr.Lookup("p.Renamed", sym.SymVerABIInternal), "p.RemoteName")
+	return ctxt
+}
+
+// defNames reads an EXPORTS-format .def and returns the listed names.
+func defNames(t *testing.T, path string) []string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "EXPORTS" {
+		t.Fatalf(".def does not start with EXPORTS:\n%s", b)
+	}
+	var out []string
+	for _, l := range lines[1:] {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// TestPluginExportFileABIPairs pins the naming and de-duplication of the
+// .def handed to an external linker (trendvidia/go#53).
+//
+// A function carrying both ABI versions must appear as "X" and "X.abi0",
+// each exactly once. Keyed on the raw symbol name it appeared as "X"
+// twice and the ABI0 body was unnameable -- and initdynexport's comment
+// records that external-link plugins are precisely the case needing the
+// ABI0 export by name, since the host's ABIInternal wrapper clobbers the
+// caller's stack argument before tail-calling the ABI0 body.
+//
+// The other two properties pinned here are the ones the ABI fix must not
+// disturb: names come from SymName and not SymExtname, because ld has to
+// resolve each EXPORTS line against the object this link emitted; and
+// peSkipSymName still runs on that name.
+func TestPluginExportFileABIPairs(t *testing.T) {
+	ctxt := newExportABIPair(t)
+	resetExportState(t)
+	oldTmpdir := *flagTmpdir
+	*flagTmpdir = t.TempDir()
+	t.Cleanup(func() { *flagTmpdir = oldTmpdir })
+
+	fname := pePluginExportFile(ctxt)
+	if fname == "" {
+		t.Fatal("pePluginExportFile returned no file for a non-empty export set")
+	}
+	got := defNames(t, fname)
+
+	counts := map[string]int{}
+	for _, n := range got {
+		counts[n]++
+	}
+	for _, want := range []string{"p.Both", "p.Both.abi0", "p.Solo", "p.Renamed"} {
+		switch counts[want] {
+		case 1:
+		case 0:
+			t.Errorf("%q missing from .def; got %v", want, got)
+		default:
+			t.Errorf("%q listed %d times, want once; got %v", want, counts[want], got)
+		}
+	}
+	// The extname is what the directive wants the world to call it, but
+	// no object in this link defines that name; ld would fail the link
+	// with "cannot export p.RemoteName: symbol not found".
+	if counts["p.RemoteName"] != 0 {
+		t.Errorf(".def names the extname p.RemoteName, which no object defines; got %v", got)
+	}
+	// peSkipSymName drops leading-underscore names on this path as it
+	// does on the other two walks.
+	if counts["_p.Underscore"] != 0 {
+		t.Errorf(".def lists %q, which peSkipSymName rejects; got %v", "_p.Underscore", got)
+	}
+	for n, c := range counts {
+		if c > 1 {
+			t.Errorf("duplicate .def entry %q (x%d)", n, c)
+		}
+	}
+	if !sort.StringsAreSorted(got) {
+		t.Errorf(".def entries not sorted: %v", got)
+	}
+}
+
+// TestPluginExportFileEmpty pins the other end of the range: with nothing
+// to export, pePluginExportFile writes no file and returns "", which is
+// what peExportArgs tests before adding the .def to the link line. A
+// stray empty EXPORTS file would make mingw ld export nothing at all.
+func TestPluginExportFileEmpty(t *testing.T) {
+	ctxt := newExportCandidates(t, "plugin", 0)
+	resetExportState(t)
+	tmpdir := t.TempDir()
+	oldTmpdir := *flagTmpdir
+	*flagTmpdir = tmpdir
+	t.Cleanup(func() { *flagTmpdir = oldTmpdir })
+
+	if fname := pePluginExportFile(ctxt); fname != "" {
+		t.Errorf("pePluginExportFile = %q for an empty export set, want \"\"", fname)
+	}
+	if _, err := os.Stat(filepath.Join(tmpdir, "plugin_exports.def")); err == nil {
+		t.Error("pePluginExportFile wrote a .def for an empty export set")
+	}
 }

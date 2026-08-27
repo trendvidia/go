@@ -2234,14 +2234,43 @@ func peOutputDisplayName() string {
 func pePluginExportFile(ctxt *Link) string {
 	ldr := ctxt.loader
 	var names []string
+	// ABI-mangle and de-duplicate as initdynexport (pe.go) and the
+	// import-library walk (pe_implib.go) do. Three walks over the same
+	// export set had drifted into three disciplines: this one took the
+	// raw SymName and never de-duplicated. On the unmangled name a
+	// function carrying both an ABI0 and an ABIInternal text symbol
+	// yields the same string twice -- so the .def listed it twice and
+	// named the ABI0 body not at all, though initdynexport's comment
+	// explains why external-link plugins are the case that needs the
+	// ABI0 export by name. No plugin export set observed at 60fd56dbc4
+	// contains such a pair (measured: trendvidia/go#53), so this is
+	// latent rather than a live defect -- which is exactly why it ships
+	// with the pin in TestPluginExportFileABIPairs rather than waiting
+	// for a plugin that trips it.
+	//
+	// The name basis stays SymName, and deliberately does not follow the
+	// other two walks onto SymExtname. Those two write names the loader
+	// reads (the PE export directory, the import library), where extname
+	// is the intended public name and nothing has to resolve it. This
+	// .def is an input to mingw ld/lld-link, whose EXPORTS lines must
+	// name symbols defined in the object this link just emitted -- and
+	// writeSymbols above names defined symbols by SymName, substituting
+	// SymExtname only for SHOSTOBJ/SUNDEFEXT host imports. A two-argument
+	// //go:cgo_export_dynamic Local Remote sets extname to Remote (see
+	// go.go), so naming the .def by extname would ask ld to export a
+	// symbol no object defines. Publishing such a symbol under its remote
+	// name would need the "Remote = Local" .def form, which nothing needs
+	// today; TestPluginExportFileABIPairs pins the SymName basis.
+	seen := make(map[string]bool)
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
 		if !ldr.AttrReachable(s) || !ldr.AttrCgoExportDynamic(s) {
 			continue
 		}
-		name := ldr.SymName(s)
-		if peSkipSymName(name) {
+		name := mangleABIName(ctxt, ldr, s, ldr.SymName(s))
+		if peSkipSymName(name) || seen[name] {
 			continue
 		}
+		seen[name] = true
 		names = append(names, name)
 	}
 	if len(names) == 0 {

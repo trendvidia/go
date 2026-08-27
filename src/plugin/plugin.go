@@ -238,15 +238,29 @@ func (p *Plugin) Lookup(symName string) (Symbol, error) {
 // executing plugin code as its image unmaps; the application must
 // ensure every goroutine has returned from calls into the plugin
 // before invoking Close.
+//
+// Close reports an error, and unloads nothing, for a Plugin value
+// that [Open] did not hand out: a zero plugin.Plugin{}, and equally
+// a struct copy of an opened Plugin, since closing a copy would
+// unmap the image while the original stayed live in Open's cache.
+// A rejected value is not marked closed, so a repeated Close keeps
+// reporting the same error. Close on a nil *Plugin is a no-op and
+// returns nil.
 func (p *Plugin) Close() error {
 	return closePlugin(p)
 }
 
 // HasDependents reports whether any other plugin currently holds
-// canonicalised references into p. If false, [Plugin.Close] is
-// guaranteed to succeed.
+// canonicalised references into p. For a Plugin returned by [Open],
+// false means [Plugin.Close] will not be refused for dependents;
+// Close rejects a Plugin that Open did not hand out whatever this
+// reports, since such a value names no loaded plugin at all.
+//
+// A Plugin that Open did not hand out — a zero value, or a struct
+// copy of an opened Plugin — reports false, as does one that has
+// already been closed.
 func (p *Plugin) HasDependents() bool {
-	return pluginHasDependents(p.pluginpath)
+	return pluginHasDependents(p.snapshotPath())
 }
 
 // Dependents returns the pluginpaths of plugins that currently
@@ -254,10 +268,57 @@ func (p *Plugin) HasDependents() bool {
 // those plugins (or release their references) before Closing p.
 //
 // The returned slice is a snapshot; concurrent loads or closes may
-// invalidate it. The host program (the main executable) is omitted
-// from the list since it does not Unload.
+// invalidate it, but the strings in it are owned by the caller and
+// stay readable after the plugins they name are closed. The host
+// program (the main executable) is omitted from the list since it
+// does not Unload.
+//
+// A Plugin that Open did not hand out — a zero value, or a struct
+// copy of an opened Plugin — returns nil, as does one that has
+// already been closed.
 func (p *Plugin) Dependents() []string {
-	return pluginDependents(p.pluginpath)
+	return pluginDependents(p.snapshotPath())
+}
+
+// snapshotPath returns a host-owned copy of p.pluginpath taken
+// under pluginsMu, or "" for a value that names no loaded plugin.
+//
+// closePlugin rewrites the field under the mutex (it clones the
+// bytes out of the plugin's RODATA before dlclose unmaps them), so
+// an unlocked read races the write (trendvidia/go#36). Locking the
+// read alone is not enough: the caller runs the runtime hook after
+// the mutex is dropped, so a Close completing in that window leaves
+// the returned header pointing into RODATA that dlclose has since
+// unmapped, and runtime.findPluginModule's string comparison
+// dereferences it as soon as a surviving module's pluginpath has
+// the same length. Cloning inside the critical section detaches the
+// value from the mapping, which keeps the runtime hook outside the
+// critical section, so canonicalSymsLock is never taken while
+// pluginsMu is held (lock order at pluginsMu's doc comment).
+//
+// The clone is what makes the identity check mandatory rather than
+// tidy: it copies len(pluginpath) bytes unconditionally, so it
+// dereferences a header the caller may no longer own. Only while p
+// is in the plugins cache are those bytes guaranteed mapped —
+// closePlugin holds pluginsMu from the guard through unloadPlugin's
+// dlclose and cache removal, so a cached entry cannot be unmapped
+// under us. Everything else (a zero value, a struct copy of an
+// opened Plugin, an already-closed plugin unloadPlugin evicted)
+// names no loaded plugin, and its pluginpath may point into an
+// image dlclose has already unmapped; cloning that faults. ""
+// is what findPluginModule refuses, so both accessors report no
+// dependents for such a value instead of dying.
+//
+// Unlocking via defer so a nil-receiver panic here releases
+// pluginsMu instead of wedging every later Open/Lookup/Close, as
+// lookup does for the same reason.
+func (p *Plugin) snapshotPath() string {
+	pluginsMu.Lock()
+	defer pluginsMu.Unlock()
+	if !openedByOpen(p) {
+		return ""
+	}
+	return cloneString(p.pluginpath)
 }
 
 // pluginHasDependents, pluginDependents, and pluginClose are
@@ -329,6 +390,41 @@ func closePlugin(p *Plugin) error {
 		// Already closed (or failed to load); idempotent return.
 		return nil
 	}
+	// Only the *Plugin Open handed out may be closed, and openedByOpen
+	// is what decides it — the field test beside it only catches the
+	// cheapest spelling of the misuse. Plugin is an exported struct, so
+	// plugin.Plugin{} / new(plugin.Plugin) compile anywhere; such a
+	// value has pluginpath == "" and loaded == nil. The host
+	// executable's moduledata also has pluginpath == "" (the linker
+	// only emits go:link.thispluginpath under -buildmode=plugin), so
+	// handing "" to pluginClose would select the HOST module, mark it
+	// bad and empty activeModules() — the next GC then has no roots and
+	// no way to resolve PCs, and the process dies silently with exit
+	// status 0 (trendvidia/go#35). The runtime refuses pluginpath == ""
+	// independently; this check turns the misuse into an error before
+	// the runtime is involved.
+	//
+	// A struct COPY of an opened Plugin (q := *p) passes both field
+	// tests, so neither would stop it: closing the copy tears the
+	// runtime state down and unmaps the image, then nils the COPY's
+	// syms and sets the COPY's err, leaving Open's cached original with
+	// err == "" and a syms map full of addresses the OS has unmapped.
+	// unloadPlugin's cache cleanup misses it too (it deletes by
+	// *Plugin identity), so the next Open of that path short-circuits
+	// on the stale entry and hands those addresses back. Identity is
+	// the only test that catches this.
+	//
+	// The refusal formats "" rather than p.pluginpath, and that is
+	// not cosmetic: for a copy taken before the original's Close,
+	// the copy still holds the pre-clone header into the plugin's
+	// RODATA, which dlclose has since unmapped. pluginError.Error
+	// concatenates the path, so naming it would fault inside the
+	// very error this guard exists to hand back — on the path
+	// Plugin.Close's doc tells callers to inspect. A value that did
+	// not come from Open has no path worth naming anyway.
+	if p.loaded == nil || p.pluginpath == "" || !openedByOpen(p) {
+		return pluginErr("Close", "", "plugin was not opened by plugin.Open")
+	}
 	// p.pluginpath's bytes live in the plugin's RODATA — dlclose in
 	// phase 2 unmaps that memory, leaving the string header dangling.
 	// Anything that reads p.pluginpath after Close (e.g. lookup()'s
@@ -363,6 +459,25 @@ func closePlugin(p *Plugin) error {
 	p.handle = 0
 	p.err = "closed"
 	return nil
+}
+
+// openedByOpen reports whether p is the *Plugin that Open cached for
+// some path — the only kind of value Close may act on, and the only
+// kind whose pluginpath bytes are known to still be mapped (see
+// snapshotPath). Matching by
+// pointer identity, not by path, is what distinguishes the cached
+// original from a struct copy of it; unloadPlugin's cache cleanup
+// scans the same map the same way. The map holds one entry per
+// opened path, so the walk is over a handful of entries.
+//
+// Caller holds pluginsMu.
+func openedByOpen(p *Plugin) bool {
+	for _, q := range plugins {
+		if q == p {
+			return true
+		}
+	}
+	return false
 }
 
 // pluginErr formats an error from a plugin operation. Kept simple

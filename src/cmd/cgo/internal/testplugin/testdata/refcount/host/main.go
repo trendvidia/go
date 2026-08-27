@@ -94,6 +94,24 @@ func main() {
 	if err := b.Close(); err != nil {
 		fail("b.Close(): %v", err)
 	}
+
+	// deps was snapshotted while plugB was mapped, and plugB's
+	// Close just unmapped it. Reading the snapshot back must still
+	// work: the strings runtime.plugin_dependents returns have to
+	// be copies in host memory, not headers into the dependent's
+	// RODATA (the hazard plugin.closePlugin clones p.pluginpath
+	// for). Comparing against an equal-length constant is what
+	// reaches memequal and dereferences them.
+	found = false
+	for _, d := range deps {
+		if d == "testplugin/refcount/plugB" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		fail("after b.Close, the a.Dependents() snapshot no longer reads back %q: %v", "testplugin/refcount/plugB", deps)
+	}
 	if a.HasDependents() {
 		fail("after b.Close, a.HasDependents() = true; want false")
 	}

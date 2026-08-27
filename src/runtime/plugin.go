@@ -493,7 +493,17 @@ type ptabEntry struct {
 // concerns between canonicalSymsLock and modulesSlice's atomicity
 // (modulesSlice is read via activeModules without taking a lock —
 // it's atomic-store/atomic-load).
+//
+// The empty pluginpath never matches: the host executable's
+// moduledata has pluginpath == "" (only -buildmode=plugin links
+// emit go:link.thispluginpath), and selecting the host here would
+// let plugin_close mark it bad and empty activeModules(), which
+// kills the next GC silently (trendvidia/go#35). Every linkname
+// caller — not only package plugin — gets this guard.
 func findPluginModule(pluginpath string) *moduledata {
+	if pluginpath == "" {
+		return nil
+	}
 	for _, md := range activeModules() {
 		if md.pluginpath == pluginpath {
 			return md
@@ -525,7 +535,19 @@ func plugin_dependents(pluginpath string) []string {
 		// use Dependents() to know which other plugins to Close
 		// first, and the host doesn't unload.
 		if dep.pluginpath != "" {
-			out = append(out, dep.pluginpath)
+			// Copy into host-owned memory. dep.pluginpath's bytes
+			// live in the DEPENDENT plugin's RODATA, which that
+			// plugin's own Close unmaps — the same hazard
+			// plugin.closePlugin clones p.pluginpath for. The
+			// caller keeps this slice across exactly that Close
+			// (Dependents exists to say which plugins to close
+			// first), and its doc promises a stale snapshot, not
+			// a fatal one. Allocating under canonicalSymsLock is
+			// what this function already does for out itself, and
+			// pluginDependentsMsg for its message.
+			s, b := rawstring(len(dep.pluginpath))
+			copy(b, dep.pluginpath)
+			out = append(out, s)
 		}
 	}
 	return out
@@ -632,6 +654,12 @@ func neutraliseStaticDescriptors(md *moduledata, stubPC uintptr) {
 
 //go:linkname plugin_close plugin.pluginClose
 func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string) {
+	if pluginpath == "" {
+		// Belt and braces with findPluginModule: "" names the host
+		// executable's moduledata, which must never be closed
+		// (trendvidia/go#35).
+		return "empty pluginpath names the host program, not a plugin"
+	}
 	lock(&canonicalSymsLock)
 	defer unlock(&canonicalSymsLock)
 

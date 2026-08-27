@@ -177,8 +177,25 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "panicstub.exe", "./panicstub")
 	goCmdBuildPluginFor(nil, "panicstub", "-o=panicstub-plugin1"+pluginSuffix, "./plugin1")
 
-	goCmd(nil, "build", "-o", "lookuprace.exe", "./lookuprace")
-	goCmdBuildPluginFor(nil, "lookuprace", "-o=lookuprace-plugin1"+pluginSuffix, "./plugin1")
+	// Race fixtures: host and plugin are both built -race where the
+	// platform supports it (see raceFlags), so an unsynchronised
+	// read in package plugin is reported as a DATA RACE (exit 66)
+	// instead of passing by timing. goCmd alone never adds -race,
+	// and instrumenting this harness would only instrument the
+	// exec'ing test binary, not the fixture it runs.
+	goCmd(nil, "build", append(raceFlags(), "-o", "lookuprace.exe", "./lookuprace")...)
+	goCmdBuildPluginFor(nil, "lookuprace", append(raceFlags(), "-o=lookuprace-plugin1"+pluginSuffix, "./plugin1")...)
+
+	goCmd(nil, "build", append(raceFlags(), "-o", "depsrace.exe", "./depsrace")...)
+	goCmdBuildPluginFor(nil, "depsrace", append(raceFlags(), "-o=depsrace-plugin1"+pluginSuffix, "./plugin1")...)
+	// Second plugin: its pluginpath is the same length as plugin1's,
+	// which is what makes findPluginModule's comparison dereference a
+	// dangling snapshot after plugin1 closes. See the fixture's
+	// package comment.
+	goCmdBuildPluginFor(nil, "depsrace", append(raceFlags(), "-o=depsrace-plugin2"+pluginSuffix, "./plugin2")...)
+
+	goCmd(nil, "build", "-o", "zeroclose.exe", "./zeroclose")
+	goCmdBuildPluginFor(nil, "zeroclose", "-o=zeroclose-plugin1"+pluginSuffix, "./plugin1")
 
 	goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
 	goCmdBuildPluginFor(nil, "closeunmaps", "-o=closeunmaps-plugin1"+pluginSuffix, "./plugin1")
@@ -256,6 +273,27 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "rejectchained", "-o=reject-peer"+pluginSuffix, "./rejectchained/peer")
 
 	return m.Run()
+}
+
+// raceFlags returns the build flags that instrument a fixture with
+// the race detector, or nil where this platform cannot: the detector
+// itself is platform-gated, and outside darwin/linux its runtime
+// needs cgo. Fixtures built with these flags still run — and still
+// test their behavioural assertions — when the result is nil; only
+// the data-race reporting is lost.
+func raceFlags() []string {
+	if !platform.RaceDetectorSupported(runtime.GOOS, runtime.GOARCH) {
+		return nil
+	}
+	// macOS is the only exemption cmd/go grants: see
+	// cmd/go/internal/work/init.go ("On macOS, -race does not
+	// require cgo"), where anything else without cgo exits 2 with
+	// "-race requires cgo" — which here would be a goCmd panic
+	// taking the whole package down, not a skipped fixture.
+	if !testenv.HasCGO() && runtime.GOOS != "darwin" {
+		return nil
+	}
+	return []string{"-race"}
 }
 
 func goCmd(t *testing.T, op string, args ...string) string {
@@ -853,6 +891,49 @@ func TestPanicOnCallStub(t *testing.T) {
 func TestLookupDuringClose(t *testing.T) {
 	globalSkip(t)
 	run(t, "./lookuprace.exe")
+}
+
+// TestDependentsDuringClose races HasDependents/Dependents against
+// Close (trendvidia/go#36). Both accessors must snapshot
+// p.pluginpath under pluginsMu AND copy it into host memory there,
+// since closePlugin rewrites the field and then unmaps the bytes it
+// pointed at, all under the same mutex. The fixture and its plugins
+// are built -race where supported, so the pre-fix unlocked read
+// fails this test as a reported DATA RACE; it keeps a second plugin
+// mapped so a snapshot that still points into the closed plugin is
+// dereferenced rather than skipped on a length mismatch.
+func TestDependentsDuringClose(t *testing.T) {
+	globalSkip(t)
+	out := run(t, "./depsrace.exe")
+	if !strings.Contains(out, "depsrace ok") {
+		t.Fatalf("depsrace.exe did not run to completion:\n%s", out)
+	}
+}
+
+// TestCloseZeroValue closes Plugin values that Open did not hand
+// out (trendvidia/go#35). Close must return an error for both
+// spellings, and must be able to format that error even when the
+// value's pluginpath points into an image that is already unmapped: the zero value, whose empty pluginpath used to select
+// the HOST module in the runtime, mark it bad and empty
+// activeModules() — after which the next GC killed the process
+// silently with exit status 0 — and a struct copy of an opened
+// Plugin, which passes every field test and would unmap the image
+// out from under Open's still-cached original. The fixture asserts
+// both errors and that the original still works, then GCs, captures
+// a stack and churns the heap, and must print "survived".
+func TestCloseZeroValue(t *testing.T) {
+	globalSkip(t)
+	out := run(t, "./zeroclose.exe")
+	if !strings.Contains(out, "survived") {
+		t.Fatalf("zeroclose.exe did not report survival:\n%s", out)
+	}
+	// run() only fails on a non-zero exit, and the failure class
+	// this fixture is about (a host module unlinked, or a fault
+	// formatting a rejection) can end the process without one.
+	// Require the last line too, not just the midpoint.
+	if !strings.Contains(out, "copy rejected, original closed") {
+		t.Fatalf("zeroclose.exe did not finish the struct-copy legs:\n%s", out)
+	}
 }
 
 // TestCloseUnloadsMemory verifies that v2's Plugin.Close actually

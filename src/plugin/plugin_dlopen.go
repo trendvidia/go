@@ -84,6 +84,22 @@ func open(name string) (*Plugin, error) {
 			return nil, errors.New(`plugin.Open("` + name + `"): ` + err + ` (previous failure)`)
 		}
 		<-p.loaded
+		// The load we waited on may have failed after the read
+		// above: the could-not-find-symbol path below marks the
+		// cached entry failed and then closes loaded, so a waiter
+		// that arrived while that load was in flight would
+		// otherwise be handed (p, nil) for a *Plugin whose syms are
+		// nil and whose Close silently no-ops — a failed load
+		// reported as a success. Re-read p.err under the mutex and
+		// report it. closedErr is excluded on purpose: that is the
+		// Close-in-the-window case described above, which keeps
+		// handing back the already-closed *Plugin.
+		pluginsMu.Lock()
+		err = p.err
+		pluginsMu.Unlock()
+		if err != "" && err != closedErr {
+			return nil, errors.New(`plugin.Open("` + name + `"): ` + err + ` (previous failure)`)
+		}
 		return p, nil
 	}
 	var cErr *C.char
@@ -189,9 +205,19 @@ func open(name string) (*Plugin, error) {
 // RODATA before dlclose unmaps those bytes) and p.err while holding
 // the mutex, so an unlocked read here could race a concurrent Close —
 // torn map access at best, a pluginpath dangling into unmapped
-// memory in the error path at worst. Lookup never runs with pluginsMu
-// already held (open and closePlugin do not call it), so taking the
-// mutex here cannot deadlock.
+// memory in the error path at worst.
+//
+// pluginsMu is NOT what orders these reads against the OTHER writer
+// of p.syms: open publishes p.syms and p.funcDescriptors after
+// releasing the mutex, and what makes that safe is the close(p.loaded)
+// happens-before edge — every *Plugin open hands out has passed
+// close(p.loaded) (directly, or via <-p.loaded on the cached path)
+// before any caller can Lookup on it. Any future path that hands out
+// a *Plugin without waiting on p.loaded re-opens this race even with
+// the lock below intact.
+//
+// Lookup never runs with pluginsMu already held (open and closePlugin
+// do not call it), so taking the mutex here cannot deadlock.
 func lookup(p *Plugin, symName string) (Symbol, error) {
 	pluginsMu.Lock()
 	defer pluginsMu.Unlock()

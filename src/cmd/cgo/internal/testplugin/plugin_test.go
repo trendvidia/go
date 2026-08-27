@@ -194,6 +194,13 @@ func testMain(m *testing.M) int {
 	// package comment.
 	goCmdBuildPluginFor(nil, "depsrace", append(raceFlags(), "-o=depsrace-plugin2"+pluginSuffix, "./plugin2")...)
 
+	// Mid-load failure fixture: the pluginpath override diverges from
+	// the compile-time package prefix on purpose, so every symbol
+	// lookup in open()'s fill-in loop fails and the could-not-find-
+	// symbol path runs. See testdata/lookupfail's package comment.
+	goCmd(nil, "build", "-o", "lookupfail.exe", "./lookupfail")
+	goCmdBuildPluginFor(nil, "lookupfail", "-ldflags=-pluginpath=lookupfail.mismatch", "-o=lookupfail-plugin"+pluginSuffix, "./plugin1")
+
 	goCmd(nil, "build", "-o", "zeroclose.exe", "./zeroclose")
 	goCmdBuildPluginFor(nil, "zeroclose", "-o=zeroclose-plugin1"+pluginSuffix, "./plugin1")
 
@@ -884,13 +891,29 @@ func TestPanicOnCallStub(t *testing.T) {
 // (trendvidia/go#23). lookup() must serialise p.syms/p.pluginpath
 // access on pluginsMu; the fixture hammers Lookup from four goroutines
 // while the main goroutine closes, then checks every outcome: results
-// are successes or clean errors only, sampled func values panic via
-// the closed-plugin stub when called afterwards, and a second Close
-// is an idempotent no-op. Under a -race build of this suite, the
-// pre-fix unlocked map read is reported as a data race.
+// are successes or clean errors only and each goroutine sees the
+// post-Close error state itself, sampled func values panic via the
+// closed-plugin stub when called afterwards, and a second Close is an
+// idempotent no-op. The fixture host AND plugin are built with
+// raceFlags (not this harness, which only execs them), so where the
+// platform has a race detector the pre-fix unlocked map read is
+// reported as a data race and fails the run.
 func TestLookupDuringClose(t *testing.T) {
 	globalSkip(t)
 	run(t, "./lookuprace.exe")
+}
+
+// TestOpenSymbolFailure drives open()'s could-not-find-symbol path
+// twice (trendvidia/go#37). That mid-load failure must mark the
+// cached *Plugin failed and close its loaded channel; it used to
+// return with both unset, leaving a placeholder every later Open of
+// the same path blocked on forever. The fixture asserts that every
+// Open reports the error instead of hanging: the racers that were
+// parked on <-p.loaded when the load failed, and the later serial
+// Open, which gets it as "(previous failure)".
+func TestOpenSymbolFailure(t *testing.T) {
+	globalSkip(t)
+	run(t, "./lookupfail.exe")
 }
 
 // TestDependentsDuringClose races HasDependents/Dependents against

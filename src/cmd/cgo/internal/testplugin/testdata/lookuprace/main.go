@@ -10,8 +10,22 @@
 // hammers Lookup from several goroutines while the main goroutine
 // closes the plugin, then validates every outcome:
 //
+//   - the racing goroutines alternate a symbol that exists ("F")
+//     with one that never does ("NoSuchSymbol"), so lookup's error
+//     branch — the read of p.pluginpath, whose plugin-RODATA
+//     backing is the dangling-string hazard — runs against the
+//     live plugin on every other call, not only after Close;
 //   - every recorded result is either a success or a "not found"
-//     error (never a crash — reaching this point proves that);
+//     error of the documented shape (never a crash — reaching this
+//     point proves that);
+//   - each racing goroutine keeps looking up until it has itself
+//     seen "F" fail — which only Close can cause — so the
+//     post-Close leg is exercised by every goroutine regardless of
+//     scheduling, and errCount > 0 is asserted, not assumed. That
+//     wait is bounded by a deadline: a regression that leaves
+//     p.syms populated after Close never makes "F" fail, and
+//     without the bound the workers would spin forever and the
+//     fixture would hang instead of reporting postCloseCount == 0;
 //   - function values handed out before Close still panic with the
 //     recoverable stub message when called afterwards;
 //   - a second Close is an idempotent no-op.
@@ -36,6 +50,14 @@ var pluginExt = func() string {
 }()
 
 func main() {
+	// Backstop for a hang anywhere outside the worker loop's own
+	// deadline — a Lookup or a Close that never returns.
+	go func() {
+		time.Sleep(60 * time.Second)
+		fmt.Fprintln(os.Stderr, "lookuprace: watchdog fired; a Lookup or Close is hung")
+		os.Exit(3)
+	}()
+
 	p, err := plugin.Open("lookuprace-plugin1" + pluginExt)
 	if err != nil {
 		fail("Open(lookuprace-plugin1): %v", err)
@@ -49,25 +71,63 @@ func main() {
 	}
 
 	stop := make(chan struct{})
-	var okCount, errCount int64
+	var okCount, errCount, postCloseCount int64
 	var mu sync.Mutex // guards samples
 	var samples []plugin.Symbol
+
+	// Bound on how long a worker will hold out for its own post-Close
+	// failure. Reaching it means Close did not make "F" stop
+	// resolving — exactly the regression this fixture exists to
+	// catch — so the workers must give up and let main report
+	// postCloseCount == 0 rather than spin until the suite times out.
+	deadline := time.Now().Add(15 * time.Second)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for {
-				select {
-				case <-stop:
-					return
-				default:
+			sawPostClose := false
+			for i := 0; ; i++ {
+				// Honour stop only after this goroutine has itself
+				// observed a post-Close lookup failure: "F" resolves
+				// for as long as the plugin is live, so an error on
+				// it can only mean Close won. Without this, main's
+				// close(stop) — fired the instant Close returns —
+				// can end the loop while every recorded result is
+				// still pre-Close, and the post-Close leg goes
+				// untested on a loaded machine. The deadline is the
+				// escape hatch that keeps main's postCloseCount
+				// assertion reachable when "F" never fails.
+				if sawPostClose || time.Now().After(deadline) {
+					select {
+					case <-stop:
+						return
+					default:
+					}
 				}
-				sym, err := p.Lookup("F")
+				symName := "F"
+				if i%2 == 1 {
+					// A name that never resolves: drives lookup's
+					// error branch — and its read of the
+					// plugin-RODATA-backed p.pluginpath — while the
+					// plugin is still live, not only after Close.
+					symName = "NoSuchSymbol"
+				}
+				sym, err := p.Lookup(symName)
 				if err != nil {
+					if !strings.Contains(err.Error(), "symbol "+symName+" not found in plugin") {
+						fail("Lookup(%s) error has unexpected shape: %v", symName, err)
+					}
 					atomic.AddInt64(&errCount, 1)
+					if symName == "F" {
+						sawPostClose = true
+						atomic.AddInt64(&postCloseCount, 1)
+					}
 					continue
+				}
+				if symName == "NoSuchSymbol" {
+					fail("Lookup(NoSuchSymbol) unexpectedly succeeded")
 				}
 				atomic.AddInt64(&okCount, 1)
 				mu.Lock()
@@ -88,6 +148,12 @@ func main() {
 
 	if atomic.LoadInt64(&okCount) == 0 {
 		fail("no successful Lookups recorded; the race window was not exercised")
+	}
+	if atomic.LoadInt64(&errCount) == 0 {
+		fail("no failed Lookups recorded; the error branch was not exercised")
+	}
+	if atomic.LoadInt64(&postCloseCount) == 0 {
+		fail("no post-Close Lookup failures recorded; the post-Close leg was not exercised")
 	}
 
 	// Every function value Lookup ever handed out must now route to
@@ -124,8 +190,9 @@ func main() {
 		fail("second Close(): %v", err)
 	}
 
-	fmt.Printf("lookuprace ok (ok=%d err=%d samples=%d)\n",
-		atomic.LoadInt64(&okCount), atomic.LoadInt64(&errCount), len(samples))
+	fmt.Printf("lookuprace ok (ok=%d err=%d postclose=%d samples=%d)\n",
+		atomic.LoadInt64(&okCount), atomic.LoadInt64(&errCount),
+		atomic.LoadInt64(&postCloseCount), len(samples))
 }
 
 func fail(format string, args ...interface{}) {

@@ -11,8 +11,11 @@
 //
 // When a plugin is first opened, the init functions of all packages not
 // already part of the program are called. The main function is not run.
-// A plugin is only initialized once; [Plugin.Close] can later unload it
-// (fork extension).
+// A plugin is initialized once per load, not once per process: repeated
+// Opens of an already-loaded path return the existing [Plugin] without
+// re-running init, but after [Plugin.Close] unloads it (fork extension),
+// a later Open of the same path loads it afresh and runs those init
+// functions again.
 //
 // # Warnings
 //
@@ -169,10 +172,16 @@ var (
 	plugins   map[string]*Plugin
 )
 
+// closedErr is the p.err sentinel a completed [Plugin.Close] writes.
+// It is distinguishable from a load failure — every other p.err value
+// is a diagnostic from open — which is what lets open's cached-entry
+// path tell "this load failed" from "this plugin was closed".
+const closedErr = "closed"
+
 // Plugin is a loaded Go plugin.
 type Plugin struct {
 	pluginpath string
-	err        string        // set if plugin failed to load
+	err        string        // set if plugin failed to load, or closedErr once closed
 	loaded     chan struct{} // closed when loaded
 	syms       map[string]any
 	// funcDescriptors are heap-allocated 1-word holders, one per
@@ -221,9 +230,9 @@ func (p *Plugin) Lookup(symName string) (Symbol, error) {
 // plugin was obtained:
 //
 //   - Function values returned by [Plugin.Lookup] remain safe to
-//     call: each call panics with a recoverable "plugin: function
-//     value invoked after Plugin.Close" error instead of executing
-//     plugin code.
+//     call: each call panics instead of executing plugin code. The
+//     panic value is the string "plugin: function value invoked
+//     after Plugin.Close" (not an error), and it is recoverable.
 //
 //   - Any other reference has no protection: closures returned by
 //     calls into the plugin, function values reached through such
@@ -451,13 +460,13 @@ func closePlugin(p *Plugin) error {
 		// rather than retried.
 		p.syms = nil
 		p.funcDescriptors = nil
-		p.err = "closed"
+		p.err = closedErr
 		return pluginErr("Close", p.pluginpath, err.Error())
 	}
 	p.syms = nil
 	p.funcDescriptors = nil
 	p.handle = 0
-	p.err = "closed"
+	p.err = closedErr
 	return nil
 }
 

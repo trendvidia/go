@@ -215,6 +215,32 @@ func Open(path string) (*Plugin, error) {
 // A symbol is any exported variable or function.
 // It reports an error if the symbol is not found.
 // It is safe for concurrent use by multiple goroutines.
+//
+// Unlike [Plugin.Close], Lookup accepts a struct copy of the value
+// [Open] returned (q := *p; q.Lookup("F")) as long as the plugin is
+// still open: closing through a copy would be ambiguous about which
+// registration is being retired, whereas reading a live plugin
+// through a copy is well-defined, so Lookup resolves the copy back
+// to the registration Open cached and reads that. This is Lookup's
+// rule, not a package-wide one: [Plugin.HasDependents] and
+// [Plugin.Dependents] still report false and nil for a copy, as
+// their own documentation says.
+//
+// Once the plugin has been closed, Lookup returns an error on the
+// copy just as it does on the original; it never reads the copy's
+// stale symbol table, nor a path that Close has unmapped
+// (trendvidia/go#64). The error names the plugin only when the value
+// records a completed Close, which is exactly when its path has been
+// cloned into host memory; a copy taken before the original's Close
+// still holds a path into the unmapped image, so its error names no
+// path rather than fault while being formatted. A value Open never
+// handed out — a zero Plugin, for instance — returns an error too,
+// and likewise names no path.
+//
+// A nil *Plugin is not one of those values. Lookup dereferences its
+// receiver, so on every platform that supports plugins a nil one
+// panics rather than returning an error; [Plugin.Close], which is a
+// documented no-op on nil, is the exception, not the rule.
 func (p *Plugin) Lookup(symName string) (Symbol, error) {
 	return lookup(p, symName)
 }
@@ -370,9 +396,19 @@ func syncBeforeUnmap()
 //     descriptors at the panic stub. Any other reference class has
 //     no protection and faults unrecoverably if used from here on.
 //
-//  3. Marker: clear syms/funcDescriptors and set err so subsequent
-//     Lookup calls return the standard "symbol not found" error and
-//     repeated Close calls are no-ops.
+//  3. Marker: clear syms/funcDescriptors and set err to closedErr so
+//     repeated Close calls are no-ops. Since trendvidia/go#64 the
+//     marker that makes a subsequent Lookup fail is err, never the
+//     nil syms map: lookup reads syms off the CACHED entry, and
+//     phase 2's cache cleanup has already evicted this one, so
+//     liveOrigin resolves p to no live plugin and lookup returns
+//     "plugin is closed". In the one case where the entry survives
+//     phase 2 — unloadPlugin FAILED and left it cached — it is
+//     again err == closedErr, not the nil map, that liveOrigin
+//     rejects it by. Nilling syms and funcDescriptors is therefore
+//     about dropping the package's own references into the unmapped
+//     image (so the GC can collect the Symbol values and descriptor
+//     holders), not about gating Lookup.
 //
 // The phase ordering is load-bearing: phase 1 reads and writes the
 // plugin's still-mapped descriptor pages; doing it after phase 2
@@ -487,6 +523,60 @@ func openedByOpen(p *Plugin) bool {
 		}
 	}
 	return false
+}
+
+// liveOrigin resolves p to the *Plugin that Open cached for its
+// path, provided that plugin is still open, and returns nil
+// otherwise. It is what lets lookup honour a struct copy of a live
+// plugin without ever reading the copy's own syms or pluginpath: a
+// copy (q := *p) shares the original's loaded channel, and channels
+// compare by identity, so the cache walk finds the original from the
+// copy's header alone. Both hazards the copy carries after the
+// original's Close — a syms map whose keys are strings built over
+// the unmapped symbol table, and a pluginpath header into unmapped
+// RODATA — are avoided by never dereferencing either on p; the
+// caller reads them off the returned cached entry, whose bytes are
+// guaranteed mapped while pluginsMu is held (see snapshotPath).
+//
+// After Close, unloadPlugin evicts the original from the cache, so a
+// copy that outlives it matches nothing and resolves to nil; a
+// re-Open of the same path gets a fresh loaded channel, so the stale
+// copy keeps resolving to nil rather than to the new load. An entry
+// whose err is set (a failed load, or a Close whose unloadPlugin
+// failed and left it cached) is not live and resolves to nil too.
+// The zero Plugin has loaded == nil and matches nothing.
+//
+// Caller holds pluginsMu.
+func liveOrigin(p *Plugin) *Plugin {
+	if p.loaded == nil {
+		return nil
+	}
+	for _, q := range plugins {
+		if q == p || q.loaded == p.loaded {
+			if q.err != "" {
+				return nil
+			}
+			return q
+		}
+	}
+	return nil
+}
+
+// lookupClosedErr is the error lookup returns for a *Plugin that
+// names no open plugin. p.pluginpath is named only when p.err
+// records a completed Close: closePlugin clones the field into host
+// memory before unmapping the image, so on the original (and on a
+// copy taken after Close) the bytes are readable. Any other value —
+// a copy taken before the original's Close, or one Open never handed
+// out — may hold a header into unmapped RODATA, so the error names
+// no path rather than fault while being formatted.
+//
+// Caller holds pluginsMu.
+func lookupClosedErr(p *Plugin) error {
+	if p.err == closedErr {
+		return pluginErr("Lookup", p.pluginpath, "plugin is closed")
+	}
+	return pluginErr("Lookup", "", "plugin is closed or was not opened by plugin.Open")
 }
 
 // pluginErr formats an error from a plugin operation. Kept simple

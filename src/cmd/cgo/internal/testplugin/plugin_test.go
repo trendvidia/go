@@ -204,6 +204,9 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "zeroclose.exe", "./zeroclose")
 	goCmdBuildPluginFor(nil, "zeroclose", "-o=zeroclose-plugin1"+pluginSuffix, "./plugin1")
 
+	goCmd(nil, "build", "-o", "lookupcopy.exe", "./lookupcopy")
+	goCmdBuildPluginFor(nil, "lookupcopy", "-o=lookupcopy-plugin1"+pluginSuffix, "./plugin1")
+
 	goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
 	goCmdBuildPluginFor(nil, "closeunmaps", "-o=closeunmaps-plugin1"+pluginSuffix, "./plugin1")
 
@@ -963,6 +966,23 @@ func TestCloseZeroValue(t *testing.T) {
 	// Require the last line too, not just the midpoint.
 	if !strings.Contains(out, "copy rejected, original closed") {
 		t.Fatalf("zeroclose.exe did not finish the struct-copy legs:\n%s", out)
+	}
+}
+
+// TestLookupOnCopy pins the Lookup half of the struct-copy contract
+// (trendvidia/go#64): Lookup accepts a copy of an Open-returned
+// Plugin while the plugin is live, and returns an error — rather than
+// hashing symName against a syms map whose keys live in the unmapped
+// symbol table, or formatting a pluginpath header into unmapped
+// RODATA — once the original has been closed. A fault ends the
+// process without a clean exit code on every platform this runs on,
+// but the last line is required as well so a silent death cannot
+// pass as success.
+func TestLookupOnCopy(t *testing.T) {
+	globalSkip(t)
+	out := run(t, "./lookupcopy.exe")
+	if !strings.Contains(out, "lookup on copy: done") {
+		t.Fatalf("lookupcopy.exe did not finish:\n%s", out)
 	}
 }
 

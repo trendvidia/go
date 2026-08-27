@@ -15,9 +15,10 @@
 //     branch — the read of p.pluginpath, whose plugin-RODATA
 //     backing is the dangling-string hazard — runs against the
 //     live plugin on every other call, not only after Close;
-//   - every recorded result is either a success or a "not found"
-//     error of the documented shape (never a crash — reaching this
-//     point proves that);
+//   - every recorded result is either a success, a "not found"
+//     error of the documented shape, or — after Close — a "plugin
+//     is closed" error (never a crash — reaching this point proves
+//     that);
 //   - each racing goroutine keeps looking up until it has itself
 //     seen "F" fail — which only Close can cause — so the
 //     post-Close leg is exercised by every goroutine regardless of
@@ -116,7 +117,14 @@ func main() {
 				}
 				sym, err := p.Lookup(symName)
 				if err != nil {
-					if !strings.Contains(err.Error(), "symbol "+symName+" not found in plugin") {
+					// Two documented shapes: "not found" while the
+					// plugin is live, "plugin is closed" once Close
+					// has retired it (trendvidia/go#64). "F" can only
+					// fail the second way, so that is the post-Close
+					// signal; NoSuchSymbol may fail either way.
+					closed := strings.Contains(err.Error(), "plugin is closed")
+					notFound := strings.Contains(err.Error(), "symbol "+symName+" not found in plugin")
+					if !closed && (symName == "F" || !notFound) {
 						fail("Lookup(%s) error has unexpected shape: %v", symName, err)
 					}
 					atomic.AddInt64(&errCount, 1)

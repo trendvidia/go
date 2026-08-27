@@ -336,6 +336,19 @@ func open(name string) (*Plugin, error) {
 	return p, nil
 }
 
+// lookup resolves p to the live cache entry (liveOrigin) and reads
+// syms/pluginpath off THAT entry, never off p: p may be a struct
+// copy whose fields outlived the original's Close, where the syms
+// map's keys and the pluginpath header both point into the unmapped
+// image (trendvidia/go#64). On the resolving path the only field
+// lookup reads off p is p.loaded, a channel header that Close never
+// rewrites. The non-resolving path reads two more, both inside
+// lookupClosedErr: p.err, and — only when that err records a
+// COMPLETED Close, which is exactly when Close has already cloned
+// the bytes into host memory — p.pluginpath. Every other value's
+// pluginpath stays unread, which is why the error it gets back
+// names no path.
+//
 // lookup serialises against Plugin.Close via pluginsMu: closePlugin
 // mutates p.syms (nils it), p.pluginpath (clones it off the plugin's
 // RODATA before FreeLibrary unmaps those bytes) and p.err while
@@ -353,14 +366,24 @@ func open(name string) (*Plugin, error) {
 // race even with the lock below intact.
 //
 // Lookup never runs with pluginsMu already held (open and closePlugin
-// do not call it), so taking the mutex here cannot deadlock.
+// do not call it), so taking the mutex here cannot deadlock. The
+// mutex is also what makes the cache walk in liveOrigin safe, and
+// what guarantees the entry it returns cannot be unmapped before
+// its syms and pluginpath are read.
 func lookup(p *Plugin, symName string) (Symbol, error) {
 	pluginsMu.Lock()
 	defer pluginsMu.Unlock()
-	if s := p.syms[symName]; s != nil {
+	// Read syms and pluginpath off the cached live entry, never off
+	// p itself: p may be a struct copy whose fields outlived the
+	// original's Close (trendvidia/go#64). See liveOrigin.
+	origin := liveOrigin(p)
+	if origin == nil {
+		return nil, lookupClosedErr(p)
+	}
+	if s := origin.syms[symName]; s != nil {
 		return s, nil
 	}
-	return nil, errors.New("plugin: symbol " + symName + " not found in plugin " + p.pluginpath)
+	return nil, errors.New("plugin: symbol " + symName + " not found in plugin " + origin.pluginpath)
 }
 
 // unloadPlugin is the Windows counterpart of plugin_dlopen.go's

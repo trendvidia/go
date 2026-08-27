@@ -716,8 +716,17 @@ func itabptrLsym(typ, iface *types.Type) *obj.LSym {
 	name := "go.itabptr." + typ.LinkString() + "," + iface.LinkString()
 	s := base.Ctxt.Lookup(name)
 	// Record the slot for deferred, order-stable emission (as in
-	// TypeptrLsym): two parallel backend workers hitting the same
-	// (typ, iface) pair both end up here, and the registry dedups them.
+	// TypeptrLsym). Unlike TypeptrLsym, this never runs on a backend
+	// worker: the only callers are walkDotType and noder, and walk runs
+	// in gc.prepareFunc, off the enqueue loop in gc.Main. That loop
+	// interleaves enqueueFunc with compileFunctions rather than running
+	// wholly before it, but it only resumes after compileFunctions'
+	// wg.Wait, so no walk ever overlaps a live worker. Measured 0
+	// recordings in the parallel phase across a -typetab build of all of
+	// std (#33; the serial count moves with each rework, the zero does
+	// not). The lock is defensive uniformity with TypeptrLsym, not a fix
+	// for an observed race; the registry dedups repeated (typ, iface)
+	// pairs either way.
 	signatmu.Lock()
 	typetabSlots.Record(s, itabSym)
 	signatmu.Unlock()
@@ -726,9 +735,10 @@ func itabptrLsym(typ, iface *types.Type) *obj.LSym {
 
 // typetabSlots records every -typetab slot referenced during
 // compilation (go.typeptr./go.itabptr.), mapping the slot symbol to
-// the target it points at. Populated by TypeptrLsym/itabptrLsym while
-// functions are compiled in parallel, then drained by
-// WriteTypetabSlots at dumpdata time.
+// the target it points at. Populated by TypeptrLsym (mostly from the
+// frontend, and additionally from parallel backend workers via
+// ssagen's reflectType) and by itabptrLsym (frontend only), then
+// drained by WriteTypetabSlots at dumpdata time.
 var typetabSlots staticdata.SlotRegistry
 
 // WriteTypetabSlots emits the deferred go.typeptr/go.itabptr slot data

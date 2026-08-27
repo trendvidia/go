@@ -64,6 +64,20 @@ func isMethodBodyName(name string) bool {
 	// also an internal type-suffixed pattern. For now, treat any
 	// `pkg.Recv.Method` shape as method-body when recv is a single
 	// identifier — false positives at worst keep things plugin-local.
+	//
+	// Measured false positive (trendvidia/go#61): `pkg.init.N` reads as
+	// recv=init, method=N, so external link tries only the ABI0 version
+	// of an init function, finds none, and the plugin keeps a local
+	// body. Harmless while the pkg..inittask that would call it is
+	// host-shared and dropped from the plugin's schedule, which leaves
+	// the body unreachable. It is NOT harmless if that task is ever
+	// evicted from the host's export table: the plugin then keeps a
+	// scheduled task whose first fn is this local body, so the init
+	// re-runs and skipHostSharedInits' unresolvable-PC backstop cannot
+	// see it. Measured: `sync` emits sync.init.0/sync.init.1 and no
+	// generated `sync.init`, so sync is exactly that shape. The task
+	// ranks 0 in peHostExportRank, which is what keeps the eviction
+	// out of reach today.
 	return true
 }
 
@@ -97,8 +111,17 @@ func peSkipSymName(name string) bool {
 	// have unrelated contents. Host-sharing them would convert the
 	// plugin's local copy to SHOSTOBJ and route accesses to host's
 	// unrelated content, breaking the cache semantics. Keep local.
+	//
+	// Exception: pkg..inittask. peLoadImportLibrary host-shares init
+	// tasks so a plugin's copy of a package the host also links never
+	// re-runs that package's init — the host already ran it, and
+	// re-running it from the plugin registers plugin-resident funcvals
+	// into host-shared runtime hooks (runtime.poolcleanup via sync's
+	// init) that dangle after the plugin is unloaded (trendvidia/go#61).
+	// Sharing requires the name in the host's exports and import
+	// library, so let it through here.
 	if i := strings.Index(name, ".."); i > 0 && i < len(name)-2 {
-		return true
+		return !strings.HasSuffix(name, "..inittask")
 	}
 	return false
 }
@@ -525,15 +548,45 @@ const peExportLimit = 65500
 // local — it silently gives the plugin a second allocator or scheduler,
 // so they are never eviction candidates.
 //
+// Init tasks (pkg..inittask) also rank 0: evicting one leaves the
+// plugin's copy of that package's init task scheduled, so the init
+// re-runs at plugin load and can register plugin-resident funcvals into
+// host-shared runtime hooks that dangle after Close (trendvidia/go#61).
+// That is an integrity loss, not a convenience loss, and there is only
+// one per linked package.
+//
 // Rank 1 is everything else. Those are shared as a convenience: a global
 // in a package both host and plugin link resolves to the host's instance.
 // Losing one costs that sharing, not the runtime's integrity.
 func peHostExportRank(name string) int {
 	if strings.HasPrefix(name, "runtime.") || strings.HasPrefix(name, "internal/") ||
+		strings.HasSuffix(name, "..inittask") ||
 		peSharedRuntimeData[name] || peSharedV1Funcs[name] {
 		return 0
 	}
 	return 1
+}
+
+// peHostExportLess orders a plugin host's exports for the eviction cut:
+// by rank first, then by name. peSnapshotHostExports keeps the first
+// peExportLimit and drops the tail, so `peHostExportLess(a, b)` means a
+// survives the cut whenever b does.
+//
+// Named rather than inlined in the sort because the design depends on
+// one consequence of the ordering: a package's `..inittask` is never
+// evicted while any of that package's init functions survives. `..` (0x2e
+// 0x2e) sorts before `.i`, so at equal rank the task always precedes
+// `pkg.init`; and where the ranks differ the task's is the lower one,
+// since peHostExportRank ranks every `..inittask` at 0. Both
+// skipHostSharedInits and isMethodBodyName reason about what a surviving
+// task implies about its init functions, so TestPEInittaskOutranksItsInits
+// pins it here.
+func peHostExportLess(a, b string) bool {
+	ra, rb := peHostExportRank(a), peHostExportRank(b)
+	if ra != rb {
+		return ra < rb
+	}
+	return a < b
 }
 
 // peSymIsExternal reports whether s reaches the object file's symbol
@@ -665,11 +718,7 @@ func peSnapshotHostExports(ctxt *Link) {
 
 	if len(symbols) > peExportLimit {
 		sort.Slice(symbols, func(i, j int) bool {
-			ri, rj := peHostExportRank(symbols[i].name), peHostExportRank(symbols[j].name)
-			if ri != rj {
-				return ri < rj
-			}
-			return symbols[i].name < symbols[j].name
+			return peHostExportLess(symbols[i].name, symbols[j].name)
 		})
 		dropped := symbols[peExportLimit:]
 		symbols = symbols[:peExportLimit]
@@ -677,7 +726,9 @@ func peSnapshotHostExports(ctxt *Link) {
 			"but a PE image can only address %d exports; %d were left out of the host export table.\n"+
 			"link: warning: the cross-module runtime ABI is exported in full, so plugins still load and run. "+
 			"Package-level symbols that were dropped (for example %s) stay module-local instead of resolving "+
-			"to the host's instance, so a plugin sharing one of those globals with the host will see its own copy.\n",
+			"to the host's instance, so a plugin sharing one of those globals with the host will see its own copy \u2014 "+
+			"and an uninitialized one, since that package's rank-0 `..inittask` survived the cut and the plugin "+
+			"therefore does not re-run the init that would have set it (trendvidia/go#61).\n",
 			peOutputDisplayName(), len(symbols)+len(dropped), peExportLimit, len(dropped), dropped[0].name)
 	}
 
@@ -1758,6 +1809,19 @@ func peExportAllSymbols(ctxt *Link) {
 		}
 		name := ldr.SymExtname(s)
 		if peSkipSymName(name) {
+			continue
+		}
+		// peSkipSymName lets `pkg..inittask` through so a plugin HOST
+		// can publish its tasks for peLoadImportLibrary to bind
+		// (trendvidia/go#61). A plugin publishing its own is cost with
+		// no buyer: nothing can bind them — plugins generate no import
+		// library, and `pkg..inittask` is not a Go identifier, so
+		// plugin.Lookup cannot name one — while every entry spends a
+		// slot of the plugin's own peExportLimit budget, which the
+		// export-limit check hard-errors past (trendvidia/go#39).
+		// Measured on a cross-built windows/amd64 plugin: 5 such names
+		// appeared where there had been none.
+		if strings.HasSuffix(name, "..inittask") {
 			continue
 		}
 		// Skip symbols that are already in the export list.

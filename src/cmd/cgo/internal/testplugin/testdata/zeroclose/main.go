@@ -28,11 +28,7 @@
 //
 // Order matters: the survival check runs BEFORE the copy case opens
 // a real plugin, so what it measures is the rejected Closes and
-// nothing else. A GC after a plugin has genuinely been unloaded
-// faults on windows/amd64 for an unrelated reason — the runtime's
-// sync.Pool cleanup hook still points into the unmapped image
-// (trendvidia/go#38) — and would make this fixture red for a defect
-// it was not written to catch.
+// nothing else.
 package main
 
 import (
@@ -40,7 +36,6 @@ import (
 	"os"
 	"plugin"
 	"runtime"
-	"runtime/debug"
 	"strings"
 )
 
@@ -79,10 +74,7 @@ func main() {
 	// Everything below dies silently if the host module was
 	// unlinked. This runs before any real plugin is loaded, so it
 	// answers one question only: did rejecting those values leave
-	// the host's moduledata on the active list? A plugin that has
-	// actually been unloaded brings a separate, unrelated hazard
-	// into the same GC (trendvidia/go#38), which would otherwise
-	// decide this fixture's result on some platforms.
+	// the host's moduledata on the active list?
 	runtime.GC()
 	buf := make([]byte, 1<<16)
 	n := runtime.Stack(buf, false)
@@ -99,11 +91,7 @@ func main() {
 	runtime.GC()
 	fmt.Printf("survived (len %d)\n", len(keep))
 
-	// The copy case needs a real plugin behind it. It comes last
-	// because its final Close really unloads the image, and this
-	// fixture must not GC after that (see trendvidia/go#38); stop
-	// the collector so no background allocation can start one.
-	debug.SetGCPercent(-1)
+	// The copy case needs a real plugin behind it.
 	p, err := plugin.Open("zeroclose-plugin1" + pluginExt)
 	if err != nil {
 		fail("Open(zeroclose-plugin1): %v", err)

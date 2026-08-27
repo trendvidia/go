@@ -207,6 +207,9 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
 	goCmdBuildPluginFor(nil, "closeunmaps", "-o=closeunmaps-plugin1"+pluginSuffix, "./plugin1")
 
+	goCmd(nil, "build", "-o", "gcafterclose.exe", "./gcafterclose")
+	goCmdBuildPluginFor(nil, "gcafterclose", "-o=gcafterclose-plugin1"+pluginSuffix, "./plugin1")
+
 	goCmd(nil, "build", "-o", "refcount.exe", "./refcount/host")
 	goCmdBuildPluginFor(nil, "refcount", "-o=plugA"+pluginSuffix, "./refcount/plugA")
 	goCmdBuildPluginFor(nil, "refcount", "-o=plugB"+pluginSuffix, "./refcount/plugB")
@@ -970,6 +973,22 @@ func TestCloseZeroValue(t *testing.T) {
 func TestCloseUnloadsMemory(t *testing.T) {
 	globalSkip(t)
 	run(t, "./closeunmaps.exe")
+}
+
+// TestGCAfterClose runs a full GC cycle, with the collector on the
+// whole time, after a plugin has genuinely been unloaded. Every cycle
+// starts with clearpools, which calls through runtime.poolcleanup —
+// on Windows a host-shared global that the plugin's copy of package
+// sync used to overwrite at Open with a funcval inside the plugin's
+// image, so the first GC after Close faulted dereferencing unmapped
+// memory (trendvidia/go#61). The fixture churns sync.Pool around the
+// unload so the hook demonstrably still runs.
+func TestGCAfterClose(t *testing.T) {
+	globalSkip(t)
+	out := run(t, "./gcafterclose.exe")
+	if !strings.Contains(out, "survived GC after Close") {
+		t.Fatalf("gcafterclose.exe did not report survival:\n%s", out)
+	}
 }
 
 // runExpectFault runs bin, requiring the child to die from an

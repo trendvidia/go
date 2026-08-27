@@ -369,7 +369,7 @@ func pluginSkipInitPkg(pkg string) bool {
 }
 
 // skipHostSharedInits sets state = 2 (Done) on plugin-local inittasks
-// whose init code lives in the host. Two ways an inittask qualifies:
+// whose init code lives in the host. Three ways an inittask qualifies:
 //
 //  1. Its first PC resolves to a `.rel` thunk (a 6-byte JMP-via-IAT
 //     stub the linker emits for cross-module calls). On Windows v3,
@@ -380,14 +380,48 @@ func pluginSkipInitPkg(pkg string) bool {
 //     specifically), re-acquires already-acquired runtime locks, and
 //     races with host's already-initialised state.
 //
-//  2. Its package name matches pluginSkipInitPkg's allowlist. Used
+//  2. On Windows, its first PC does not resolve in any Go module's
+//     pclntab (funcname returns ""). With external linking the
+//     cross-module stub is the C linker's import thunk, not a `.rel`
+//     symbol, so it has no pclntab entry at all. A Go init function
+//     always has one, so an unresolvable first PC means the body
+//     lives in the host and the task must not re-run
+//     (trendvidia/go#61). The linker normally drops such tasks from
+//     the plugin's schedule entirely (host-shared `pkg..inittask`
+//     converts to an import and inittaskSym skips it), so this
+//     branch is defence in depth rather than a path the current
+//     linker reaches.
+//
+//     It has no reachable trigger under the present export policy,
+//     and the reason is worth stating because an earlier version of
+//     this comment claimed the opposite. Firing needs a task that
+//     stayed in the plugin's schedule — its `pkg..inittask` was NOT
+//     in the host's export table — whose first init fn WAS exported
+//     and converted. peHostExportLess makes that combination
+//     impossible: the export cut keeps a prefix of the rank-then-name
+//     ordering, `..inittask` ranks 0, and at equal rank `pkg..inittask`
+//     sorts before `pkg.init` (`..` precedes `.i`). So a package's
+//     task survives the cut whenever any of its init functions does,
+//     and an evicted task takes its init bodies with it — the plugin
+//     then keeps local bodies and funcname returns a real name.
+//     TestPEInittaskOutranksItsInits pins that ordering.
+//
+//     Keep the branch: on the external-link path the linker's
+//     conversion is the only thing dropping the task, and marking a
+//     task Done is the safe answer for a PC in no module's pclntab.
+//     It is deliberately a silent skip rather than a throw, because
+//     the condition is indistinguishable from a genuinely corrupt
+//     ftab; narrowing it to a confirmed IAT-thunk range is
+//     trendvidia/go#75.
+//
+//  3. Its package name matches pluginSkipInitPkg's allowlist. Used
 //     for cases where the inittask's first PC is plugin-local but
 //     the package's data is still host-shared (e.g. testplugin/common
 //     where peSharedRuntimeData covers common.X).
 //
 // On linux/darwin the first PC isn't a thunk (no IAT plumbing), so
-// the .rel-suffix branch is a no-op there — only the pluginSkipInitPkg
-// allowlist applies.
+// the .rel-suffix and unresolvable-PC branches are no-ops there —
+// only the pluginSkipInitPkg allowlist applies.
 func skipHostSharedInits(md *moduledata) {
 	for _, t := range md.inittasks {
 		if t == nil || t.state == 2 || t.nfns == 0 {
@@ -401,6 +435,13 @@ func skipHostSharedInits(md *moduledata) {
 		// thunk, so the funcname returns ".rel" (no package prefix).
 		// These tasks' real bodies are in host; skip.
 		if name == ".rel" {
+			t.state = 2
+			continue
+		}
+		// External link's cross-module stubs are the C linker's import
+		// thunks: no pclntab entry anywhere, funcname is "". Same
+		// conclusion — the body is in the host.
+		if GOOS == "windows" && name == "" {
 			t.state = 2
 			continue
 		}

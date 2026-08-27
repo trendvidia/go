@@ -64,6 +64,15 @@ jobs:
       # (symlink privilege), and runtime (its runtime-gdb tests fail on an
       # incompatible mingw gdb). make.bat already validates the runtime compiles;
       # plugin-matrix.yml validates the fork's plugin runtime feature on all 5.
+      #
+      # internal/buildcfg is in the list on purpose: the Windows leg does not run
+      # all.bat, so its TestDefaultCGOEnabledUnset pin (#9) would otherwise never
+      # execute on windows/{amd64,arm64}, even though make.bat bakes
+      # DefaultCGO_ENABLED from %CGO_ENABLED% exactly as make.bash does. Note the
+      # build below deliberately does NOT unset CGO_ENABLED: this lane exists to
+      # DETECT a runner whose environment exports it, the same way the Unix legs
+      # do via all.bash. (release-binaries.yml unsets it instead -- there the goal
+      # is a correct artifact, not detection.)
       - name: make.bat + core-stdlib smoke (Windows)
         if: runner.os == 'Windows'
         working-directory: src
@@ -71,7 +80,7 @@ jobs:
         run: |
           for /f "delims=" %%i in ('go env GOROOT') do set "GOROOT_BOOTSTRAP=%%i"
           call make.bat || exit /b 1
-          ..\bin\go.exe test -short -count=1 errors fmt strings strconv bytes sort math encoding/json regexp sync context || exit /b 1
+          ..\bin\go.exe test -short -count=1 errors fmt strings strconv bytes sort math encoding/json regexp sync context internal/buildcfg || exit /b 1
 
       # Confirm the toolchain we just built is the fork, not stock Go.
       - name: Assert the built toolchain is go-plus (Unix)

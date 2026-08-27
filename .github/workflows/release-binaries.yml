@@ -40,12 +40,18 @@ jobs:
           ref: ${{ inputs.tag }}
 
       # --- Build the toolchain natively ---
+      # CGO_ENABLED is unset for make.bash/make.bat on purpose: cmd/dist bakes
+      # $CGO_ENABLED into internal/buildcfg.DefaultCGO_ENABLED, and a baked "1"
+      # makes the shipped toolchain default cgo on unconditionally, skipping
+      # upstream's "no C compiler in PATH -> cgo off" autodetection (#9,
+      # README "Building this fork"). The runner's inherited environment must
+      # not decide this for a released artifact.
       - name: Build toolchain (Unix)
         if: runner.os != 'Windows'
         working-directory: src
         run: |
           export GOROOT_BOOTSTRAP="$(go env GOROOT)"
-          ./make.bash
+          env -u CGO_ENABLED ./make.bash
 
       - name: Build toolchain (Windows)
         if: runner.os == 'Windows'
@@ -53,7 +59,23 @@ jobs:
         shell: cmd
         run: |
           for /f "delims=" %%i in ('go env GOROOT') do set "GOROOT_BOOTSTRAP=%%i"
+          set "CGO_ENABLED="
           call make.bat
+
+      # --- Verify the baked default before anything is packaged (#9) ---
+      # Fail the release build loudly rather than ship a toolchain whose
+      # DefaultCGO_ENABLED diverges from stock Go.
+      - name: Assert CGO_ENABLED was unset at build time (Unix)
+        if: runner.os != 'Windows'
+        working-directory: src
+        run: ../bin/go test -count=1 internal/buildcfg
+
+      - name: Assert CGO_ENABLED was unset at build time (Windows)
+        if: runner.os == 'Windows'
+        working-directory: src
+        shell: cmd
+        run: |
+          ..\bin\go.exe test -count=1 internal/buildcfg || exit /b 1
 
       # --- Package the built go tree as go<version>-plus.<os>-<arch>.tar.gz ---
       # The checkout dir is named "go" (repo name), so archiving it from

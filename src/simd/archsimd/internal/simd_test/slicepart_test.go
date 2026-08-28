@@ -19,6 +19,9 @@ func TestSlicePartInt8x16(t *testing.T) {
 }
 
 func TestSlicePartInt8x32(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	a := []int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
 		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 	b := []int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
@@ -49,6 +52,9 @@ func TestSlicePartUint8x16(t *testing.T) {
 }
 
 func TestSlicePartUint8x32(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	a := []uint8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
 		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 	b := []uint8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
@@ -79,6 +85,9 @@ func TestSlicePartInt16x8(t *testing.T) {
 }
 
 func TestSlicePartInt16x16(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	a := []int16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	b := []int16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	for i := 16; i >= 0; i-- {
@@ -93,6 +102,9 @@ func TestSlicePartInt16x16(t *testing.T) {
 }
 
 func TestSlicesPartStoreInt8x16(t *testing.T) {
+	if !archsimd.X86.AVX512() {
+		t.Skip("Test requires X86.AVX512, not available on this hardware")
+	}
 	a := []int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	b := []int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	for i := 16; i >= 0; i-- {
@@ -107,6 +119,9 @@ func TestSlicesPartStoreInt8x16(t *testing.T) {
 }
 
 func TestSlicesPartStoreInt16x8(t *testing.T) {
+	if !archsimd.X86.AVX512() {
+		t.Skip("Test requires X86.AVX512, not available on this hardware")
+	}
 	a := []int16{1, 2, 3, 4, 5, 6, 7, 8}
 	b := []int16{1, 2, 3, 4, 5, 6, 7, 8}
 	for i := 8; i >= 0; i-- {
@@ -121,6 +136,9 @@ func TestSlicesPartStoreInt16x8(t *testing.T) {
 }
 
 func TestSlicesPartStoreInt16x16(t *testing.T) {
+	if !archsimd.X86.AVX512() {
+		t.Skip("Test requires X86.AVX512, not available on this hardware")
+	}
 	a := []int16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	b := []int16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	for i := 16; i >= 0; i-- {
@@ -135,6 +153,9 @@ func TestSlicesPartStoreInt16x16(t *testing.T) {
 }
 
 func TestSlicesPartStoreUint8x16(t *testing.T) {
+	if !archsimd.X86.AVX512() {
+		t.Skip("Test requires X86.AVX512, not available on this hardware")
+	}
 	a := []uint8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	b := []uint8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	for i := 16; i >= 0; i-- {
@@ -149,6 +170,9 @@ func TestSlicesPartStoreUint8x16(t *testing.T) {
 }
 
 func TestSlicesPartStoreUint16x16(t *testing.T) {
+	if !archsimd.X86.AVX512() {
+		t.Skip("Test requires X86.AVX512, not available on this hardware")
+	}
 	a := []uint16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	b := []uint16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	for i := 16; i >= 0; i-- {
@@ -163,6 +187,9 @@ func TestSlicesPartStoreUint16x16(t *testing.T) {
 }
 
 func TestSlicesPartStoreUint8x32(t *testing.T) {
+	if !archsimd.X86.AVX512() {
+		t.Skip("Test requires X86.AVX512, not available on this hardware")
+	}
 	a := []uint8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
 		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 	b := []uint8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
@@ -179,6 +206,9 @@ func TestSlicesPartStoreUint8x32(t *testing.T) {
 }
 
 func TestSlicePartInt32(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	// 32x4
 	L := 4
 	c := []int32{1, 2, 3, 4, 5, -1, -1, -1, -1}
@@ -220,6 +250,9 @@ func TestSlicePartInt32(t *testing.T) {
 }
 
 func TestSlicePartUint64(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	// 64x4
 	L := 4
 	c := []uint64{1, 2, 3, 4, 5, 86, 86, 86, 86}
@@ -261,6 +294,9 @@ func TestSlicePartUint64(t *testing.T) {
 }
 
 func TestSlicePartFloat64(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	// 64x2
 	L := 2
 	c := []float64{1, 2, 3, 86, 86, 86, 86}
@@ -302,6 +338,9 @@ func TestSlicePartFloat64(t *testing.T) {
 }
 
 func TestSlicePartFloat32(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	// 32x8
 	L := 8
 	c := []float32{1, 2, 3, 4, 5, 6, 7, 8, 86, 86, 86, 86}

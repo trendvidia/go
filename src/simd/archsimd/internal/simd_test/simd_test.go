@@ -257,6 +257,9 @@ func TestSlicesInt8SetElem(t *testing.T) {
 }
 
 func TestSlicesInt8GetElem(t *testing.T) {
+	if !archsimd.X86.AVX512() {
+		t.Skip("Test requires X86.AVX512, not available on this hardware")
+	}
 	a := []int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
 		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 	v := archsimd.LoadInt8x16Slice(a)
@@ -422,14 +425,18 @@ func TestBitMaskToBits(t *testing.T) {
 	if v := archsimd.LoadInt32x4Slice(int32s[:4]).ToMask().ToBits(); v != want4 {
 		t.Errorf("want %b, got %b", want4, v)
 	}
-	if v := archsimd.LoadInt32x8Slice(int32s[:8]).ToMask().ToBits(); v != want8 {
-		t.Errorf("want %b, got %b", want8, v)
+	if archsimd.X86.AVX2() {
+		if v := archsimd.LoadInt32x8Slice(int32s[:8]).ToMask().ToBits(); v != want8 {
+			t.Errorf("want %b, got %b", want8, v)
+		}
 	}
 	if v := archsimd.LoadInt64x2Slice(int64s[:2]).ToMask().ToBits(); v != want2 {
 		t.Errorf("want %b, got %b", want2, v)
 	}
-	if v := archsimd.LoadInt64x4Slice(int64s[:4]).ToMask().ToBits(); v != want4 {
-		t.Errorf("want %b, got %b", want4, v)
+	if archsimd.X86.AVX2() {
+		if v := archsimd.LoadInt64x4Slice(int64s[:4]).ToMask().ToBits(); v != want4 {
+			t.Errorf("want %b, got %b", want4, v)
+		}
 	}
 
 	if archsimd.X86.AVX2() {
@@ -535,33 +542,48 @@ func TestRotateAllVariable(t *testing.T) {
 }
 
 func TestBroadcastUint32x4(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	s := make([]uint32, 4, 4)
 	archsimd.BroadcastUint32x4(123456789).StoreSlice(s)
 	checkSlices(t, s, []uint32{123456789, 123456789, 123456789, 123456789})
 }
 
 func TestBroadcastFloat32x8(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	s := make([]float32, 8, 8)
 	archsimd.BroadcastFloat32x8(123456789).StoreSlice(s)
 	checkSlices(t, s, []float32{123456789, 123456789, 123456789, 123456789, 123456789, 123456789, 123456789, 123456789})
 }
 
 func TestBroadcastFloat64x2(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	s := make([]float64, 2, 2)
 	archsimd.BroadcastFloat64x2(123456789).StoreSlice(s)
 	checkSlices(t, s, []float64{123456789, 123456789})
 }
 
 func TestBroadcastUint64x2(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	s := make([]uint64, 2, 2)
 	archsimd.BroadcastUint64x2(123456789).StoreSlice(s)
 	checkSlices(t, s, []uint64{123456789, 123456789})
 }
 
 func TestBroadcastUint16x8(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	s := make([]uint16, 8, 8)
 	archsimd.BroadcastUint16x8(12345).StoreSlice(s)
-	checkSlices(t, s, []uint16{12345, 12345, 12345, 12345})
+	checkSlices(t, s, []uint16{12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345})
 }
 
 func TestBroadcastInt8x32(t *testing.T) {
@@ -907,6 +929,9 @@ func TestSelectFromPairConstGroupedUint32x16(t *testing.T) {
 }
 
 func TestSelect128FromPair(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	x := archsimd.LoadUint64x4Slice([]uint64{0, 1, 2, 3})
 	y := archsimd.LoadUint64x4Slice([]uint64{4, 5, 6, 7})
 
@@ -934,6 +959,9 @@ func TestSelect128FromPair(t *testing.T) {
 }
 
 func TestSelect128FromPairError(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	x := archsimd.LoadUint64x4Slice([]uint64{0, 1, 2, 3})
 	y := archsimd.LoadUint64x4Slice([]uint64{4, 5, 6, 7})
 
@@ -953,6 +981,9 @@ func select128FromPair(x archsimd.Uint64x4, lo, hi uint8, y archsimd.Uint64x4) a
 }
 
 func TestSelect128FromPairVar(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("Test requires X86.AVX2, not available on this hardware")
+	}
 	x := archsimd.LoadUint64x4Slice([]uint64{0, 1, 2, 3})
 	y := archsimd.LoadUint64x4Slice([]uint64{4, 5, 6, 7})
 
@@ -1245,6 +1276,9 @@ func TestPermuteScalarsGrouped(t *testing.T) {
 }
 
 func TestPermuteScalarsHi(t *testing.T) {
+	if !archsimd.X86.AVX512() {
+		t.Skip("Test requires X86.AVX512, not available on this hardware")
+	}
 	x := []int16{-1, -2, -3, -4, 11, 12, 13, 14}
 	want := []int16{-1, -2, -3, -4, 12, 13, 14, 11}
 	got := make([]int16, len(x))
@@ -1253,6 +1287,9 @@ func TestPermuteScalarsHi(t *testing.T) {
 }
 
 func TestPermuteScalarsLo(t *testing.T) {
+	if !archsimd.X86.AVX512() {
+		t.Skip("Test requires X86.AVX512, not available on this hardware")
+	}
 	x := []int16{11, 12, 13, 14, 4, 5, 6, 7}
 	want := []int16{12, 13, 14, 11, 4, 5, 6, 7}
 	got := make([]int16, len(x))

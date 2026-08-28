@@ -46,9 +46,9 @@ func TestLess(t *testing.T) {
 	testUint16x8Compare(t, archsimd.Uint16x8.Less, lessSlice[uint16])
 	testUint32x4Compare(t, archsimd.Uint32x4.Less, lessSlice[uint32])
 	testUint64x2Compare(t, archsimd.Uint64x2.Less, lessSlice[uint64])
-	testUint8x16Compare(t, archsimd.Uint8x16.Less, lessSlice[uint8])
 
 	if archsimd.X86.AVX2() {
+		testUint8x16Compare(t, archsimd.Uint8x16.Less, lessSlice[uint8])
 		testUint16x16Compare(t, archsimd.Uint16x16.Less, lessSlice[uint16])
 		testUint32x8Compare(t, archsimd.Uint32x8.Less, lessSlice[uint32])
 		testUint64x4Compare(t, archsimd.Uint64x4.Less, lessSlice[uint64])
@@ -99,9 +99,9 @@ func TestLessEqual(t *testing.T) {
 	testUint16x8Compare(t, archsimd.Uint16x8.LessEqual, lessEqualSlice[uint16])
 	testUint32x4Compare(t, archsimd.Uint32x4.LessEqual, lessEqualSlice[uint32])
 	testUint64x2Compare(t, archsimd.Uint64x2.LessEqual, lessEqualSlice[uint64])
-	testUint8x16Compare(t, archsimd.Uint8x16.LessEqual, lessEqualSlice[uint8])
 
 	if archsimd.X86.AVX2() {
+		testUint8x16Compare(t, archsimd.Uint8x16.LessEqual, lessEqualSlice[uint8])
 		testUint16x16Compare(t, archsimd.Uint16x16.LessEqual, lessEqualSlice[uint16])
 		testUint32x8Compare(t, archsimd.Uint32x8.LessEqual, lessEqualSlice[uint32])
 		testUint64x4Compare(t, archsimd.Uint64x4.LessEqual, lessEqualSlice[uint64])
@@ -143,9 +143,9 @@ func TestGreater(t *testing.T) {
 	testUint16x8Compare(t, archsimd.Uint16x8.Greater, greaterSlice[uint16])
 	testUint32x4Compare(t, archsimd.Uint32x4.Greater, greaterSlice[uint32])
 	testUint64x2Compare(t, archsimd.Uint64x2.Greater, greaterSlice[uint64])
-	testUint8x16Compare(t, archsimd.Uint8x16.Greater, greaterSlice[uint8])
 
 	if archsimd.X86.AVX2() {
+		testUint8x16Compare(t, archsimd.Uint8x16.Greater, greaterSlice[uint8])
 		testUint16x16Compare(t, archsimd.Uint16x16.Greater, greaterSlice[uint16])
 		testUint32x8Compare(t, archsimd.Uint32x8.Greater, greaterSlice[uint32])
 		testUint64x4Compare(t, archsimd.Uint64x4.Greater, greaterSlice[uint64])
@@ -188,9 +188,9 @@ func TestGreaterEqual(t *testing.T) {
 	testUint16x8Compare(t, archsimd.Uint16x8.GreaterEqual, greaterEqualSlice[uint16])
 	testUint32x4Compare(t, archsimd.Uint32x4.GreaterEqual, greaterEqualSlice[uint32])
 	testUint64x2Compare(t, archsimd.Uint64x2.GreaterEqual, greaterEqualSlice[uint64])
-	testUint8x16Compare(t, archsimd.Uint8x16.GreaterEqual, greaterEqualSlice[uint8])
 
 	if archsimd.X86.AVX2() {
+		testUint8x16Compare(t, archsimd.Uint8x16.GreaterEqual, greaterEqualSlice[uint8])
 		testUint16x16Compare(t, archsimd.Uint16x16.GreaterEqual, greaterEqualSlice[uint16])
 		testUint32x8Compare(t, archsimd.Uint32x8.GreaterEqual, greaterEqualSlice[uint32])
 		testUint64x4Compare(t, archsimd.Uint64x4.GreaterEqual, greaterEqualSlice[uint64])

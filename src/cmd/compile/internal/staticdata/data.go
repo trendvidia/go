@@ -289,16 +289,26 @@ func WriteFuncSyms() {
 		// Under -buildmode=plugin / -buildmode=shared, closure
 		// descriptors must be writable so Plugin.Close (v2) can
 		// rewrite the F field to a panic-on-call stub before
-		// dlclose unmaps the plugin's text. Force SNOPTRDATA via
-		// the same pattern used for go.globalptr/go.funcptr slots
-		// (NOPTR alone makes Globl pick SNOPTRBSS for content-less
-		// symbols; we have a 1-pointer SymPtr initialiser here so
-		// we explicitly force SNOPTRDATA to land in writable
-		// .noptrdata). Standard -buildmode=exe keeps RODATA — bit-
-		// identical output for non-plugin builds.
+		// dlclose unmaps the plugin's text. NOPTR lands it as
+		// SNOPTRDATA in writable .noptrdata: the SymPtr initialiser
+		// above already made the symbol SDATA (prepwrite), and Globl
+		// maps NOPTR data to SNOPTRDATA (it would pick SNOPTRBSS only
+		// for a content-less symbol). The same pattern emits the
+		// go.typeptr/go.itabptr slots (SlotRegistry.Write). Standard
+		// -buildmode=exe keeps RODATA — bit-identical output for
+		// non-plugin builds.
+		//
+		// Both arms are pinned by
+		// cmd/compile/internal/test.TestFuncsymWritableUnderDynlink,
+		// which nm-checks this symbol's kind per flag: an 'R' here or
+		// a 'D' on the -buildmode=exe arm fails it. It does NOT pin
+		// the SymPtr-then-Global ORDER, and nothing does: with Global
+		// first, GloblPos types the content-less symbol SNOPTRBSS and
+		// the later SymPtr write maps it straight back to SNOPTRDATA
+		// (prepwrite), so an inverted order still reads 'D'. Only
+		// dropping the SymPtr write altogether leaves 'B'.
 		if base.Ctxt.Flag_dynlink || base.Ctxt.Flag_shared {
 			objw.Global(sf, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
-			sf.Type = objabi.SNOPTRDATA
 		} else {
 			objw.Global(sf, int32(types.PtrSize), obj.DUPOK|obj.RODATA)
 		}

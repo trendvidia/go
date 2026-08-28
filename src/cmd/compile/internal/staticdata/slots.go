@@ -12,7 +12,6 @@ import (
 	"cmd/compile/internal/objw"
 	"cmd/compile/internal/types"
 	"cmd/internal/obj"
-	"cmd/internal/objabi"
 )
 
 // SlotRegistry accumulates deferred data-slot symbols during parallel
@@ -49,13 +48,25 @@ func (r *SlotRegistry) Record(slot, target *obj.LSym) {
 }
 
 // Write emits every recorded slot: a single pointer-sized word
-// initialised to its target's address, DUPOK|NOPTR, forced to
-// SNOPTRDATA so it lives in writable .noptrdata rather than being
-// promoted to a RELRO section by makeRelroForSharedLib (which boosts
-// read-only kinds carrying relocations); the runtime rewrites slots at
-// module load during cross-module canonicalisation. Must be called
-// once, single-threaded, after all functions are compiled — from
-// gc.dumpdata.
+// initialised to its target's address, DUPOK|NOPTR. It lands as
+// SNOPTRDATA: objw.SymPtr's write makes the symbol SDATA
+// (obj.(*LSym).prepwrite) and obj.Globl maps a NOPTR data symbol to
+// SNOPTRDATA. That is what keeps it in writable .noptrdata rather than
+// being promoted to a RELRO section by the linker's
+// makeRelroForSharedLib (which boosts read-only kinds carrying
+// relocations); the runtime rewrites slots at module load during
+// cross-module canonicalisation, so a read-only slot would fault
+// there. Assigning the type explicitly after Global was measured to
+// change nothing (byte-identical object, 2026-08-27, #67); what pins
+// the writable placement of these slots is
+// cmd/compile/internal/test.TestTypetabSlotsPresent on the object and
+// cmd/cgo/internal/testplugin.TestTypetabLinkedTables on the linked
+// ELF plugin. (The same SymPtr-then-Global pattern in
+// WriteFuncSyms's -dynlink/-shared arm is pinned separately, by
+// TestFuncsymWritableUnderDynlink — neither typetab test compiles
+// with those flags or takes a function value, so neither covers it.)
+// Must be called once, single-threaded, after all functions are
+// compiled — from gc.dumpdata.
 func (r *SlotRegistry) Write() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -69,6 +80,5 @@ func (r *SlotRegistry) Write() {
 	for _, s := range slots {
 		objw.SymPtr(s, 0, r.pending[s], 0)
 		objw.Global(s, int32(types.PtrSize), obj.DUPOK|obj.NOPTR)
-		s.Type = objabi.SNOPTRDATA
 	}
 }

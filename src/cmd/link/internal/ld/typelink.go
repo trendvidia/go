@@ -85,9 +85,13 @@ func (ctxt *Link) typelink() {
 		if !strings.HasPrefix(name, "go.typeptr.") {
 			continue
 		}
-		// DUPOK symbols can produce multiple loader.Sym IDs under the
-		// same name. Keep only the canonical one with the expected
-		// pointer-sized payload and its R_ADDR relocation to the type.
+		// Keep only a slot with the expected pointer-sized payload
+		// and its R_ADDR relocation to the type. The seen-by-name guard
+		// is defensive: loader.(*loadState).addSym returns the
+		// EXISTING Sym for a DUPOK redefinition (without adding it to
+		// objSyms), so one name yields one loader.Sym here, and
+		// testplugin.TestTypetabLinkedTables asserts exactly that by
+		// equating this count with the linked go.typeptr.* symbols.
 		if seenTypeptr[name] {
 			continue
 		}
@@ -151,9 +155,13 @@ func (ctxt *Link) typelink() {
 		if !strings.HasPrefix(name, "go.itabptr.") {
 			continue
 		}
-		// DUPOK symbols can produce multiple loader.Sym IDs under the
-		// same name. Keep only the canonical one with the expected
-		// pointer-sized payload and its R_ADDR relocation to the itab.
+		// Keep only a slot with the expected pointer-sized payload
+		// and its R_ADDR relocation to the itab. The seen-by-name guard
+		// is defensive: loader.(*loadState).addSym returns the
+		// EXISTING Sym for a DUPOK redefinition (without adding it to
+		// objSyms), so one name yields one loader.Sym here, and
+		// testplugin.TestTypetabLinkedTables asserts exactly that by
+		// equating this count with the linked go.itabptr.* symbols.
 		if seenItabptr[name] {
 			continue
 		}

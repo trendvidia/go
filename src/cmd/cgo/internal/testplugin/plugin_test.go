@@ -1124,6 +1124,202 @@ func TestUniqueTypesAndItabs(t *testing.T) {
 	run(t, "./iface.exe")
 }
 
+// TestTypetabLinkedTables pins what the linker does with the -typetab
+// slots that TestTypetabSlotsPresent (cmd/compile/internal/test) only
+// proves the compiler emits. ld/typelink.go builds runtime.typeptrs /
+// runtime.typeptroffs / runtime.itabptrs from a reachable-symbol walk
+// with three silent `continue` filters (size != ptrsize, no reloc,
+// duplicate name); a wrong filter yields an EMPTY table and every
+// cross-module type dedup quietly stops happening. And each slot must
+// land in writable data: under -buildmode=plugin the linker's
+// makeRelroForSharedLib promotes read-only kinds carrying relocations
+// into RELRO, which the runtime's typeptrsinit / itabptrsinit rewrite
+// would then fault on. Mach-O has no RELRO and PE has no GNU_RELRO
+// segment, so only an ELF leg can observe the second property; the
+// first is checked here too because it is where the linker's walk is.
+//
+// The fixture is iface_a + iface_b under the iface host: both build
+// a non-empty interface value from a type shared with the host, so a
+// -typetab build produces at least one go.typeptr.* and one
+// go.itabptr.* slot per plugin, and running the host proves the
+// tables the linker wrote are ones the runtime accepts.
+func TestTypetabLinkedTables(t *testing.T) {
+	globalSkip(t)
+	if runtime.GOOS != "linux" {
+		t.Skipf("RELRO promotion is an ELF property; %s has no PT_GNU_RELRO to observe", runtime.GOOS)
+	}
+
+	// Own directory: TestUniqueTypesAndItabs builds iface_a.so and
+	// iface_b.so without -typetab, and the host opens them by bare
+	// name, so a -typetab build of the same fixtures must not overwrite
+	// them.
+	dir := "typetab"
+	if err := os.MkdirAll(dir, 0777); err != nil {
+		t.Fatal(err)
+	}
+	// Private build cache. This fork ships a release-style VERSION, so
+	// cmd/go's toolID for the compiler and linker is version-only and
+	// does NOT change when they are rebuilt from source (trendvidia/
+	// go#81). A shared GOCACHE therefore hands this test std archives
+	// linked by whatever toolchain filled the cache, and the test
+	// silently measures that one instead: measured 2026-08-27 on
+	// linux/arm64, a clean HEAD toolchain reporting 40+ bogus "promoted
+	// into RELRO" failures for runtime.* slots left behind by an
+	// earlier experiment's compiler. A false PASS is available the same
+	// way. Everything below is built with -typetab anyway, so a private
+	// cache costs one std build rather than reusing anything real.
+	t.Setenv("GOCACHE", t.TempDir())
+	// go build's own -gcflags (no pattern) applies only to the named
+	// package; -typetab must reach every package linked into the plugin
+	// so that types shared with the host are all routed through slots.
+	// all= would override the harness's GO_GCFLAGS, so carry them along.
+	allGcflags := "-gcflags=all=" + strings.TrimSpace(gcflags+" -typetab")
+	goCmd(t, "build", allGcflags, "-o", filepath.Join(dir, "iface.exe"), "./iface")
+	goCmdBuildPluginFor(t, "iface", allGcflags, "-o", filepath.Join(dir, "iface_a.so"), "./iface_a")
+	goCmdBuildPluginFor(t, "iface", allGcflags, "-o", filepath.Join(dir, "iface_b.so"), "./iface_b")
+
+	for _, so := range []string{"iface_a.so", "iface_b.so"} {
+		t.Run(so, func(t *testing.T) {
+			checkTypetabTables(t, filepath.Join(dir, so))
+		})
+	}
+
+	// testenv.Command, not exec.Command: this host dlopens two plugins,
+	// and a wedged module load would otherwise hang to the package
+	// timeout with no stack dump. testenv gives it the test's deadline
+	// and SIGQUITs it.
+	cmd := testenv.Command(t, "./iface.exe")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("host built with -typetab could not load -typetab plugins: %v\n%s", err, out)
+	}
+}
+
+// checkTypetabTables asserts, on a linked ELF plugin, that the linker
+// produced non-empty, pointer-aligned typeptr/itabptr tables whose entry
+// counts match the slot symbols it linked, and that every slot lives in
+// writable, non-RELRO data. It reads the ELF symbol table rather than
+// `go tool nm` codes: nm reports 'D' for any SHF_WRITE section, and
+// .data.rel.ro is SHF_WRITE too (the loader applies relocations before
+// mprotecting it), so a RELRO slot would read as 'D' and pass.
+func checkTypetabTables(t *testing.T, image string) {
+	t.Helper()
+	f, err := elf.Open(image)
+	if err != nil {
+		t.Fatalf("elf.Open(%s): %v", image, err)
+	}
+	defer f.Close()
+	syms, err := f.Symbols()
+	if err != nil {
+		t.Fatalf("%s: no symbol table: %v", image, err)
+	}
+	ptrsize := uint64(4)
+	if f.Class == elf.ELFCLASS64 {
+		ptrsize = 8
+	}
+
+	var relro []*elf.Prog
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_GNU_RELRO {
+			relro = append(relro, p)
+		}
+	}
+	// Assert the segment exists rather than letting the containment
+	// loop below iterate zero times: a plugin is linked with relro
+	// (ld.UseRelro is true for -buildmode=plugin on ELF, and an
+	// external link of a shared object emits PT_GNU_RELRO unless
+	// something passed -z norelro), so no segment means the RELRO half
+	// of this test silently measured nothing and reported PASS.
+	if len(relro) == 0 {
+		t.Errorf("%s: no PT_GNU_RELRO segment; the RELRO containment check below would observe nothing (linked with -z norelro?)", image)
+	}
+
+	bySym := make(map[string]elf.Symbol)
+	slotCount := map[string]int{"go.typeptr.": 0, "go.itabptr.": 0}
+	for _, s := range syms {
+		if s.Section == elf.SHN_UNDEF {
+			continue
+		}
+		if strings.HasPrefix(s.Name, "runtime.typeptr") || strings.HasPrefix(s.Name, "runtime.itabptr") {
+			bySym[s.Name] = s
+			continue
+		}
+		var prefix string
+		for p := range slotCount {
+			if strings.HasPrefix(s.Name, p) {
+				prefix = p
+			}
+		}
+		if prefix == "" {
+			continue
+		}
+		slotCount[prefix]++
+		if s.Size != ptrsize {
+			t.Errorf("%s: slot %s has size %d, want %d; typelink's size filter would drop it", image, s.Name, s.Size, ptrsize)
+		}
+		if int(s.Section) >= len(f.Sections) {
+			t.Errorf("%s: slot %s has section index %d out of range", image, s.Name, s.Section)
+			continue
+		}
+		sect := f.Sections[s.Section]
+		if sect.Flags&elf.SHF_WRITE == 0 || sect.Flags&elf.SHF_EXECINSTR != 0 {
+			t.Errorf("%s: slot %s is in %s (flags %v), want a writable data section", image, s.Name, sect.Name, sect.Flags)
+		}
+		if strings.HasPrefix(sect.Name, ".data.rel.ro") {
+			t.Errorf("%s: slot %s was promoted into RELRO section %s; the runtime rewrites slots at module load and would fault", image, s.Name, sect.Name)
+		}
+		for _, p := range relro {
+			if s.Value >= p.Vaddr && s.Value < p.Vaddr+p.Memsz {
+				t.Errorf("%s: slot %s at %#x lies inside PT_GNU_RELRO [%#x,%#x)", image, s.Name, s.Value, p.Vaddr, p.Vaddr+p.Memsz)
+			}
+		}
+	}
+
+	table := func(name string, entry uint64) (uint64, bool) {
+		s, ok := bySym[name]
+		if !ok {
+			t.Errorf("%s: no %s symbol in the symbol table", image, name)
+			return 0, false
+		}
+		if s.Size == 0 {
+			t.Errorf("%s: %s is empty; typelink's reachable-symbol walk found no slots", image, name)
+		}
+		if s.Size%entry != 0 {
+			t.Errorf("%s: %s has size %d, not a multiple of the %d-byte entry", image, name, s.Size, entry)
+		}
+		return s.Size / entry, true
+	}
+	ntypeptrs, okTypeptrs := table("runtime.typeptrs", ptrsize)
+	ntypeptroffs, okTypeptroffs := table("runtime.typeptroffs", 4)
+	nitabptrs, okItabptrs := table("runtime.itabptrs", ptrsize)
+	// Nothing else catches a short typeptroffs. The runtime does check
+	// len(md.typeptrs) != len(md.typeptroffs) (runtime/type.go,
+	// typeptrsinit), but that throw cannot fire: ld/symtab.go publishes
+	// BOTH slice headers with the count it derived from runtime.typeptrs
+	// alone, never reading typeptroffs' own size. A typeptroffs shorter
+	// than its symbol claims would leave typeptrsinit indexing past the
+	// symbol into adjacent .noptrdata and canonicalising slots to
+	// garbage typeOffs, silently. So compare the symbol sizes here.
+	if okTypeptrs && okTypeptroffs && ntypeptroffs != ntypeptrs {
+		t.Errorf("%s: runtime.typeptroffs has %d entries, runtime.typeptrs has %d; typeptrsinit would index typeptroffs out of bounds", image, ntypeptroffs, ntypeptrs)
+	}
+	// Every slot the linker kept reachable got exactly one table entry:
+	// the walk's filters must not drop a slot, and DUPOK dedup must not
+	// double-count one.
+	// Gated on the symbol existing: table() already reported a missing
+	// one, and a second "N slots linked but the table has 0 entries"
+	// would point the reader at the linker's dedup instead.
+	if got := uint64(slotCount["go.typeptr."]); okTypeptrs && got != ntypeptrs {
+		t.Errorf("%s: %d go.typeptr.* slots linked but runtime.typeptrs has %d entries", image, got, ntypeptrs)
+	}
+	if got := uint64(slotCount["go.itabptr."]); okItabptrs && got != nitabptrs {
+		t.Errorf("%s: %d go.itabptr.* slots linked but runtime.itabptrs has %d entries", image, got, nitabptrs)
+	}
+	if slotCount["go.typeptr."] == 0 || slotCount["go.itabptr."] == 0 {
+		t.Errorf("%s: linked %d go.typeptr.* and %d go.itabptr.* slots; the fixture should produce both, so -typetab did not reach the compile", image, slotCount["go.typeptr."], slotCount["go.itabptr."])
+	}
+}
+
 func TestIssue18676(t *testing.T) {
 	// make sure we don't add the same itab twice.
 	// The buggy code hangs forever, so use a timeout to check for that.

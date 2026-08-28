@@ -488,6 +488,45 @@ func chainGrew(prevTail uintptr) bool
 // cmd/cgo/internal/testplugin rejectchained fixture sets it via
 // go:linkname; production code never does.
 //
+// DECISION (trendvidia/go#78, 2026-08-27): the push linkname stays, and
+// this comment is the written rule it establishes.
+//
+// A //go:linkname on a definition is a PUSH -- either form of the
+// directive, since the compiler sets sym.Linkname from both and marks
+// the def obj.AttrLinkname whenever it is set -- and a push on the def
+// is what makes a symbol legally pull-linknameable from any other
+// package under the default -checklinkname=1
+// (cmd/link/internal/loader.checkLinkname). It is not the only way
+// through that check, which allows osym.IsLinkname() ||
+// osym.ABIWrapper(); ABI wrappers attend assembly, package plugin has
+// none, and TestPluginPushLinknameSurface hard-fails if it gains any,
+// which is what keeps this rule's set the whole set.
+//
+// So in every production build, code linked into a host can pull this
+// var and run arbitrary code inside open, with pluginsMu held, between
+// stage 1 judging the file's bytes and LoadLibrary mapping them -- the
+// TOCTOU window the two-stage fence exists to close.
+//
+// Accepted, because code that can be linked into the host is already
+// inside the trust boundary: it could call syscall.LoadLibrary directly
+// and skip the fence altogether. The hook widens no boundary; it makes a
+// path that already existed look supported. Weighed and kept rather than
+// overlooked.
+//
+// The rule: this is the ONLY symbol package plugin itself pushes. Every
+// other go:linkname here is a bodyless declaration -- a PULL of a symbol
+// the runtime defines and chose to export to us, which exposes nothing
+// outward. TestPluginPushLinknameSurface pins that set; adding a second
+// push is a decision, not a detail, and that test is where it will be
+// noticed.
+//
+// It is not the whole plugin.* surface, and this decision does not cover
+// the rest of it: package runtime pushes nine of its own definitions in
+// under plugin.* names, none of them confined by
+// cmd/link/internal/loader.blockedLinknames, so those are reachable from
+// any package too. trendvidia/go#86 is open on whether they should be;
+// TestRuntimePushesIntoPluginNamespace pins that set meanwhile.
+//
 //go:linkname testHookBetweenFenceStages
 var testHookBetweenFenceStages func(pluginPath string)
 

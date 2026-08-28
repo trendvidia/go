@@ -25,6 +25,7 @@ import (
 var (
 	modkernel32            = syscall.NewLazyDLL("kernel32.dll")
 	procGetModuleFileNameW = modkernel32.NewProc("GetModuleFileNameW")
+	procGetLongPathNameW   = modkernel32.NewProc("GetLongPathNameW")
 )
 
 func open(name string) (*Plugin, error) {
@@ -33,9 +34,26 @@ func open(name string) (*Plugin, error) {
 		return nil, errors.New(`plugin.Open("` + name + `"): ` + err.Error())
 	}
 	pluginPath := filepath.Clean(absPath)
+	// The cache is keyed by the file's identity, not by its spelling.
+	// The loader resolves an 8.3 short name (RUNNER~1) to the same
+	// module as its long form, so a second Open through the other
+	// spelling must find what the first one cached. Missing it
+	// LoadLibrary's an already-mapped module, which returns the
+	// existing handle without re-running DllMain — landing in the
+	// chain-did-not-grow branch below, whose two causes cannot tell
+	// that case from a fresh map that registered no module data — and
+	// caches a false diagnosis under the second spelling forever,
+	// instead of returning the existing *Plugin that Open documents
+	// ("if a path has already been opened, then the existing *Plugin is
+	// returned", plugin.go). Only the KEY is canonicalised: the fence
+	// still reads, and LoadLibrary still maps, the spelling the caller
+	// gave, so a short name that keeps a deep path inside MAX_PATH
+	// keeps loading. Spellings longPathName cannot expand (a file that
+	// does not exist yet) key by themselves, as before.
+	pluginKey := longPathName(pluginPath)
 
 	pluginsMu.Lock()
-	if p := plugins[pluginPath]; p != nil {
+	if p := plugins[pluginKey]; p != nil {
 		// p.err transitions "" → non-empty only under pluginsMu
 		// (failed-load caching, Plugin.Close), so it must be read
 		// while still holding the mutex. Release before waiting on
@@ -170,7 +188,7 @@ func open(name string) (*Plugin, error) {
 	if !chainGrew(prevTail) {
 		if loaded := loadedModulePath(h); loaded != "" && !sameModulePath(loaded, pluginPath) {
 			aliased := pluginPath + " resolved to a different module, already loaded from " + loaded
-			plugins[pluginPath] = &Plugin{err: aliased}
+			plugins[pluginKey] = &Plugin{err: aliased}
 			syscall.FreeLibrary(h)
 			pluginsMu.Unlock()
 			return nil, errors.New(`plugin.Open("` + name + `"): ` + aliased)
@@ -178,7 +196,7 @@ func open(name string) (*Plugin, error) {
 		const noModData = "plugin DLL registered no Go module data in this process" +
 			" (its runtime imports may be bound to another program's image)"
 		syscall.FreeLibrary(h)
-		plugins[pluginPath] = &Plugin{err: noModData}
+		plugins[pluginKey] = &Plugin{err: noModData}
 		pluginsMu.Unlock()
 		return nil, errors.New(`plugin.Open("` + name + `"): ` + noModData)
 	}
@@ -207,7 +225,7 @@ func open(name string) (*Plugin, error) {
 	// refuse.
 	if err := checkLoadedABIMarker(h); err != nil {
 		rejectChainedModule(prevTail)
-		plugins[pluginPath] = &Plugin{err: err.Error()}
+		plugins[pluginKey] = &Plugin{err: err.Error()}
 		pluginsMu.Unlock()
 		return nil, errors.New(`plugin.Open("` + name + `"): ` + err.Error())
 	}
@@ -231,7 +249,7 @@ func open(name string) (*Plugin, error) {
 			// does: a bare return would leak one loader refcount per
 			// retry and re-run DllMain each time, deterministically
 			// failing again.
-			plugins[pluginPath] = &Plugin{
+			plugins[pluginKey] = &Plugin{
 				pluginpath: rejectedPath,
 				err:        errstr,
 			}
@@ -260,7 +278,7 @@ func open(name string) (*Plugin, error) {
 
 	pluginpath, syms, initTasks, errstr := lastmoduleinit()
 	if errstr != "" {
-		plugins[pluginPath] = &Plugin{
+		plugins[pluginKey] = &Plugin{
 			pluginpath: pluginpath,
 			err:        errstr,
 		}
@@ -273,7 +291,7 @@ func open(name string) (*Plugin, error) {
 		pluginpath: pluginpath,
 		loaded:     make(chan struct{}),
 	}
-	plugins[pluginPath] = p
+	plugins[pluginKey] = p
 	pluginsMu.Unlock()
 
 	doInit(initTasks)
@@ -757,18 +775,66 @@ func loadedModulePath(h syscall.Handle) string {
 // sameModulePath compares a loader-recorded module path with the path
 // Open was given, forgiving spelling differences that do not name a
 // different file: letter case (Windows paths are case-insensitive),
-// forward slashes, and the \\?\ literal-device prefix. A mismatch is
-// therefore a genuinely different module. Exotic-but-equivalent
-// spellings this comparison does not model (8.3 short names,
-// junctions, \\?\UNC\) degrade to a rejection whose message names both
-// spellings — loud and diagnosable, never a silent alias.
+// forward slashes, the \\?\ literal-device prefix, and 8.3 short-name
+// components (RUNNER~1), which the loader expands to their long form
+// when it records where a module lives. A mismatch is therefore a
+// genuinely different module. Exotic-but-equivalent spellings this
+// comparison does not model (junctions, \\?\UNC\) degrade to a
+// rejection whose message names both spellings — loud and diagnosable,
+// never a silent alias.
 func sameModulePath(a, b string) bool {
 	norm := func(p string) string {
+		p = longPathName(p)
 		p = strings.ReplaceAll(p, "/", "\\")
 		p = strings.TrimPrefix(p, `\\?\`)
 		return p
 	}
 	return strings.EqualFold(norm(a), norm(b))
+}
+
+// longPathName expands any 8.3 short-name components of p through
+// GetLongPathNameW, which is the same expansion the loader applies when
+// it records a module's path. A path the call cannot resolve (a file
+// that does not exist, an unrepresentable string) is returned unchanged
+// so the caller still compares the spelling it was given rather than
+// nothing.
+func longPathName(p string) string {
+	// Resolve explicitly instead of calling syscall.GetLongPathName:
+	// that wrapper reaches the procedure through LazyProc.Addr, which
+	// panics when it cannot be found, and open holds pluginsMu across
+	// the sameModulePath call below with no deferred unlock, so the
+	// panic would wedge every later Open, Lookup and Close in the
+	// process — the same hazard loadedModulePath resolves explicitly to
+	// avoid. "Could not expand" is an answer this function documents; a
+	// deadlock is not.
+	if err := procGetLongPathNameW.Find(); err != nil {
+		return p
+	}
+	up, err := syscall.UTF16PtrFromString(p)
+	if err != nil {
+		return p
+	}
+	for size := uint32(syscall.MAX_PATH); size <= 65536; size *= 2 {
+		buf := make([]uint16, size)
+		// LazyProc.Call is //go:uintptrescapes, so up and buf stay
+		// alive across it. The DWORD return needs narrowing before it
+		// is used as a length, exactly as loadedModulePath narrows
+		// GetModuleFileNameW's: the Windows x64 ABI leaves the upper
+		// half of RAX undefined for one, and an unnarrowed value would
+		// index out of range under pluginsMu.
+		r0, _, _ := procGetLongPathNameW.Call(uintptr(unsafe.Pointer(up)), uintptr(unsafe.Pointer(&buf[0])), uintptr(size))
+		n := uint32(r0)
+		if n == 0 {
+			return p
+		}
+		if n >= size {
+			// Truncated: n is the size the result needs, including
+			// its terminator, so the next doubling covers it.
+			continue
+		}
+		return syscall.UTF16ToString(buf[:n])
+	}
+	return p
 }
 
 // doInit is defined in package runtime.

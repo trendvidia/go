@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // The testplugin suite exercises the ABI fence only through real,
@@ -341,6 +342,16 @@ func TestCheckABIMarkerUnreadable(t *testing.T) {
 // accept/reject matrix unexercised with the suite green.
 func loadablePE(t *testing.T, mutate func(p *peImage)) (syscall.Handle, error) {
 	t.Helper()
+	return syscall.LoadLibrary(writeLoadablePE(t, mutate))
+}
+
+// writeLoadablePE builds the loadablePE image and writes it to a fresh
+// .dll path, returning the path so a test can hand it to open itself:
+// open takes a path, not a handle, and the image is exactly the input
+// of its chain-did-not-grow branch (a loadable DLL exporting a valid
+// marker that never chains any moduledata).
+func writeLoadablePE(t *testing.T, mutate func(p *peImage)) string {
+	t.Helper()
 	p := newPE(3)
 	switch runtime.GOARCH {
 	case "arm64":
@@ -395,7 +406,83 @@ func loadablePE(t *testing.T, mutate func(p *peImage)) (syscall.Handle, error) {
 	if err := os.WriteFile(path, p.buf, 0o666); err != nil {
 		t.Fatal(err)
 	}
-	return syscall.LoadLibrary(path)
+	return path
+}
+
+var procGetModuleHandleW = modkernel32.NewProc("GetModuleHandleW")
+
+// TestOpenNoModuleData drives open through its chain-did-not-grow
+// branch, which no end-to-end fixture reaches: every real plugin this
+// toolchain links chains its moduledata from DllMain, and the samename
+// host cannot alias on a loader that maps same-named DLLs separately
+// (measured on Windows 11 arm64). The loadablePE image is precisely
+// this branch's input — it passes stage 1, LoadLibrary maps it, and
+// nothing is appended to the chain — so open must report the
+// no-module-data diagnosis (not the alias one: the loader's recorded
+// path and the request name the same file, whatever spelling
+// t.TempDir carries), cache that failure, and FreeLibrary the image.
+func TestOpenNoModuleData(t *testing.T) {
+	path := writeLoadablePE(t, nil)
+	const noModData = "registered no Go module data in this process"
+
+	p, err := open(path)
+	if err == nil {
+		p.Close()
+		t.Fatalf("open(%q) succeeded; want the no-module-data rejection", path)
+	}
+	if !strings.Contains(err.Error(), noModData) {
+		t.Fatalf("open(%q) = %v; want an error containing %q", path, err, noModData)
+	}
+	if strings.Contains(err.Error(), "resolved to a different module") {
+		t.Fatalf("open(%q) = %v; a fresh map was misdiagnosed as an alias", path, err)
+	}
+
+	// The failure is cached: a second Open must not map the file again.
+	if _, err := open(path); err == nil || !strings.Contains(err.Error(), "(previous failure)") {
+		t.Fatalf("second open(%q) = %v; want the cached %q", path, err, "(previous failure)")
+	}
+
+	// The branch FreeLibrary'd the only reference it took, so the loader
+	// no longer knows the module.
+	up, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, _, _ := procGetModuleHandleW.Call(uintptr(unsafe.Pointer(up))); h != 0 {
+		t.Errorf("GetModuleHandleW(%q) = %#x after the rejection; want 0 (image unmapped)", path, h)
+	}
+}
+
+// TestOpenShortNameCacheKey pins that the plugins cache is keyed by
+// the file's identity and not by its spelling: an image already opened
+// through its long path must be FOUND by a second open through the 8.3
+// short spelling, which then reports the cached outcome instead of
+// going back to the loader.
+//
+// It matters because the loader hands a second LoadLibrary of an
+// already-mapped module the existing handle without re-running
+// DllMain, so a spelling that misses the cache lands in the
+// chain-did-not-grow branch — which cannot tell that case from a fresh
+// map registering no module data, and so caches a flatly false
+// diagnosis under the second spelling for the life of the process.
+// This fixture reaches the cache lookup, not that loader state: its
+// image never chains, so the first open frees it and a missed cache
+// would genuinely re-map. The distinguishing assertion is therefore
+// the cached "(previous failure)", which is exactly the lookup the
+// aliasing case depends on.
+func TestOpenShortNameCacheKey(t *testing.T) {
+	path := writeLoadablePE(t, nil)
+	short := shortPathName(t, path)
+	if strings.EqualFold(short, path) {
+		t.Skip("volume generates no 8.3 short names")
+	}
+
+	if _, err := open(path); err == nil || !strings.Contains(err.Error(), "registered no Go module data in this process") {
+		t.Fatalf("open(%q) = %v; want the no-module-data rejection", path, err)
+	}
+	if _, err := open(short); err == nil || !strings.Contains(err.Error(), "(previous failure)") {
+		t.Fatalf("open(%q) = %v; want the failure cached under the long spelling %q", short, err, path)
+	}
 }
 
 // TestCheckLoadedABIMarker exercises the stage-2 half of the fence
@@ -547,4 +634,76 @@ func TestSameModulePath(t *testing.T) {
 			}
 		})
 	}
+
+	// An 8.3 short name spells the same file the loader records under
+	// its long name; open compares the two after a load through the
+	// short spelling, and a mismatch there would misreport an ordinary
+	// load as an alias. Real files are needed: the expansion is the
+	// filesystem's, not a string rule.
+	t.Run("short vs long name", func(t *testing.T) {
+		// Expand the temp root before building the fixture: a test's
+		// "long" path is only as long as its base, and %TMP% is not
+		// guaranteed to be spelled out. The self-hosted windows/arm64
+		// runner runs as NetworkService, whose temp directory is
+		// C:\WINDOWS\SERVIC~1\NETWOR~1\AppData\Local\Temp — so an
+		// unexpanded base leaves short-name components INSIDE long,
+		// and longPathName, which correctly expands all of them, is
+		// then measured against a target that was never fully long.
+		base := longPathName(t.TempDir())
+		dir := filepath.Join(base, "a directory name well past eight chars")
+		if err := os.Mkdir(dir, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		long := filepath.Join(dir, "a-plugin-name-well-past-eight-chars.dll")
+		other := filepath.Join(dir, "another-plugin-name-past-eight-chars.dll")
+		for _, f := range []string{long, other} {
+			if err := os.WriteFile(f, nil, 0o666); err != nil {
+				t.Fatal(err)
+			}
+		}
+		short := shortPathName(t, long)
+		if strings.EqualFold(short, long) {
+			t.Skip("volume generates no 8.3 short names")
+		}
+		if !sameModulePath(long, short) || !sameModulePath(short, long) {
+			t.Errorf("sameModulePath(%q, %q) = false; want true for one file's short and long names", long, short)
+		}
+		if sameModulePath(short, other) {
+			t.Errorf("sameModulePath(%q, %q) = true; want false for different files", short, other)
+		}
+		if got := longPathName(short); !strings.EqualFold(got, long) {
+			t.Errorf("longPathName(%q) = %q; want %q", short, got, long)
+		}
+		if got := longPathName(`C:\no\such\dir\p.dll`); got != `C:\no\such\dir\p.dll` {
+			t.Errorf("longPathName(missing) = %q; want the input unchanged", got)
+		}
+	})
+}
+
+// shortPathName returns the 8.3 spelling of path, or path itself when
+// the volume keeps no short names.
+func shortPathName(t *testing.T, path string) string {
+	t.Helper()
+	up, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Grow the buffer on truncation, the idiom loadedModulePath and
+	// longPathName both use: GetShortPathNameW answers a too-small
+	// buffer by returning the size the result NEEDS, with no error, so
+	// a fixed buffer would slice out of range and panic instead of
+	// failing this test with a diagnosis.
+	for size := uint32(syscall.MAX_PATH); size <= 65536; size *= 2 {
+		buf := make([]uint16, size)
+		n, err := syscall.GetShortPathName(up, &buf[0], size)
+		if err != nil {
+			t.Fatalf("GetShortPathName(%q): %v", path, err)
+		}
+		if n >= size {
+			continue
+		}
+		return syscall.UTF16ToString(buf[:n])
+	}
+	t.Fatalf("GetShortPathName(%q): no answer fits 64Ki UTF-16 units", path)
+	return ""
 }

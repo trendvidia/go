@@ -2498,6 +2498,78 @@ var blockedLinknames = map[string][]string{
 	"crypto/internal/rand.SetTestingReader": {"testing/cryptotest"}, // pushed from crypto/internal/rand
 	"testing.checkParallel":                 {"testing/cryptotest"}, // pushed from testing
 	"runtime.addmoduledata":                 {},                     // assembly symbol, disallow all packages
+	// --- Fork additions (trendvidia) ---
+	//
+	// The runtime pushes nine symbols into package plugin's namespace
+	// (src/runtime/plugin.go). Eight are fork-added -- upstream has only
+	// plugin.lastmoduleinit -- and a push makes the def pull-linknameable
+	// from anywhere under the default -checklinkname=1, so without an entry
+	// here any package linked into a host can call straight into the
+	// fence's machinery.
+	//
+	// Six are confined to package plugin alone; nothing else in the tree
+	// pulls them, measured. Two pins keep that true, because a key here is
+	// a plain string that nothing resolves against a real symbol -- a
+	// rename or an entry dropped in a merge would leave a dead key and
+	// silently re-open the symbol to every package, with nothing failing
+	// anywhere. TestCheckLinknamePluginPushes (cmd/link) builds a pull of
+	// each from another package and requires the link to fail with that
+	// reason; TestBlockedLinknamesCoverPluginPushes (this package) requires
+	// every plugin.* push in src/runtime/plugin.go to be either listed
+	// below or named in the gap note, and every plugin.* key below to still
+	// have a push.
+	"plugin.lastmoduleinit":      {"plugin"},
+	"plugin.validatePkghashes":   {"plugin"},
+	"plugin.pluginHasDependents": {"plugin"},
+	"plugin.pluginDependents":    {"plugin"},
+	"plugin.pluginClose":         {"plugin"},
+	"plugin.syncBeforeUnmap":     {"plugin"},
+	// The other three -- chainTail, chainGrew and rejectChainedModule --
+	// are deliberately NOT confined. That is a known gap rather than an
+	// oversight (trendvidia/go#86), and it is the sharper half of the nine,
+	// so the options below are unfinished business and not housekeeping:
+	// plugin_rejectChainedModule (src/runtime/plugin.go:180) is the only
+	// one of the nine that writes through a caller-supplied address -- it
+	// stores nil into prevTail.next and points lastmoduledatap at prevTail
+	// -- and plugin_chainTail hands out a live moduledata address to pair
+	// with it. pluginClose and syncBeforeUnmap, the two that drive
+	// unmapping, take a pluginpath and look the module up.
+	//
+	// Why they are unconfined: the rejectchained fixture pulls all three
+	// from its own MAIN package, and an entry here is matched against the
+	// referencing library's recorded package path, which cmd/go collapses
+	// to the literal "main" for every main package not built with
+	// -buildmode=plugin (pkgPath, cmd/go/internal/work/gc.go). Measured:
+	// `link: main: invalid reference to plugin.chainTail` on the windows
+	// legs when these were confined. So naming the fixture's own import
+	// path never matches, and {"main"} would admit every executable and
+	// confine nothing.
+	//
+	// Closing this is a decision, not a detail. Three options, none picked
+	// here:
+	//
+	//  1. Move the pulls into a library under the fixture
+	//     (testdata/rejectchained/fence) and name that. A library's path IS
+	//     recorded verbatim, so unlike the fixture's own path it matches.
+	//     Measured to link on windows/amd64 and windows/arm64, with a pull
+	//     from any other library still failing the link. Costs a fixture
+	//     restructure, and only the windows legs can show the restructured
+	//     fixture still tests what it did.
+	//  2. Build the fixture with -checklinkname=0 -- which #78 declined for
+	//     the plugin-side hook, and which disables checking for that whole
+	//     binary.
+	//  3. Stop runtime pushing these and give the fixture another route to
+	//     the post-load rejection path it exists to test.
+	//
+	// plugin.testHookBetweenFenceStages is absent from this map for a
+	// different reason: it is pushed by package plugin itself
+	// (plugin_windows.go) rather than by the runtime, so it is not one of
+	// the nine. #78 weighed that push and kept it, and that decision is
+	// closed. An entry here confines the pull without touching the push and
+	// was not among the options #78 weighed -- but the fixture pulls the
+	// hook from the same main package, so it is blocked by exactly the
+	// constraint above, and option 1 would cover it too. Whether to take
+	// that lever is #78's call, not this table's.
 }
 
 // check if a linkname reference to symbol s from pkg is allowed

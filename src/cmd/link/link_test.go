@@ -1732,6 +1732,49 @@ func TestCheckLinkname(t *testing.T) {
 	}
 }
 
+// TestCheckLinknamePluginPushes checks that the symbols the runtime
+// pushes into package plugin's namespace (src/runtime/plugin.go) really
+// are confined to package plugin by blockedLinknames: a pull from any
+// other package must fail the link, and must fail for that reason
+// rather than because the symbol is missing. See trendvidia/go#86.
+func TestCheckLinknamePluginPushes(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	t.Parallel()
+
+	tmpdir := t.TempDir()
+	for _, sym := range []string{
+		"lastmoduleinit",
+		"validatePkghashes",
+		"pluginHasDependents",
+		"pluginDependents",
+		"pluginClose",
+		"syncBeforeUnmap",
+	} {
+		t.Run(sym, func(t *testing.T) {
+			t.Parallel()
+			// The signature does not have to match the runtime's: the
+			// linker rejects the reference by name, before anything
+			// looks at what it refers to.
+			prog := "package main\n\nimport _ \"unsafe\"\n\n" +
+				"//go:linkname pulled plugin." + sym + "\n" +
+				"func pulled()\n\nfunc main() { pulled() }\n"
+			src := filepath.Join(tmpdir, sym+".go")
+			if err := os.WriteFile(src, []byte(prog), 0666); err != nil {
+				t.Fatal(err)
+			}
+			cmd := goCmd(t, "build", "-o", filepath.Join(tmpdir, sym+".exe"), src)
+			cmd.Dir = tmpdir
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("build succeeded: plugin.%s is pull-linknameable from package main\n%s", sym, out)
+			}
+			if want := "invalid reference to plugin." + sym; !strings.Contains(string(out), want) {
+				t.Errorf("build failed, but not on the linkname check: want %q in:\n%s", want, out)
+			}
+		})
+	}
+}
+
 func TestLinknameBSS(t *testing.T) {
 	// Test that the linker chooses the right one as the definition
 	// for linknamed variables. See issue #72032.

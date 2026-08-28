@@ -455,6 +455,12 @@ func validatePkghashes(addr uintptr) (errstr string, rejectedPath string)
 // the address of the last moduledata on the chain; open() snapshots it
 // around LoadLibrary to detect whether the DLL registered here.
 //
+// The runtime's push of this symbol is deliberately left unconfined in
+// cmd/link/internal/loader.blockedLinknames, so any package linked into
+// a host may pull it: the rejectchained fixture pulls it from a main
+// package, whose recorded path the linker cannot name. The reasoning
+// and the ways out are at those entries (trendvidia/go#86).
+//
 //go:linkname chainTail
 func chainTail() uintptr
 
@@ -463,6 +469,10 @@ func chainTail() uintptr
 // LoadLibrary chainTail snapshot — by reading only prevTail's next
 // link, which is a field of a module this host may read; nothing of
 // the appended node itself is inspected.
+//
+// Deliberately unconfined in blockedLinknames, as chainTail is
+// (trendvidia/go#86): this is the arbitrary-address read that pairs
+// with rejectChainedModule's write.
 //
 //go:linkname chainGrew
 func chainGrew(prevTail uintptr) bool
@@ -508,6 +518,12 @@ func callFenceHook(hook func(string), pluginPath string) {
 // foreign-layout memory at host offsets. The node is identified by
 // position, never by inspecting it: its fields are exactly what the
 // generation mismatch says may have moved.
+//
+// Deliberately unconfined in blockedLinknames, as chainTail is
+// (trendvidia/go#86), and the sharpest of the three: it writes through
+// the address it is handed. Any package linked into a host may pull it
+// and call it with an address of its own choosing until that gap is
+// closed.
 //
 //go:linkname rejectChainedModule
 func rejectChainedModule(prevTail uintptr)

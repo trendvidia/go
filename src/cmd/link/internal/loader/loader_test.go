@@ -11,6 +11,11 @@ import (
 	"cmd/internal/sys"
 	"cmd/link/internal/sym"
 	"fmt"
+	"internal/testenv"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -461,5 +466,58 @@ func TestOuterSub(t *testing.T) {
 	}
 	if count != 5 {
 		t.Errorf("expected %d in sub list got %d", 5, count)
+	}
+}
+
+// TestBlockedLinknamesCoverPluginPushes checks that every symbol the
+// runtime pushes into package plugin's namespace is accounted for in
+// blockedLinknames: confined to a package list, or named below as a
+// deliberately unconfined exception (trendvidia/go#86).
+//
+// The keys of blockedLinknames are plain strings that nothing resolves
+// against a real symbol, so a renamed push -- or an entry dropped by a
+// merge with upstream -- leaves a dead key behind and silently makes the
+// symbol pull-linknameable from every package again, with no build or
+// test failing anywhere. Both directions are checked here so that either
+// half of such a drift fails this test instead.
+func TestBlockedLinknamesCoverPluginPushes(t *testing.T) {
+	// Pushed into package plugin's namespace but deliberately not
+	// confined: the rejectchained fixture pulls these from its own main
+	// package, whose recorded path is the literal "main". See the comment
+	// at the plugin entries in blockedLinknames.
+	unconfined := map[string]bool{
+		"plugin.chainTail":           true,
+		"plugin.chainGrew":           true,
+		"plugin.rejectChainedModule": true,
+	}
+
+	src := filepath.Join(testenv.GOROOT(t), "src", "runtime", "plugin.go")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two-argument //go:linkname on a runtime definition: a push.
+	re := regexp.MustCompile(`(?m)^//go:linkname[ \t]+\S+[ \t]+(plugin\.\S+)[ \t]*$`)
+	pushed := make(map[string]bool)
+	for _, m := range re.FindAllStringSubmatch(string(data), -1) {
+		pushed[m[1]] = true
+	}
+	if len(pushed) == 0 {
+		t.Fatalf("no plugin.* pushes found in %s; the check below would pass vacuously", src)
+	}
+
+	for name := range pushed {
+		_, confined := blockedLinknames[name]
+		switch {
+		case confined && unconfined[name]:
+			t.Errorf("%s is both confined in blockedLinknames and listed here as unconfined; update this test and the comment at the entries", name)
+		case !confined && !unconfined[name]:
+			t.Errorf("%s: %s pushes this into package plugin's namespace, so any package may pull it, but it is neither confined in blockedLinknames nor a recorded exception (trendvidia/go#86)", name, src)
+		}
+	}
+	for name := range blockedLinknames {
+		if strings.HasPrefix(name, "plugin.") && !pushed[name] {
+			t.Errorf("blockedLinknames has %q, but %s no longer pushes it: the entry is a dead key and confines nothing", name, src)
+		}
 	}
 }

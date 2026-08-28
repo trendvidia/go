@@ -17,6 +17,11 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// Exits if this process is a child of TestAsyncPreemptPreservesVectors.
+	// It runs under a GODEBUG that hides CPU features, so it has to come
+	// before the AVX gate below.
+	asyncPreemptChildMain()
+
 	if !archsimd.X86.AVX() {
 		fmt.Fprintln(os.Stderr, "Skipping tests: AVX is not available")
 		os.Exit(0)

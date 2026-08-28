@@ -457,12 +457,30 @@ func genAMD64(g *gen) {
 	p("MOVQ m_p(%s), %s", xReg, xReg)
 	p("LEAQ (p_xRegs+xRegPerP_scratch)(%s), %s", xReg, xReg)
 
-	// Which registers do we need to save?
+	// Which registers do we need to save? Save the widest state any code
+	// running on this CPU could have live, which is what the archsimd
+	// feature gates admit: AVX-512 code needs ZMM, and either of AVX and
+	// AVX2 admits 256-bit code that needs YMM.
+	//
+	// The 256-bit path is keyed on AVX and not just AVX2 because VMOVDQU Y
+	// is a VEX-encoded AVX instruction and internal/cpu reports HasAVX only
+	// once the OS has enabled the YMM state: an AVX-only CPU (Sandy/Ivy
+	// Bridge) that took the SSE path here would lose the upper 128 bits of
+	// Y0-Y15 across every asynchronous preemption.
+	//
+	// HasAVX2 is still tested too, because the two flags can disagree in
+	// either direction. internal/cpu derives HasAVX2 from osSupportsAVX
+	// rather than from HasAVX, and GODEBUG options do not cascade -- see
+	// processOptions in internal/cpu/cpu.go, which writes each flag
+	// independently -- so GODEBUG=cpu.avx=off leaves HasAVX2 set while code
+	// gated on archsimd.X86.AVX2 keeps issuing 256-bit instructions.
 	p("#ifdef GOEXPERIMENT_simd")
 	p("CMPB internal∕cpu·X86+const_offsetX86HasAVX512(SB), $1")
 	p("JE saveAVX512")
+	p("CMPB internal∕cpu·X86+const_offsetX86HasAVX(SB), $1")
+	p("JE saveAVX")
 	p("CMPB internal∕cpu·X86+const_offsetX86HasAVX2(SB), $1")
-	p("JE saveAVX2")
+	p("JE saveAVX")
 	p("#endif")
 
 	// No features. Assume only SSE.
@@ -470,7 +488,7 @@ func genAMD64(g *gen) {
 	lXRegs.save(g)
 	p("JMP preempt")
 
-	label("saveAVX2:")
+	label("saveAVX:")
 	lYRegs.save(g)
 	p("JMP preempt")
 
@@ -486,18 +504,22 @@ func genAMD64(g *gen) {
 	p("MOVQ m_p(%s), %s", xReg, xReg)
 	p("MOVQ (p_xRegs+xRegPerP_cache)(%s), %s", xReg, xReg)
 
+	// Mirror the feature tests on the save side exactly: restoring a
+	// narrower state than was saved would leave the upper halves clobbered.
 	p("#ifdef GOEXPERIMENT_simd")
 	p("CMPB internal∕cpu·X86+const_offsetX86HasAVX512(SB), $1")
 	p("JE restoreAVX512")
+	p("CMPB internal∕cpu·X86+const_offsetX86HasAVX(SB), $1")
+	p("JE restoreAVX")
 	p("CMPB internal∕cpu·X86+const_offsetX86HasAVX2(SB), $1")
-	p("JE restoreAVX2")
+	p("JE restoreAVX")
 	p("#endif")
 
 	label("restoreSSE:")
 	lXRegs.restore(g)
 	p("JMP restoreGPs")
 
-	label("restoreAVX2:")
+	label("restoreAVX:")
 	lYRegs.restore(g)
 	p("JMP restoreGPs")
 

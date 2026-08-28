@@ -543,11 +543,7 @@ func setup() {
 		xremoveall(goosGoarch)
 	}
 	xmkdirall(goosGoarch)
-	xatexit(func() {
-		if files := xreaddir(goosGoarch); len(files) == 0 {
-			xremove(goosGoarch)
-		}
-	})
+	xatexit(func() { xremoveIfEmpty(goosGoarch) })
 
 	if goos != gohostos || goarch != gohostarch {
 		p := pathf("%s/pkg/%s_%s", goroot, goos, goarch)

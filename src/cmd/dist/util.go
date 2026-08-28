@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -298,6 +299,18 @@ func xremoveall(p string) {
 	os.RemoveAll(p)
 }
 
+// xremoveIfEmpty removes dir if it exists and holds no entries.
+// A dir that is already gone is not an error: this runs as an exit handler,
+// where a fatalf would turn an otherwise successful build into exit status 2
+// after a concurrent make.bash in the same tree removed the directory.
+func xremoveIfEmpty(dir string) {
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) > 0 {
+		return
+	}
+	xremove(dir)
+}
+
 // xreaddir replaces dst with a list of the names of the files and subdirectories in dir.
 // The names are relative to dir; they are not full paths.
 func xreaddir(dir string) []string {
@@ -327,6 +340,15 @@ func xworkdir() string {
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "go tool dist: %s\n", fmt.Sprintf(format, args...))
 
+	// A fatalf raised by an exit handler goes straight back to xexit, which
+	// picks up after the handler that failed instead of restarting them, so
+	// cleanup still happens and the handlers cannot loop. Skipping the
+	// shutdown below is what this check is for: dying is already closed, and
+	// bghelpers.Wait would block again on a background command still running.
+	if exiting.Load() {
+		xexit(2)
+	}
+
 	dieOnce.Do(func() { close(dying) })
 
 	// Wait for background goroutines to finish,
@@ -337,11 +359,26 @@ func fatalf(format string, args ...any) {
 	xexit(2)
 }
 
-var atexits []func()
+var (
+	atexits []func()
+
+	exiting    atomic.Bool  // xexit has started running the atexit handlers
+	atexitsRun atomic.Int32 // number of atexit handlers claimed by a runner
+)
 
 // xexit exits the process with return code n.
 func xexit(n int) {
-	for i := len(atexits) - 1; i >= 0; i-- {
+	exiting.Store(true)
+
+	// Run the handlers in reverse registration order, claiming each one
+	// atomically. A handler that calls fatalf comes back here, and two
+	// background jobs failing at once reach here on two goroutines; either
+	// way every remaining handler runs, and none runs twice.
+	for {
+		i := len(atexits) - int(atexitsRun.Add(1))
+		if i < 0 {
+			break
+		}
 		atexits[i]()
 	}
 	os.Exit(n)

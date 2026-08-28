@@ -1134,9 +1134,25 @@ func TestUniqueTypesAndItabs(t *testing.T) {
 // land in writable data: under -buildmode=plugin the linker's
 // makeRelroForSharedLib promotes read-only kinds carrying relocations
 // into RELRO, which the runtime's typeptrsinit / itabptrsinit rewrite
-// would then fault on. Mach-O has no RELRO and PE has no GNU_RELRO
-// segment, so only an ELF leg can observe the second property; the
-// first is checked here too because it is where the linker's walk is.
+// would then fault on. Both static properties are read out of the
+// linked ELF images, and RELRO promotion is an ELF mechanism in the
+// first place (Mach-O has no RELRO, PE no PT_GNU_RELRO), so
+// checkTypetabTables runs on linux only -- the one ELF platform the
+// plugin matrix runs; freebsd/android would qualify but nothing here
+// exercises them, so the gate names the measured platform rather than
+// the mechanism.
+//
+// Every platform still builds the -typetab host and plugins and runs
+// the host, but what that run can observe differs by platform, and
+// the difference is why the static half is not redundant. On windows
+// the slots ARE the dedup mechanism -- the PE loader interposes
+// nothing, and cmd/go forces -typetab onto every windows build
+// (work/init.go; ROADMAP.md P1) -- so an empty table fails iface.exe's
+// pointer-identity assertions outright. On POSIX the dynamic loader
+// binds the plugin's shared type descriptors to the host's copies
+// regardless, so the run passes with or without populated tables and
+// only checkTypetabTables observes them. Do not drop the linux static
+// half on the theory that running the host covers it everywhere.
 //
 // The fixture is iface_a + iface_b under the iface host: both build
 // a non-empty interface value from a type shared with the host, so a
@@ -1145,14 +1161,11 @@ func TestUniqueTypesAndItabs(t *testing.T) {
 // tables the linker wrote are ones the runtime accepts.
 func TestTypetabLinkedTables(t *testing.T) {
 	globalSkip(t)
-	if runtime.GOOS != "linux" {
-		t.Skipf("RELRO promotion is an ELF property; %s has no PT_GNU_RELRO to observe", runtime.GOOS)
-	}
 
-	// Own directory: TestUniqueTypesAndItabs builds iface_a.so and
-	// iface_b.so without -typetab, and the host opens them by bare
-	// name, so a -typetab build of the same fixtures must not overwrite
-	// them.
+	// Own directory: TestUniqueTypesAndItabs builds its own iface_a
+	// and iface_b plugins in the module root, and its host opens them
+	// by bare name from there, so this test's build of the same
+	// fixtures must not overwrite them.
 	dir := "typetab"
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		t.Fatal(err)
@@ -1175,13 +1188,37 @@ func TestTypetabLinkedTables(t *testing.T) {
 	// all= would override the harness's GO_GCFLAGS, so carry them along.
 	allGcflags := "-gcflags=all=" + strings.TrimSpace(gcflags+" -typetab")
 	goCmd(t, "build", allGcflags, "-o", filepath.Join(dir, "iface.exe"), "./iface")
-	goCmdBuildPluginFor(t, "iface", allGcflags, "-o", filepath.Join(dir, "iface_a.so"), "./iface_a")
-	goCmdBuildPluginFor(t, "iface", allGcflags, "-o", filepath.Join(dir, "iface_b.so"), "./iface_b")
+	// Not goCmdBuildPluginFor("iface", ...): that helper resolves the
+	// import library next to hostImplib, i.e. to the module root's
+	// iface.exe.a, left there by TestUniqueTypesAndItabs' host build.
+	// That is a different binary -- different gcflags, and built from
+	// the shared GOCACHE rather than the private one set above -- and
+	// it is not the host this test runs; under -run
+	// TestTypetabLinkedTables it does not exist at all. (The difference
+	// is not -typetab: cmd/go forces -typetab onto every windows build,
+	// work/init.go.) These
+	// plugins must link against the -typetab host built just above,
+	// whose import library the linker wrote alongside it. Absolute
+	// path: the linker does not run in this test's cwd -- cmd/go
+	// absolutises -pluginimplib before it chdirs (work/gc.go), but say
+	// it here rather than depend on that.
+	implib := ""
+	if runtime.GOOS == "windows" {
+		var err error
+		if implib, err = filepath.Abs(filepath.Join(dir, "iface.exe.a")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	goCmdBuildPluginWithImplib(t, implib, allGcflags, "-o", filepath.Join(dir, "iface_a"+pluginSuffix), "./iface_a")
+	goCmdBuildPluginWithImplib(t, implib, allGcflags, "-o", filepath.Join(dir, "iface_b"+pluginSuffix), "./iface_b")
 
-	for _, so := range []string{"iface_a.so", "iface_b.so"} {
-		t.Run(so, func(t *testing.T) {
-			checkTypetabTables(t, filepath.Join(dir, so))
-		})
+	// Static half: linux only, see the doc comment.
+	if runtime.GOOS == "linux" {
+		for _, so := range []string{"iface_a" + pluginSuffix, "iface_b" + pluginSuffix} {
+			t.Run(so, func(t *testing.T) {
+				checkTypetabTables(t, filepath.Join(dir, so))
+			})
+		}
 	}
 
 	// testenv.Command, not exec.Command: this host dlopens two plugins,

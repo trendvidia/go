@@ -106,10 +106,14 @@ func testMain(m *testing.M) int {
 		prettyPrintf("mkdir -p %s\n", dstRoot)
 		prettyPrintf("rsync -a %s/ %s\n", srcRoot, dstRoot)
 
-		if err := os.WriteFile(filepath.Join(dstRoot, "go.mod"), []byte("module testplugin\n"), 0666); err != nil {
+		// The go directive sets the language version: without it the
+		// module defaults to go1.16 and fixtures cannot use generics
+		// (the canonicaldata fixture instantiates them to reach the
+		// dictionary edge of trendvidia/go#25).
+		if err := os.WriteFile(filepath.Join(dstRoot, "go.mod"), []byte("module testplugin\n\ngo 1.26\n"), 0666); err != nil {
 			log.Panic(err)
 		}
-		prettyPrintf("echo 'module testplugin' > %s/go.mod\n", dstRoot)
+		prettyPrintf("printf 'module testplugin\\n\\ngo 1.26\\n' > %s/go.mod\n", dstRoot)
 	}
 
 	os.Setenv("GOPATH", GOPATH)
@@ -267,6 +271,21 @@ func testMain(m *testing.M) int {
 	}
 	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-a", "p"+pluginSuffix), "./samename/dira")
 	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-b", "p"+pluginSuffix), "./samename/dirb")
+
+	// Alias-path fixture (trendvidia/go#46): one plugin plus a hardlink
+	// spelling of it, so the loader resolves the second Open onto the
+	// already-loaded module. The plugin reuses samename/dira — the
+	// fixture's only observable is that the reopened alias answers.
+	goCmd(nil, "build", "-o", "aliaspath.exe", "./aliaspath")
+	goCmdBuildPluginFor(nil, "aliaspath", "-o=aliaspath-plugin"+pluginSuffix, "./samename/dira")
+
+	// Static-data canonicalization fixture (trendvidia/go#25): host and
+	// plugin both link testplugin/canonicaldata/shared; the plugin
+	// embeds descriptors, itabs, and data addresses in static data
+	// through each of the issue's four edges, and the host checks the
+	// resulting values against its own canonical copies.
+	goCmd(nil, "build", "-o", "canonicaldata.exe", "./canonicaldata")
+	goCmdBuildPluginFor(nil, "canonicaldata", "-o=canonicaldata-plugin"+pluginSuffix, "./canonicaldata/plugin")
 
 	// Stage-2 ABI rejection residue: one plugin source built twice, so
 	// the rejectchained host can byte-patch one copy's marker to a
@@ -867,6 +886,67 @@ func TestSameBaseNameDistinctDirs(t *testing.T) {
 	run(t, "./samename.exe")
 }
 
+// TestAliasPathRejectionNotCached pins trendvidia/go#46: the alias
+// rejection (a requested path resolving onto an already-loaded module)
+// is process state, not a property of the file, so plugin.Open must
+// not cache it. The fixture opens a plugin, opens a hardlink spelling
+// of it twice (both rejected with the named alias error, neither via
+// "(previous failure)"), closes the original, and then opens the
+// hardlink spelling again — which must now map its own image and
+// succeed. Windows-only: the branch exists because the Windows loader
+// resolves a request onto an already-mapped module; the POSIX open
+// path has no alias branch at all.
+func TestAliasPathRejectionNotCached(t *testing.T) {
+	globalSkip(t)
+	// The fixture bows out on its own when its premise is absent — a
+	// non-Windows build, or a loader that did not resolve the hardlink
+	// onto the already-mapped image. Report that as a SKIP rather than
+	// letting a run that pinned nothing come back green.
+	if out := run(t, "./aliaspath.exe"); strings.HasPrefix(out, "skip:") {
+		t.Skip(strings.TrimSpace(out))
+	}
+}
+
+// The TestCanonical* quartet pins trendvidia/go#25: type descriptors,
+// itabs, and data addresses that the PLUGIN embedded in static data —
+// where no slot-routed code access can canonicalize them — must still
+// resolve onto the host's canonical copies at plugin load. One edge of
+// the issue's checklist per test; the fixture host asserts each
+// plugin-produced value against its own copy of the shared package.
+
+func TestCanonicalDictionaries(t *testing.T) {
+	globalSkip(t)
+	run(t, "./canonicaldata.exe", "dict")
+}
+
+func TestCanonicalStaticIfaceGlobals(t *testing.T) {
+	globalSkip(t)
+	run(t, "./canonicaldata.exe", "staticiface")
+}
+
+func TestCanonicalTypeAssertDescriptors(t *testing.T) {
+	globalSkip(t)
+	run(t, "./canonicaldata.exe", "assertdesc")
+}
+
+func TestCanonicalStaticDataAddrs(t *testing.T) {
+	globalSkip(t)
+	run(t, "./canonicaldata.exe", "dataaddr")
+}
+
+// TestCanonicalStaticFuncValue is the scan's negative pin: the one
+// static-data word whose target is TEXT rather than data. A funcval
+// container (pkg.Func·f, writable and therefore scannable under
+// -buildmode=plugin) holds an R_ADDR to a host-shared function body,
+// which peLoadImportLibrary leaves typed SWINDOWS/SHOSTOBJ — the same
+// two types a host-shared DATA symbol carries. Routing it through the
+// udaddr rewrite stores *(__imp_X), i.e. the PLT stub's instruction
+// bytes, over an address the linker had already resolved correctly.
+func TestCanonicalStaticFuncValue(t *testing.T) {
+	globalSkip(t)
+	run(t, "./canonicaldata.exe", "staticfunc")
+}
+
 // TestRejectChainedModule drives the stage-2 ABI rejection end to end
 // and pins its residue handling (trendvidia/go#48). The host swaps the
 // plugin file between the fence's two reads through package plugin's
@@ -1342,7 +1422,10 @@ func checkTypetabTables(t *testing.T, image string) {
 	}
 	// Every slot the linker kept reachable got exactly one table entry:
 	// the walk's filters must not drop a slot, and DUPOK dedup must not
-	// double-count one.
+	// double-count one. Exact equality holds because this test is ELF-
+	// only: on a Windows plugin ld/typelink.go's staticCanonWords
+	// appends static-data word entries to both tables after the slots,
+	// and the counts would then differ by design.
 	// Gated on the symbol existing: table() already reported a missing
 	// one, and a second "N slots linked but the table has 0 entries"
 	// would point the reader at the linker's dedup instead.

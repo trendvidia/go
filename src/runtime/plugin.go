@@ -308,12 +308,16 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	//   - userDataInit: register this module's user-package data
 	//     exports as canonical and rewrite its `__imp_X` import slots
 	//     to point at the canonical instance when it lives elsewhere.
+	//   - userDataAddrsInit: rewrite data words that statically embed
+	//     a user-package global's address to *(__imp_ slot)+addend —
+	//     canonical only once userDataInit has run.
 	//   - recordPkgDependencies: package-level (pkg path, linktimehash)
 	//     ownership tracking — the safety-net for Plugin.Close that
 	//     covers symbol kinds (types, function bodies) which the
 	//     symbol-level walks above don't directly canonicalise.
 	lock(&canonicalSymsLock)
 	userDataInit(md)
+	userDataAddrsInit(md)
 	recordPkgDependencies(md)
 	unlock(&canonicalSymsLock)
 

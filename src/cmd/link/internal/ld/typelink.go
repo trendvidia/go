@@ -17,6 +17,192 @@ type typelinkSortKey struct {
 	Type    loader.Sym
 }
 
+// staticWordRef identifies one pointer-sized word inside a static data
+// symbol: the word lives at container+off, and its link-time content is
+// the address of target (+add). Collected by staticCanonWords for the
+// runtime's load-time canonicalisation passes.
+type staticWordRef struct {
+	container loader.Sym
+	off       int64
+	target    loader.Sym
+	add       int64
+}
+
+// slotSymPrefixes are the three -typetab slot families the compiler
+// emits under a "go." package prefix: go.typeptr.<T>
+// (cmd/compile/internal/reflectdata/reflect.go), go.itabptr.<T,I>
+// (same file) and go.funcptr.<F>
+// (cmd/compile/internal/staticdata/globalptr.go). Every other
+// compiler-synthesized symbol family uses a "go:" prefix instead —
+// go:itab.T,I (gc/main.go sets ir.Pkgs.Itab.Prefix = "go:itab"),
+// go:string.*, go:info.* — and go.buildid is STEXT, so neither reaches
+// the SDATA/SNOPTRDATA/SRODATA scan below.
+var slotSymPrefixes = [...]string{"go.typeptr.", "go.itabptr.", "go.funcptr."}
+
+// skipStaticCanonContainer reports whether a static data symbol named
+// name is excluded from the staticCanonWords scan:
+//
+//   - type: and go: descriptor/itab/string symbols, whose own R_ADDRs
+//     feed typemap and itabTable population and must stay module-local;
+//   - the go.<kind>. slot symbols and the runtime./internal/ carriers,
+//     rewritten by their own load-time passes;
+//   - __imp_ import slots, rewritten by userDataInit.
+//
+// The slot families are enumerated rather than matched with a blanket
+// "go." prefix. "go." also prefixes every package hosted under a go.*
+// module domain — go.uber.org/zap, go.opentelemetry.io/otel,
+// go.etcd.io/bbolt, go.mongodb.org/mongo-driver — so a blanket match
+// would silently drop exactly the static words this scan exists to
+// canonicalize, with no diagnostic, for a large and common region of
+// real plugin code.
+func skipStaticCanonContainer(name string) bool {
+	for _, p := range &slotSymPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return strings.HasPrefix(name, "type:") ||
+		strings.HasPrefix(name, "go:") ||
+		strings.HasPrefix(name, "runtime.") ||
+		strings.HasPrefix(name, "internal/") ||
+		strings.HasPrefix(name, "__imp_")
+}
+
+// staticCanonWords scans reachable static data for pointer-sized R_ADDR
+// words that embed a type descriptor, an itab, or a user-package data
+// address — the words the -typetab slot machinery cannot reach, because
+// no slot-routed code access ever rewrites them (trendvidia/go#25):
+// rtype/itab entries inside generic dictionaries, statically-initialized
+// interface globals, type-assert descriptors, and `&pkg.Global` baked
+// into initialized data. Each such word gets an entry in the same
+// load-time rewrite tables the slots use (typeptrs/typeptroffs,
+// itabptrs) or, for data addresses, the udaddr triplet, addressed as
+// container+off instead of a dedicated slot symbol.
+//
+// Windows plugins only: PE has no symbol interposition, so a plugin's
+// data words keep plugin-local addresses. On ELF and Mach-O the dynamic
+// linker binds these words to the first-loaded definition (measured on
+// darwin/arm64 and linux: the canonicaldata fixture passes unmodified),
+// and rewriting them from typemap could REGRESS the corner where the
+// OS loader bound a word whose type has no typelink entry.
+//
+// Containers scanned are SDATA/SNOPTRDATA/SRODATA, excluding descriptor
+// and itab symbols themselves (their internal R_ADDRs feed typemap and
+// itabTable population and must stay module-local), slot and carrier
+// symbols, and runtime/internal packages (whose data the runtime may
+// read before or during the rewrite passes). An SRODATA container that
+// receives an entry is retyped to SNOPTRDATA so the runtime's rewrite
+// lands in a writable PE section — safe, because read-only data can
+// hold no heap pointers for the GC to trace.
+//
+// Targets that were originally TEXT are excluded: the linker already
+// resolved words addressing a host-shared function to its PLT stub,
+// and no `__imp_` slot holds a function address to rewrite them with.
+func (ctxt *Link) staticCanonWords() (typeWords, itabWords, addrWords []staticWordRef) {
+	if ctxt.BuildMode != BuildModePlugin || !ctxt.IsWindows() {
+		return nil, nil, nil
+	}
+	ldr := ctxt.loader
+	ptrsize := ctxt.Arch.PtrSize
+	retype := make(map[loader.Sym]bool)
+	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+		if !ldr.AttrReachable(s) {
+			continue
+		}
+		switch ldr.SymType(s) {
+		case sym.SDATA, sym.SNOPTRDATA, sym.SRODATA:
+		default:
+			continue
+		}
+		if skipStaticCanonContainer(ldr.SymName(s)) {
+			continue
+		}
+		relocs := ldr.Relocs(s)
+		entries := 0
+		for ri := 0; ri < relocs.Count(); ri++ {
+			r := relocs.At(ri)
+			if r.Type() != objabi.R_ADDR || int(r.Siz()) != ptrsize {
+				continue
+			}
+			t := r.Sym()
+			if t == 0 {
+				continue
+			}
+			tname := ldr.SymName(t)
+			switch {
+			case r.Add() == 0 && strings.HasPrefix(tname, "type:") && !strings.HasPrefix(tname, "type:."):
+				typeWords = append(typeWords, staticWordRef{s, int64(r.Off()), t, 0})
+				entries++
+			case r.Add() == 0 && ldr.IsItab(t):
+				itabWords = append(itabWords, staticWordRef{s, int64(r.Off()), t, 0})
+				entries++
+			default:
+				if !isUserPackageName(tname) {
+					continue
+				}
+				// Data symbol classes as userDataLink registers them,
+				// plus the two host-shared shapes a target takes by
+				// this point: SHOSTOBJ (external link — the host
+				// implib replaced the local definition) and SWINDOWS
+				// (internal link — the .windynamic IAT slot).
+				switch ldr.SymType(t) {
+				case sym.SDATA, sym.SBSS, sym.SNOPTRDATA, sym.SNOPTRBSS,
+					sym.SHOSTOBJ, sym.SWINDOWS:
+				default:
+					continue
+				}
+				// SHOSTOBJ and SWINDOWS say "host-shared", not
+				// "data": peLoadImportLibrary converts host-shared
+				// FUNCTIONS to those same types (it gates only data
+				// symbols on the share list), so the two arms above
+				// also admit text. A word addressing one is not a
+				// data address and must not be rewritten: the linker
+				// already resolved it to the callable PLT stub in
+				// .rel (windynrelocsyms, plus relocsym's Windows-
+				// plugin R_ADDR-to-SWINDOWS case in data.go), and
+				// *(__imp_X) for a text X reads that stub's first
+				// instruction bytes — so userDataAddrsInit would
+				// store `ff 25 .. .. .. .. 90 90` where a function
+				// address belongs and the next call through the word
+				// would jump to garbage. The shape that reaches here
+				// is a `pkg.Func·f` funcval container holding one
+				// R_ADDR to a host-shared body: -buildmode=plugin
+				// makes those SNOPTRDATA, hence scannable
+				// (staticdata.WriteFuncSyms), where -buildmode=exe
+				// leaves them SRODATA.
+				//
+				// FuncInfo survives peLoadImportLibrary's SetType
+				// conversion, so it is the reliable "was this
+				// originally a function?" test — the same one
+				// data.go's stub loop uses to decide which SWINDOWS
+				// symbols get a JMP thunk. Canonicalising static func
+				// VALUES belongs to the funcptr carrier, not this one
+				// (trendvidia/go#106).
+				if fi := ldr.FuncInfo(t); fi.Valid() {
+					continue
+				}
+				// The canonical address of tname for this module is
+				// *(__imp_tname) once the OS loader fills the IAT and
+				// userDataInit rewrites peer wrappers; peGotRedirect
+				// returns (or synthesizes) that slot for every case.
+				// Synthesized wrappers are picked up by userDataLink's
+				// walk below, so they join udimports and get both the
+				// canonical rewrite and the Close dependency edge.
+				slot := peGotRedirect(ctxt.Arch, ldr, t)
+				addrWords = append(addrWords, staticWordRef{s, int64(r.Off()), slot, r.Add()})
+				entries++
+			}
+		}
+		if entries > 0 && ldr.SymType(s) == sym.SRODATA {
+			retype[s] = true
+		}
+	}
+	for s := range retype {
+		ldr.MakeSymbolUpdater(s).SetType(sym.SNOPTRDATA)
+	}
+	return typeWords, itabWords, addrWords
+}
+
 // typelink generates the typelink table which is used by reflect.typelinks().
 // Types that should be added to the typelinks table are marked with the
 // MakeTypelink attribute by the compiler.
@@ -67,6 +253,13 @@ func (ctxt *Link) typelink() {
 		r.SetType(objabi.R_ADDR)
 	}
 
+	// Static-data words carrying type/itab/data addresses that no slot
+	// covers (trendvidia/go#25). Type and itab words join the slot
+	// tables below as container+offset entries; data-address words get
+	// the udaddr carrier triplet. Non-empty only for Windows plugins.
+	staticTypeWords, staticItabWords, staticAddrWords := ctxt.staticCanonWords()
+	ctxt.emitAddrCarriers(staticAddrWords)
+
 	// typeptrs / typeptroffs: per-module table of go.typeptr.<T> slot
 	// addresses and the typeOff of the <T> they resolve to. The runtime
 	// walks this at plugin load and rewrites each slot to the canonical
@@ -92,6 +285,11 @@ func (ctxt *Link) typelink() {
 		// objSyms), so one name yields one loader.Sym here, and
 		// testplugin.TestTypetabLinkedTables asserts exactly that by
 		// equating this count with the linked go.typeptr.* symbols.
+		// That equality is about THIS slice, not about the emitted
+		// runtime.typeptrs table: staticCanonWords appends static-data
+		// word entries after the slots, so on a Windows plugin the
+		// table is longer than the slot count. The test runs on ELF
+		// only, where staticCanonWords returns nothing.
 		if seenTypeptr[name] {
 			continue
 		}
@@ -107,17 +305,29 @@ func (ctxt *Link) typelink() {
 		typeptrTypes[s] = srelocs.At(0).Sym()
 	}
 
+	// The slot entries are followed by the static-data word entries:
+	// same parallel-table contract, but the rewritable word is
+	// container+off rather than a dedicated go.typeptr slot.
+	ntypeptrs := len(typeptrs) + len(staticTypeWords)
 	tp := ldr.CreateSymForUpdate("runtime.typeptrs", 0)
 	tp.SetType(sym.SNOPTRDATA)
 	ldr.SetAttrLocal(tp.Sym(), true)
-	tp.SetSize(int64(ptrsize * len(typeptrs)))
+	tp.SetSize(int64(ptrsize * ntypeptrs))
 	tp.Grow(tp.Size())
-	if len(typeptrs) > 0 {
-		relocs = tp.AddRelocs(len(typeptrs))
+	if ntypeptrs > 0 {
+		relocs = tp.AddRelocs(ntypeptrs)
 		for i, s := range typeptrs {
 			r := relocs.At(i)
 			r.SetSym(s)
 			r.SetOff(int32(i * ptrsize))
+			r.SetSiz(uint8(ptrsize))
+			r.SetType(objabi.R_ADDR)
+		}
+		for i, w := range staticTypeWords {
+			r := relocs.At(len(typeptrs) + i)
+			r.SetSym(w.container)
+			r.SetAdd(w.off)
+			r.SetOff(int32((len(typeptrs) + i) * ptrsize))
 			r.SetSiz(uint8(ptrsize))
 			r.SetType(objabi.R_ADDR)
 		}
@@ -126,14 +336,21 @@ func (ctxt *Link) typelink() {
 	tpo := ldr.CreateSymForUpdate("runtime.typeptroffs", 0)
 	tpo.SetType(sym.SNOPTRDATA)
 	ldr.SetAttrLocal(tpo.Sym(), true)
-	tpo.SetSize(int64(4 * len(typeptrs)))
+	tpo.SetSize(int64(4 * ntypeptrs))
 	tpo.Grow(tpo.Size())
-	if len(typeptrs) > 0 {
-		relocs = tpo.AddRelocs(len(typeptrs))
+	if ntypeptrs > 0 {
+		relocs = tpo.AddRelocs(ntypeptrs)
 		for i, s := range typeptrs {
 			r := relocs.At(i)
 			r.SetSym(typeptrTypes[s])
 			r.SetOff(int32(i * 4))
+			r.SetSiz(4)
+			r.SetType(objabi.R_ADDROFF)
+		}
+		for i, w := range staticTypeWords {
+			r := relocs.At(len(typeptrs) + i)
+			r.SetSym(w.target)
+			r.SetOff(int32((len(typeptrs) + i) * 4))
 			r.SetSiz(4)
 			r.SetType(objabi.R_ADDROFF)
 		}
@@ -176,13 +393,16 @@ func (ctxt *Link) typelink() {
 		itabptrs = append(itabptrs, s)
 	}
 
+	// As with typeptrs: static-data itab words follow the slot entries,
+	// addressed as container+off.
+	nitabptrs := len(itabptrs) + len(staticItabWords)
 	ip := ldr.CreateSymForUpdate("runtime.itabptrs", 0)
 	ip.SetType(sym.SNOPTRDATA)
 	ldr.SetAttrLocal(ip.Sym(), true)
-	ip.SetSize(int64(ptrsize * len(itabptrs)))
+	ip.SetSize(int64(ptrsize * nitabptrs))
 	ip.Grow(ip.Size())
-	if len(itabptrs) > 0 {
-		relocs = ip.AddRelocs(len(itabptrs))
+	if nitabptrs > 0 {
+		relocs = ip.AddRelocs(nitabptrs)
 		for i, s := range itabptrs {
 			r := relocs.At(i)
 			r.SetSym(s)
@@ -190,6 +410,75 @@ func (ctxt *Link) typelink() {
 			r.SetSiz(uint8(ptrsize))
 			r.SetType(objabi.R_ADDR)
 		}
+		for i, w := range staticItabWords {
+			r := relocs.At(len(itabptrs) + i)
+			r.SetSym(w.container)
+			r.SetAdd(w.off)
+			r.SetOff(int32((len(itabptrs) + i) * ptrsize))
+			r.SetSiz(uint8(ptrsize))
+			r.SetType(objabi.R_ADDR)
+		}
+	}
+}
+
+// emitAddrCarriers emits the udaddr carrier triplet for static-data
+// words that embed a user-package data address (trendvidia/go#25, the
+// `var P = &pkg.Global` shape):
+//
+//   - runtime.udaddrwords — address of each word to rewrite
+//     (container+off R_ADDR).
+//   - runtime.udaddrslots — address of the matching `__imp_X` slot,
+//     whose content is X's canonical address once the OS loader has
+//     filled the IAT (host-shared X) and userDataInit has rewritten
+//     peer wrappers (peer-owned X).
+//   - runtime.udaddradds — per-word addend (`&pkg.Arr[2]` embeds
+//     &pkg.Arr + 16).
+//
+// The runtime's userDataAddrsInit walks the triplet at plugin load and
+// stores *slot+add into each word. Carriers are empty except for
+// Windows plugins.
+func (ctxt *Link) emitAddrCarriers(addrWords []staticWordRef) {
+	ldr := ctxt.loader
+	ptrsize := ctxt.Arch.PtrSize
+
+	words := ldr.CreateSymForUpdate("runtime.udaddrwords", 0)
+	words.SetType(sym.SNOPTRDATA)
+	ldr.SetAttrLocal(words.Sym(), true)
+	words.SetSize(int64(ptrsize * len(addrWords)))
+	words.Grow(words.Size())
+
+	slots := ldr.CreateSymForUpdate("runtime.udaddrslots", 0)
+	slots.SetType(sym.SNOPTRDATA)
+	ldr.SetAttrLocal(slots.Sym(), true)
+	slots.SetSize(int64(ptrsize * len(addrWords)))
+	slots.Grow(slots.Size())
+
+	adds := ldr.CreateSymForUpdate("runtime.udaddradds", 0)
+	adds.SetType(sym.SNOPTRDATA)
+	ldr.SetAttrLocal(adds.Sym(), true)
+	adds.SetSize(int64(ptrsize * len(addrWords)))
+	adds.Grow(adds.Size())
+
+	if len(addrWords) == 0 {
+		return
+	}
+	wrelocs := words.AddRelocs(len(addrWords))
+	srelocs := slots.AddRelocs(len(addrWords))
+	for i, w := range addrWords {
+		r := wrelocs.At(i)
+		r.SetSym(w.container)
+		r.SetAdd(w.off)
+		r.SetOff(int32(i * ptrsize))
+		r.SetSiz(uint8(ptrsize))
+		r.SetType(objabi.R_ADDR)
+
+		r = srelocs.At(i)
+		r.SetSym(w.target)
+		r.SetOff(int32(i * ptrsize))
+		r.SetSiz(uint8(ptrsize))
+		r.SetType(objabi.R_ADDR)
+
+		adds.SetUint(ctxt.Arch, int64(i*ptrsize), uint64(w.add))
 	}
 }
 

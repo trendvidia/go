@@ -135,6 +135,61 @@ func userDataInit(md *moduledata) {
 	}
 }
 
+// userDataAddrsInit rewrites static-data words that embed the address
+// of a user-package global (trendvidia/go#25: `var P = &pkg.Global`
+// compiled into initialized data, where no slot-routed code access can
+// canonicalise the value). The linker paired each word with the
+// `__imp_X` slot for its target: for host-shared X that is the IAT
+// entry the OS loader filled at LoadLibrary time; for peer-owned X it
+// is the SNOPTRDATA wrapper that userDataInit just rewrote to the
+// canonical instance. Either way *slot is now X's canonical address,
+// so each word becomes *slot plus its embedded addend (`&pkg.Arr[2]`).
+//
+// Must run after userDataInit(md) — the wrappers' contents are only
+// canonical from then on — and the Close-safety dependency edges for
+// peer-owned targets were already recorded by userDataInit's wrapper
+// walk. Caller holds canonicalSymsLock.
+func userDataAddrsInit(md *moduledata) {
+	// The three carriers are parallel arrays, but unlike typeptrs /
+	// typeptroffs (one linker-side count, two symbols) each of these
+	// takes its length from its OWN symbol size in ld/symtab.go's
+	// emitSlotSlice, so a linker-side skew shows up as three differing
+	// lengths rather than being masked. Name the table, as
+	// typeptrsinit does, instead of dying on an index-out-of-range
+	// inside plugin_lastmoduleinit with canonicalSymsLock held.
+	//
+	// This check runs FIRST, ahead of the empty-table return below: a
+	// skew that leaves udaddrwords empty while slots/adds are
+	// populated is exactly the shape emitSlotSlice's three independent
+	// sizes can produce, and an early return placed ahead of the check
+	// would swallow it silently.
+	if len(md.udaddrslots) != len(md.udaddrwords) || len(md.udaddradds) != len(md.udaddrwords) {
+		throw("runtime: udaddrwords / udaddrslots / udaddradds length mismatch")
+	}
+	// Every target but a Windows plugin: emitAddrCarriers sizes all
+	// three carriers at zero, so emitSlotSlice publishes nil slices
+	// and the walk below is already a zero-trip loop.
+	//
+	// Do not delete this as dead weight. Removing it was measured to
+	// take a GOFIPS140=v1.26.0 linux/arm64 link from 0 to 9 "ABI0-only
+	// symbol referenced as ABIInternal" errors in crypto/internal/
+	// fips140 (trendvidia/go#111 carries that measurement). The
+	// mechanism is NOT the one this comment originally claimed --
+	// deadcode is symbol-granular, and a length test that emits no
+	// relocations can neither add nor remove a reachability edge, so
+	// an early return cannot shrink any reachable set. Whatever the
+	// real cause is, it is unexplained and unpinned: no test on any
+	// leg this branch runs fails when the return is removed.
+	if len(md.udaddrwords) == 0 {
+		return
+	}
+	for i, wordAddr := range md.udaddrwords {
+		word := (*uintptr)(unsafe.Pointer(wordAddr))
+		slot := (*uintptr)(unsafe.Pointer(md.udaddrslots[i]))
+		*word = *slot + md.udaddradds[i]
+	}
+}
+
 // recordPkgDependencies walks md's pkghashes and either registers md
 // as the first-loader of each (package, hash) tuple or records a
 // dependency edge to the earlier owner. Caller holds canonicalSymsLock.

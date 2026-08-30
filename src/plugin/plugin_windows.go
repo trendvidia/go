@@ -188,7 +188,16 @@ func open(name string) (*Plugin, error) {
 	if !chainGrew(prevTail) {
 		if loaded := loadedModulePath(h); loaded != "" && !sameModulePath(loaded, pluginPath) {
 			aliased := pluginPath + " resolved to a different module, already loaded from " + loaded
-			plugins[pluginKey] = &Plugin{err: aliased}
+			// Unlike every other failure open caches, this one is NOT
+			// written into plugins: a cached Open failure is a property
+			// of the FILE (bad ABI marker, no module data, pkghash
+			// divergence — stable across retries), but the alias
+			// rejection is process state that changes the moment the
+			// blocking module is closed. Caching it would leave the
+			// path unloadable for the life of the process, naming a
+			// module that is no longer loaded (trendvidia/go#46). The
+			// cost of re-evaluating is one LoadLibrary/FreeLibrary
+			// refcount bump on an already-mapped image per retry.
 			syscall.FreeLibrary(h)
 			pluginsMu.Unlock()
 			return nil, errors.New(`plugin.Open("` + name + `"): ` + aliased)

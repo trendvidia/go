@@ -849,6 +849,13 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 	emitSlotSlice("runtime.userDataImportsnameoffs", 4)
 	emitSlotSlice("runtime.userDataImportsnames", 1)
 
+	// Static-data address words and their __imp_ slots — emitted by
+	// emitAddrCarriers() in typelink.go (trendvidia/go#25). Empty
+	// except for Windows plugins.
+	emitSlotSlice("runtime.udaddrwords", ptrSz)
+	emitSlotSlice("runtime.udaddrslots", ptrSz)
+	emitSlotSlice("runtime.udaddradds", ptrSz)
+
 	hasmain := ctxt.BuildMode == BuildModeExe || ctxt.BuildMode == BuildModePIE
 	if hasmain {
 		moduledata.AddUint8(1)

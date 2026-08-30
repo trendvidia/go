@@ -45,4 +45,10 @@ const Marker uint32 = 0x41424950 // "ABIP" little-endian
 
 // Version is the current cross-binary ABI generation of the fork's
 // plugin machinery. See the package doc comment for bump rules.
-const Version uint32 = 1
+//
+// History:
+//
+//	2: moduledata grew the udaddrwords/udaddrslots/udaddradds triplet
+//	   (static-data address canonicalisation, trendvidia/go#25).
+//	1: initial marker generation (trendvidia/go#24).
+const Version uint32 = 2

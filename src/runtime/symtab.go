@@ -492,6 +492,18 @@ type moduledata struct {
 	udimportnameoffs []int32
 	udimportnames    []byte
 
+	// Static-data words that embed the address of a user-package
+	// global (trendvidia/go#25: `var P = &pkg.Global` and friends).
+	// udaddrwords[i] is the address of the word to rewrite;
+	// udaddrslots[i] is the address of the matching `__imp_X` slot
+	// (IAT entry for host-shared X, SNOPTRDATA wrapper for peer-owned
+	// X); udaddradds[i] is the embedded addend. userDataAddrsInit
+	// stores *slot+add into each word after userDataInit has made the
+	// wrappers canonical. Empty except for Windows plugins.
+	udaddrwords []uintptr
+	udaddrslots []uintptr
+	udaddradds  []uintptr
+
 	hasmain uint8 // 1 if module contains the main function, 0 otherwise
 	bad     bool  // module failed to load and should be ignored
 

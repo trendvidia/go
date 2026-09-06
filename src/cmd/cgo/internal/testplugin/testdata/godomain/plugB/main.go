@@ -1,0 +1,14 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package main
+
+import "go.example.org/fakemod/lib"
+
+// BumpB bumps lib.Counter by 2 and returns it.
+func BumpB() int {
+	return lib.Bump(2)
+}
+
+func main() {}

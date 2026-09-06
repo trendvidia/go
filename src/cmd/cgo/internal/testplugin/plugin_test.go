@@ -96,6 +96,19 @@ func testMain(m *testing.M) int {
 
 	modRoot := filepath.Join(GOPATH, "src", "testplugin")
 	altRoot := filepath.Join(GOPATH, "alt", "src", "testplugin")
+	// The godomain fixture needs a shared package whose import path
+	// lives under a go.*-style module domain (trendvidia/go#108), which
+	// no path inside module testplugin can spell. The gofakemod
+	// directory carries its own go.mod (module go.example.org/fakemod);
+	// point the main module at it. Only modRoot gets the require —
+	// altRoot has no copy of the replacement directory, so it keeps the
+	// bare `module testplugin`. Each root's go.mod is written exactly
+	// once, so the replayable transcript below shows one command per
+	// file rather than a write followed by a contradicting rewrite.
+	goMods := map[string]string{
+		modRoot: "module testplugin\n\ngo 1.26\n\nrequire go.example.org/fakemod v0.0.0\n\nreplace go.example.org/fakemod => ./gofakemod\n",
+		altRoot: "module testplugin\n\ngo 1.26\n",
+	}
 	for srcRoot, dstRoot := range map[string]string{
 		"testdata":                           modRoot,
 		filepath.Join("altpath", "testdata"): altRoot,
@@ -106,14 +119,16 @@ func testMain(m *testing.M) int {
 		prettyPrintf("mkdir -p %s\n", dstRoot)
 		prettyPrintf("rsync -a %s/ %s\n", srcRoot, dstRoot)
 
-		// The go directive sets the language version: without it the
-		// module defaults to go1.16 and fixtures cannot use generics
-		// (the canonicaldata fixture instantiates them to reach the
-		// dictionary edge of trendvidia/go#25).
-		if err := os.WriteFile(filepath.Join(dstRoot, "go.mod"), []byte("module testplugin\n\ngo 1.26\n"), 0666); err != nil {
+		if err := os.WriteFile(filepath.Join(dstRoot, "go.mod"), []byte(goMods[dstRoot]), 0666); err != nil {
 			log.Panic(err)
 		}
-		prettyPrintf("printf 'module testplugin\\n\\ngo 1.26\\n' > %s/go.mod\n", dstRoot)
+		// The content is printf's ARGUMENT, never its format: a `%` in
+		// a go.mod (this fixture's whole subject is %2e-escaped module
+		// domains) would otherwise make the replay write different
+		// bytes than the harness did. %b, not %s, because %q renders
+		// the newlines as `\n` and only %b expands escapes in an
+		// argument.
+		prettyPrintf("printf '%%b' %q > %s/go.mod\n", goMods[dstRoot], dstRoot)
 	}
 
 	os.Setenv("GOPATH", GOPATH)
@@ -220,6 +235,13 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "refcount.exe", "./refcount/host")
 	goCmdBuildPluginFor(nil, "refcount", "-o=plugA"+pluginSuffix, "./refcount/plugA")
 	goCmdBuildPluginFor(nil, "refcount", "-o=plugB"+pluginSuffix, "./refcount/plugB")
+
+	// go.*-domain module fixture (trendvidia/go#108): the shared
+	// packages live under go.example.org/fakemod, which the blanket
+	// `go.` prefix arm used to exclude from data canonicalisation.
+	goCmd(nil, "build", "-o", "godomain.exe", "./godomain/host")
+	goCmdBuildPluginFor(nil, "godomain", "-o=godomain-plugA"+pluginSuffix, "./godomain/plugA")
+	goCmdBuildPluginFor(nil, "godomain", "-o=godomain-plugB"+pluginSuffix, "./godomain/plugB")
 
 	// Post-Close hazard-envelope fixture (trendvidia/go#26): one host
 	// with subcommand-selected probes over an unprotected closure, an
@@ -1194,6 +1216,22 @@ func TestPeerVersionLock(t *testing.T) {
 func TestRefcountUnload(t *testing.T) {
 	globalSkip(t)
 	run(t, "./refcount.exe")
+}
+
+// TestGoDomainModuleCanonicalData exercises cross-module data
+// canonicalisation for packages hosted under a go.*-style module
+// domain (trendvidia/go#108). isUserPackageName's old blanket `go.`
+// prefix arm — meant for the go.typeptr./go.itabptr./go.funcptr. slot
+// families — also matched module domains like go.uber.org, so such a
+// package's globals were never registered in userDataExports/Imports
+// and each module kept its own instance. The fixture's shared packages
+// live under go.example.org/fakemod: lib.Counter is plugin-only
+// (registry-canonicalised), hostlib.Value is host-linked
+// (export-table-shared on Windows); the host asserts one instance of
+// each.
+func TestGoDomainModuleCanonicalData(t *testing.T) {
+	globalSkip(t)
+	run(t, "./godomain.exe")
 }
 
 func TestUniqueTypesAndItabs(t *testing.T) {

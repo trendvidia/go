@@ -123,12 +123,30 @@ func TestPESkipSymName(t *testing.T) {
 		"p..gcprog.a",
 		"p..inittask.b", // interior, not the task itself
 		"type..eq.p.T",
-		"go.typeptr.p.T",
+		// Slot names as the compiler actually spells them (measured
+		// with `go tool nm` on a -gcflags=all=-typetab plugin build):
+		// typeptr embeds the type symbol name, itabptr embeds the two
+		// LinkStrings with no `go:itab.` segment in between.
+		"go.typeptr.type:*p.T",
+		"go.itabptr.*p.T,io.Reader",
+		"go.funcptr.p.F",
 		"_cgoexp_abcd1234_F",
 		".rel",
 	} {
 		if !peSkipSymName(name) {
 			t.Errorf("peSkipSymName(%q) = false, want true: per-module symbol must stay local", name)
+		}
+	}
+	// The slot-family filter must not swallow go.*-domain package
+	// symbols: go.uber.org-style module paths share the `go.` prefix
+	// with the slot families but their globals have to reach the host's
+	// export table for host-plugin sharing (trendvidia/go#108).
+	for _, name := range []string{
+		"go.uber.org/zap.Global",
+		"go.example.org/fakemod/lib.Counter",
+	} {
+		if peSkipSymName(name) {
+			t.Errorf("peSkipSymName(%q) = true, want false: go.*-domain global must be exportable", name)
 		}
 	}
 }

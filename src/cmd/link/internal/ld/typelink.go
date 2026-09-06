@@ -275,7 +275,7 @@ func (ctxt *Link) typelink() {
 			continue
 		}
 		name := ldr.SymName(s)
-		if !strings.HasPrefix(name, "go.typeptr.") {
+		if !strings.HasPrefix(name, typeptrSlotPrefix) {
 			continue
 		}
 		// Keep only a slot with the expected pointer-sized payload
@@ -369,7 +369,7 @@ func (ctxt *Link) typelink() {
 			continue
 		}
 		name := ldr.SymName(s)
-		if !strings.HasPrefix(name, "go.itabptr.") {
+		if !strings.HasPrefix(name, itabptrSlotPrefix) {
 			continue
 		}
 		// Keep only a slot with the expected pointer-sized payload
@@ -517,7 +517,7 @@ func (ctxt *Link) funcptrlink() {
 			continue
 		}
 		name := ldr.SymName(s)
-		if strings.HasPrefix(name, "go.funcptr.") {
+		if strings.HasPrefix(name, funcptrSlotPrefix) {
 			funcptrs = append(funcptrs, s)
 		}
 	}
@@ -528,13 +528,69 @@ func (ctxt *Link) funcptrlink() {
 	ctxt.emitSlotCarriers("funcptr", funcptrs)
 }
 
+// Prefixes of the per-module indirection-slot families. The collectors
+// that gather each family (typeptrlink, itabptrlink, funcptrlink) match
+// on these constants and isModuleSlotName is defined over the same
+// list, so the emitters and the two gates that must exclude the slots
+// (userDataLink's isUserPackageName, pe_implib.go's peSkipSymName)
+// cannot drift apart: a fourth family is one edit here away from being
+// excluded everywhere. There WAS a fourth — `go.globalptr.`, removed in
+// the Bug D fix (see funcptrlink above) — so this list is not
+// hypothetically extensible, it has already changed once.
+const (
+	typeptrSlotPrefix = "go.typeptr."
+	itabptrSlotPrefix = "go.itabptr."
+	funcptrSlotPrefix = "go.funcptr."
+)
+
+var moduleSlotPrefixes = []string{typeptrSlotPrefix, itabptrSlotPrefix, funcptrSlotPrefix}
+
+// isModuleSlotName reports whether name is one of the three per-module
+// indirection-slot families emitted under -typetab / -dynlink:
+// go.typeptr.<T>, go.itabptr.<X>, go.funcptr.<F>. Each module gets its
+// own slots and the runtime's typeptrsinit / itabptrsinit /
+// funcptrsinit rewrite the slot CONTENTS at plugin load, so the slots
+// themselves must never be merged, exported, or IAT-routed across
+// modules.
+//
+// These three families are the only `go.`-prefixed names the toolchain
+// emits with a dot-and-slash shape; `go.` is otherwise a legal module
+// domain (go.uber.org, go.opentelemetry.io, go.etcd.io, ...), so gates
+// must match these families exactly and never the bare `go.` prefix —
+// a blanket prefix test would exclude every package hosted under such
+// a domain from cross-module data canonicalisation (trendvidia/go#108).
+// A domain only survives into a symbol name unescaped when it is not
+// the last path element: objabi.PathToPrefix escapes dots after the
+// final slash, so package go.uber.org/zap's globals are
+// `go.uber.org/zap.X` but a root package of `module go.example.org`
+// is `go%2eexample%2eorg.X`, which no `go.` test sees at all.
+func isModuleSlotName(name string) bool {
+	for _, prefix := range moduleSlotPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // isUserPackageName reports whether name belongs to a user (non-stdlib)
 // Go package AND is a "user-source" symbol — declared in the package's
-// own source rather than synthesized by the compiler. The predicate
-// matches the share-gate in pe_implib.go's peLoadImportLibrary
-// (excludes runtime.* / internal/* / go:* / type:* / go.*) plus an
-// extra filter to skip compiler-generated symbols that share names
-// with each other across plugins but must NOT be merged.
+// own source rather than synthesized by the compiler. It reuses the
+// filters of the share-gate in pe_implib.go's peLoadImportLibrary
+// (peSkipSymName's type:* / slot-family / `..` filters plus the data
+// gate's runtime.* / internal/* / go:* exclusions) plus an extra
+// filter to skip compiler-generated symbols that share names with
+// each other across plugins but must NOT be merged.
+//
+// The two gates agree exactly on the slot families (both reject) and
+// on go.*-domain package symbols (both admit); TestModuleSlotNameLockstep
+// pins that pair. They are NOT equivalent elsewhere and are not meant
+// to be — peSkipSymName is the wider gate. It carves `pkg..inittask`
+// out of its `..` filter so a host can publish init tasks for
+// peLoadImportLibrary to bind (trendvidia/go#61), while an inittask is
+// per-module layout and must never be registered for canonicalisation;
+// and it admits stdlib top-level names that the "no slash" arm below
+// rejects. TestGateAsymmetryOutsideSlotFamilies pins those divergences.
 //
 // Compiler-generated symbols are recognised by the `..` (consecutive
 // dot) pattern Go uses for them: `pkg..inittask`, `pkg..stmp_N`,
@@ -549,12 +605,17 @@ func isUserPackageName(name string) bool {
 		strings.HasPrefix(name, "internal/") ||
 		strings.HasPrefix(name, "go:") ||
 		strings.HasPrefix(name, "type:") ||
-		strings.HasPrefix(name, "go.") {
+		isModuleSlotName(name) {
 		return false
 	}
 	if !strings.Contains(name, "/") {
 		// Stdlib top-level package names have no slash. User packages
-		// always have a module-path prefix with at least one slash.
+		// almost always have a module-path prefix with at least one
+		// slash — the exception is a package sitting at the root of a
+		// dotted module path, whose name PathToPrefix escapes whole
+		// (`module go.example.org` -> `go%2eexample%2eorg.Counter`).
+		// Those are rejected here too and stay module-local; see
+		// trendvidia/go#110, pinned by TestIsUserPackageName.
 		return false
 	}
 	if strings.Contains(name, "..") {
@@ -676,9 +737,13 @@ func (ctxt *Link) emitDataCarriers(kind string, slots []loader.Sym, namePrefix s
 }
 
 // emitSlotCarriers emits the three carrier symbols for a slot category
-// (kind = "globalptr" or "funcptr"): runtime.<kind>links (slot
-// addresses), runtime.<kind>nameoffs (per-slot int32 offsets), and
-// runtime.<kind>names (packed null-terminated names).
+// (kind = "funcptr"; "globalptr" was a second category until the Bug D
+// fix removed those slots): runtime.<kind>links (slot addresses),
+// runtime.<kind>nameoffs (per-slot int32 offsets), and
+// runtime.<kind>names (packed null-terminated names). kind must be the
+// middle component of one of moduleSlotPrefixes — the slot names it
+// trims are "go."+kind+"." — which TestModuleSlotPrefixesCoverGates
+// pins.
 func (ctxt *Link) emitSlotCarriers(kind string, slots []loader.Sym) {
 	ldr := ctxt.loader
 	ptrsize := ctxt.Arch.PtrSize

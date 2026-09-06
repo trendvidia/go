@@ -94,14 +94,40 @@ func peSkipSymName(name string) bool {
 	if strings.HasPrefix(name, "type:") || strings.HasPrefix(name, "type..") {
 		return true
 	}
-	// Per-module indirection slots emitted by -typetab: go.typeptr.X and
-	// go.itabptr.X must stay local to each module so that (a) each
-	// module's code can load from its own slot to get its own canonical
-	// *_type / *itab (possibly rewritten at plugin load by typeptrsinit
-	// / itabptrsinit), and (b) pluginimplib doesn't route the load
+	// Per-module indirection slots emitted by -typetab / -dynlink:
+	// go.typeptr.X, go.itabptr.X and go.funcptr.X must stay local to
+	// each module so that (a) each module's code can load from its own
+	// slot to get its own canonical *_type / *itab / funcval (possibly
+	// rewritten at plugin load by typeptrsinit / itabptrsinit /
+	// funcptrsinit), and (b) pluginimplib doesn't route the load
 	// through a PE/IAT indirection that returns the slot's IAT-entry
-	// address instead of the slot's content.
-	if strings.HasPrefix(name, "go.typeptr.") || strings.HasPrefix(name, "go.itabptr.") {
+	// address instead of the slot's content. Only these exact families
+	// stay local — `go.` alone also prefixes module domains like
+	// go.uber.org whose symbols must be shareable (trendvidia/go#108);
+	// isModuleSlotName is the lockstep predicate isUserPackageName's
+	// registration gate uses for the same three families.
+	//
+	// The go.funcptr. arm is NOT latent: it changes what an
+	// internal-linked plugin DLL publishes. Plugins are compiled with
+	// -dynlink (cmd/go/internal/work/init.go's "plugin" buildmode arm),
+	// so they do emit funcptr slots, and peSkipSymName gates
+	// peExportAllSymbols, which dope runs for every internal-linked
+	// plugin. Measured 2026-08-28 by A/B-ing this arm on a windows/amd64
+	// plugin cross-linked from darwin (a package whose only import is
+	// fmt and which defers a closure, `go tool nm`: 2 go.funcptr.*
+	// slots): without the arm the PE export directory holds 39 names,
+	// one of them a go.funcptr. slot; with it, 38 and none.
+	//
+	// Dropping them is correct and costs nothing. Nothing resolves a
+	// slot by name across modules: the runtime reaches a module's slots
+	// through that module's own moduledata carriers
+	// (runtime.funcptr{links,nameoffs,names}, built by funcptrlink),
+	// plugin.Lookup cannot name one (`go.funcptr.X` is not a Go
+	// identifier), and a host binds only what its import library lists —
+	// which peLoadImportLibrary gates with this same predicate. Each
+	// dropped entry also gives a slot of the plugin's peExportLimit
+	// budget back (trendvidia/go#39).
+	if isModuleSlotName(name) {
 		return true
 	}
 	// Compiler-auto-generated per-package symbols use a `pkg..symname.N`
@@ -1583,16 +1609,13 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 		// go:link.addmoduledata's call to runtime.addmoduledata) land
 		// in the host's runtime, not the plugin's local copy.
 		//
-		// On amd64, DATA symbols cannot be imported via IAT because the
-		// compiler generates direct memory access (LEA/MOV [rip+disp32])
-		// with no indirection. Unlike arm64 (which has ADRP+ADD→LDR
-		// rewriting for SWINDOWS data), amd64 has no equivalent.
-		// Internal link converts ..inittask and runtime.writeBarrier as
-		// exceptions because the internal linker handles their access
-		// patterns specially. External link skips DATA entirely and
-		// keeps a local copy in the plugin — handling indirect data
-		// loads cleanly through the IAT requires compiler changes
-		// outside this session's scope.
+		// Both modes also convert DATA: plugins are compiled with
+		// -dynlink, so extern data accesses carry R_GOTPCREL and
+		// peRetargetGotRelocs routes them through `__imp_X` slots —
+		// IAT-style indirection works for data on amd64 and arm64
+		// alike. Which data actually converts is decided by the share
+		// gate below (the curated runtime singletons plus user-package
+		// data).
 		//
 		// host.exe.a's symbol-index names are produced by mangleABIName,
 		// so a function with both ABI0 and ABIInternal entries appears

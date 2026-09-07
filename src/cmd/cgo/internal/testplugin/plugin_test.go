@@ -282,6 +282,13 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "asmplugin.exe", "./asmplugin/host")
 	goCmdBuildPluginFor(nil, "asmplugin", "-o=asmplugin-plugin"+pluginSuffix, "./asmplugin/plug")
 
+	// Host-shared inittask / plugin-local data fixture
+	// (trendvidia/go#74): the host links internal/poll through os but
+	// not net, so internal/poll's task is published while net's init
+	// stays plugin-local and calls into what that task assigned.
+	goCmd(nil, "build", "-o", "internalinit.exe", "./internalinit/host")
+	goCmdBuildPluginFor(nil, "internalinit", "-o=internalinit-plugin"+pluginSuffix, "./internalinit/plug")
+
 	// Post-Close hazard-envelope fixture (trendvidia/go#26): one host
 	// with subcommand-selected probes over an unprotected closure, an
 	// exported-variable pointer, and the reopen-aliasing cell.
@@ -1342,6 +1349,23 @@ func TestEscapedSymbolNameSharing(t *testing.T) {
 func TestPluginLocalAsmCall(t *testing.T) {
 	globalSkip(t)
 	run(t, "./asmplugin.exe")
+}
+
+// TestInternalPackageInitData pins that a package whose `..inittask` is
+// host-shared has its DATA host-shared too (trendvidia/go#74). The
+// host links internal/poll through os but not net, so internal/poll's
+// init ran host-side and the plugin dropped it from its schedule, while
+// net's init stays plugin-local and runs at Open — and net.init.0 calls
+// internal/poll.InitWSA, a sync.OnceFunc value that init assigns. With
+// the package's data left plugin-local the plugin read nil and died in
+// plugin.Open on windows/{amd64,arm64}.
+//
+// TestPEInittaskSharesWithItsData in cmd/link/internal/ld pins the gate
+// itself and needs no Windows host; this is the does-the-process-
+// survive half.
+func TestInternalPackageInitData(t *testing.T) {
+	globalSkip(t)
+	run(t, "./internalinit.exe")
 }
 
 func TestUniqueTypesAndItabs(t *testing.T) {

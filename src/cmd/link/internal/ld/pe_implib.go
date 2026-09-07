@@ -1501,6 +1501,46 @@ func writeBfdMember(w io.Writer, name string, data []byte) {
 	}
 }
 
+// peShareHostData reports whether peLoadImportLibrary host-shares the
+// non-text symbol named name — converting the plugin's copy to an
+// import so every access resolves to the host's instance.
+//
+// The invariant, and the reason this is a named predicate rather than
+// an inline condition: a package's DATA is shared exactly when that
+// package's `..inittask` is (trendvidia/go#74). Sharing the task means
+// the host already ran that init and the plugin drops it from its
+// schedule (inittaskSym's SymSize > 8 filter), so whatever that init
+// assigns is only ever assigned in the HOST's copy. Leaving the data
+// plugin-local then hands plugin code an uninitialized global — and not
+// merely a stale one: `internal/poll.InitWSA` is a sync.OnceFunc value,
+// so the plugin's copy is nil, and `net.init.0` CALLS it. Measured on
+// windows/{amd64,arm64}: a plugin importing net, against a host that
+// links internal/poll but not net, died in plugin.Open with a null read
+// at net/fd_windows.go:27.
+//
+// Re-running the init plugin-side instead does NOT fix it, and that was
+// measured too: the task's PCs point at host-shared TEXT compiled
+// without -dynlink, so re-running it re-initialises the host's copy a
+// second time and leaves the plugin's still nil.
+//
+// `runtime` is the one deliberate exception and is why the invariant is
+// stated per-package rather than as a blanket rule. Its `..inittask` is
+// shared (its init must never re-run in a plugin) while its data is
+// shared only through the curated peSharedRuntimeData list, because
+// some runtime singletons must stay plugin-local. `go:` names are
+// linker-internal carriers, type descriptors and pkghashes, per-module
+// by design.
+func peShareHostData(name string) bool {
+	if strings.HasSuffix(name, "..inittask") ||
+		name == "runtime.writeBarrier" ||
+		name == "runtime.tls_g" ||
+		name == "runtime.lastmoduledatap" ||
+		peSharedRuntimeData[name] {
+		return true
+	}
+	return !strings.HasPrefix(name, "runtime.") && !strings.HasPrefix(name, "go:")
+}
+
 // peLoadImportLibrary reads a MinGW-compatible import library (.a) and
 // registers all symbols in it as dynamic imports from the specified DLL/exe.
 // This allows the internal linker to produce a plugin DLL that imports
@@ -1772,25 +1812,12 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			// host's address (rather than a plugin-local copy), the
 			// underlying symbol must be SDYNIMPORT/SHOSTOBJ.
 			//
-			// Excluded: runtime.* / internal/* — already handled by
-			// the curated peSharedRuntimeData list above. Non-listed
-			// runtime singletons stay plugin-local on purpose. Also
-			// go:* (linker-internal carriers, type descriptors,
-			// pkghashes) which are per-module by design.
-			if !st.IsText() {
-				share := strings.HasSuffix(lookupName, "..inittask") ||
-					lookupName == "runtime.writeBarrier" ||
-					lookupName == "runtime.tls_g" ||
-					lookupName == "runtime.lastmoduledatap" ||
-					peSharedRuntimeData[lookupName]
-				if !share && !strings.HasPrefix(lookupName, "runtime.") &&
-					!strings.HasPrefix(lookupName, "internal/") &&
-					!strings.HasPrefix(lookupName, "go:") {
-					share = true
-				}
-				if !share {
-					continue
-				}
+			// peShareHostData carries the rest of the rule, and
+			// TestPEInittaskSharesWithItsData pins the invariant it
+			// exists to hold: a package's DATA is shared exactly when
+			// its `..inittask` is (trendvidia/go#74).
+			if !st.IsText() && !peShareHostData(lookupName) {
+				continue
 			}
 			sb := ldr.MakeSymbolUpdater(s)
 			sb.SetType(targetType)

@@ -663,3 +663,74 @@ func peSymbolWord(t *testing.T, path, name string) (uint64, bool) {
 	}
 	return 0, false
 }
+
+// TestPEInittaskSharesWithItsData pins the invariant peShareHostData
+// exists to hold (trendvidia/go#74): a package's DATA is host-shared
+// exactly when that package's `..inittask` is.
+//
+// The two disagreeing is not a cosmetic asymmetry. Sharing the task
+// means the host already ran that init and the plugin drops it from its
+// schedule, so whatever the init assigns is only ever assigned in the
+// HOST's copy; leaving the data plugin-local hands plugin code an
+// uninitialized global. `internal/poll.InitWSA` is a sync.OnceFunc
+// value, so the plugin's copy is nil and `net.init.0` calls it —
+// measured on windows/{amd64,arm64} as a null read inside plugin.Open.
+// The internalinit fixture in cmd/cgo/internal/testplugin is the
+// end-to-end half; this one needs no Windows host and no plugin build,
+// which is what makes it the pin.
+//
+// A regression here is silent: it produces a plugin that links, loads,
+// and only faults when something reaches one of those globals.
+func TestPEInittaskSharesWithItsData(t *testing.T) {
+	// Packages whose init assigns package-level state, spanning the
+	// classes the gate used to treat differently: top-level internal/*,
+	// nested .../internal/*, stdlib non-internal, and user code.
+	for _, pkg := range []string{
+		"internal/poll",
+		"internal/bytealg",
+		"internal/syscall/windows",
+		"internal/godebug",
+		"internal/runtime/gc/scan",
+		"crypto/internal/fips140/bigmod",
+		"sync",
+		"os",
+		"testplugin/common",
+		"go.example.org/fakemod/lib",
+		"example%2ecom",
+	} {
+		task := peShareHostData(pkg + "..inittask")
+		data := peShareHostData(pkg + ".SomeGlobal")
+		if task != data {
+			t.Errorf("%s: inittask shared = %v but data shared = %v; the init runs in exactly one module, "+
+				"so the other module's copy of what it assigns is never initialized (trendvidia/go#74)", pkg, task, data)
+		}
+		if !task {
+			t.Errorf("%s..inittask is not host-shared: the plugin re-runs an init the host already ran", pkg)
+		}
+	}
+
+	// runtime is the one deliberate exception, and stating it here is
+	// what stops the loop above from being read as a blanket rule. Its
+	// task must be shared — runtime's init must never re-run inside a
+	// plugin — while its data is shared only through the curated
+	// peSharedRuntimeData list, because some runtime singletons have to
+	// stay plugin-local.
+	if !peShareHostData("runtime..inittask") {
+		t.Error("runtime..inittask is not host-shared: a plugin would re-run the runtime's init")
+	}
+	if peShareHostData("runtime.someUncuratedGlobal") {
+		t.Error("an uncurated runtime global is host-shared; runtime data must go through peSharedRuntimeData")
+	}
+	for _, name := range []string{"runtime.writeBarrier", "runtime.tls_g", "runtime.lastmoduledatap"} {
+		if !peShareHostData(name) {
+			t.Errorf("%s is not host-shared: the plugin would keep its own copy of a process-wide singleton", name)
+		}
+	}
+
+	// go: names are per-module carriers, never shared.
+	for _, name := range []string{"go:link.pkghashes", "go:itab.*os.File,io.Reader", "go:buildinfo"} {
+		if peShareHostData(name) {
+			t.Errorf("%s is host-shared, but linker-internal carriers are per-module by design", name)
+		}
+	}
+}

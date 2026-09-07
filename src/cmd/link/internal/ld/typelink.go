@@ -589,8 +589,10 @@ func isModuleSlotName(name string) bool {
 // out of its `..` filter so a host can publish init tasks for
 // peLoadImportLibrary to bind (trendvidia/go#61), while an inittask is
 // per-module layout and must never be registered for canonicalisation;
-// and it admits stdlib top-level names that the "no slash" arm below
-// rejects. TestGateAsymmetryOutsideSlotFamilies pins those divergences.
+// and it admits the slashless names the last arm below rejects —
+// stdlib top-level names, and root packages of module paths that carry
+// no dot to escape (trendvidia/go#115).
+// TestGateAsymmetryOutsideSlotFamilies pins those divergences.
 //
 // Compiler-generated symbols are recognised by the `..` (consecutive
 // dot) pattern Go uses for them: `pkg..inittask`, `pkg..stmp_N`,
@@ -608,21 +610,55 @@ func isUserPackageName(name string) bool {
 		isModuleSlotName(name) {
 		return false
 	}
-	if !strings.Contains(name, "/") {
-		// Stdlib top-level package names have no slash. User packages
-		// almost always have a module-path prefix with at least one
-		// slash — the exception is a package sitting at the root of a
-		// dotted module path, whose name PathToPrefix escapes whole
-		// (`module go.example.org` -> `go%2eexample%2eorg.Counter`).
-		// Those are rejected here too and stay module-local; see
-		// trendvidia/go#110, pinned by TestIsUserPackageName.
-		return false
-	}
 	if strings.Contains(name, "..") {
 		// Compiler-generated symbol; skip.
 		return false
 	}
+	if !strings.Contains(name, "/") && !isEscapedRootPackageName(name) {
+		// Stdlib top-level package names have no slash, and neither
+		// does `main`. User packages carry a module-path prefix with
+		// at least one slash, or — for a package at the root of a
+		// dotted module path — an escaped prefix that
+		// isEscapedRootPackageName recognises.
+		return false
+	}
 	return true
+}
+
+// isEscapedRootPackageName reports whether a slashless symbol name
+// belongs to a package sitting at the ROOT of a dotted module path
+// rather than to a stdlib top-level package (trendvidia/go#110).
+//
+// This is not a guess about name shapes; it reads objabi.PathToPrefix
+// backwards. That function escapes every '.' AFTER the final '/', so
+// for a name with no '/' at all every dot of the import path is
+// escaped and the first LITERAL '.' left in the symbol name is exactly
+// the package/symbol separator. The package part therefore contains
+// `%2e` if and only if the import path contained a dot:
+//
+//	module example.com,     package at root -> example%2ecom.Counter
+//	module go.example.org,  package at root -> go%2eexample%2eorg.Counter
+//	stdlib os / strconv / the main package  -> os.Args, main.someGlobal
+//
+// A stdlib import path is a single unadorned element (`os`, `strconv`,
+// `sync`) and `main` likewise, so neither can produce a `%2e` here; a
+// module path that names a domain always does. PathToPrefix writes the
+// escape with lowercase hex, so the literal spelling is stable.
+//
+// KNOWN GAP, pinned by TestIsUserPackageName: a module path that is a
+// single element WITHOUT a dot (`module testplugin`, with a package at
+// its root) is spelled `testplugin.X`, which is indistinguishable from
+// a stdlib top-level name by the symbol name alone — the only input
+// both callers have, since the `__imp_X` half derives its name from a
+// wrapper whose target may not be a symbol in this module at all. Such
+// a package keeps separate instances per module. See
+// trendvidia/go#115.
+func isEscapedRootPackageName(name string) bool {
+	pkg, _, ok := strings.Cut(name, ".")
+	if !ok {
+		return false
+	}
+	return strings.Contains(pkg, "%2e")
 }
 
 // userDataLink collects the per-module user-package DATA symbol tables

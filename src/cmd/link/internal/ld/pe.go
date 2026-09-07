@@ -1458,6 +1458,46 @@ func strput(out *OutBuf, s string) {
 	}
 }
 
+// stdcallDecoration returns the index of the '%' introducing name's
+// stdcall decoration, or -1 if it carries none.
+//
+// Symbols pulled in by //go:cgo_import_dynamic spell the number of
+// uintptr-sized arguments a stdcall function takes as a `%n` SUFFIX
+// (`runtime._GetSystemTimeAsFileTime%1`), which windows/386's external
+// link needs to build the `_name@N` decorated form. That is the whole
+// convention: the decoration is at the END and is decimal digits.
+//
+// Matching the FIRST '%' anywhere in the name instead — as this did
+// until trendvidia/go#116 — collides with objabi.PathToPrefix, which
+// escapes '.' after the final slash (plus '%', '"', and every byte
+// outside printable ASCII) as %xx. Every symbol of a package whose
+// import path has a dot in its last element therefore carries a `%2e`:
+// `gopkg.in/yaml.v2` becomes `gopkg.in/yaml%2ev2`, and a package at the
+// root of a dotted module path is escaped whole (`module example.com`
+// -> `example%2ecom`, trendvidia/go#110). Those names reach here as
+// SDYNIMPORT the moment a Windows plugin binds one from its host's
+// import library, and the old scan then failed the link outright:
+// "failed to parse stdcall decoration: parsing \"2ev2.Set\": invalid
+// syntax", after truncating the extname to `gopkg.in/yaml`.
+//
+// A trailing-digits test separates the two exactly. An escape is
+// followed by hex and then more of the name, so it can only be read as
+// a decoration if it ends the name AND its two hex digits are both
+// decimal — %20 (space), %22 ('"'), %25 ('%'). None of those bytes is
+// legal in an import path, and a symbol name never ends at the escape.
+func stdcallDecoration(name string) int {
+	i := strings.LastIndexByte(name, '%')
+	if i < 0 || i == len(name)-1 {
+		return -1
+	}
+	for j := i + 1; j < len(name); j++ {
+		if name[j] < '0' || name[j] > '9' {
+			return -1
+		}
+	}
+	return i
+}
+
 func initdynimport(ctxt *Link) *Dll {
 	ldr := ctxt.loader
 	var d *Dll
@@ -1490,7 +1530,7 @@ func initdynimport(ctxt *Link) *Dll {
 		// the %n suffix if any.
 		m.argsize = -1
 		extName := ldr.SymExtname(s)
-		if i := strings.IndexByte(extName, '%'); i >= 0 {
+		if i := stdcallDecoration(extName); i >= 0 {
 			var err error
 			m.argsize, err = strconv.Atoi(extName[i+1:])
 			if err != nil {

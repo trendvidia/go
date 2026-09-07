@@ -33,6 +33,21 @@ func TestIsUserPackageName(t *testing.T) {
 		"go.opentelemetry.io/otel.Tracer",
 		"go.example.org/fakemod/lib.Counter",
 		"gopkg.in/yaml%2ev2.DefaultMapType",
+		// Packages at the ROOT of a dotted module path
+		// (trendvidia/go#110). PathToPrefix escapes dots after the
+		// final slash, so when the whole import path is the last
+		// element the name carries no slash at all and the "no slash
+		// means stdlib" arm used to reject it — host and plugin then
+		// kept separate instances of the global on Windows. The
+		// rootmod fixture in cmd/cgo/internal/testplugin is the
+		// end-to-end half of this pin.
+		"example%2ecom.Counter",
+		"go%2eexample%2eorg.Counter",
+		"gopkg%2ein.Setting",
+		// The escape is what admits it, not the leading `go`/dot: a
+		// funcval or method-value symbol of the same root package is
+		// still that package's.
+		"example%2ecom.Fn·f",
 	} {
 		if !isUserPackageName(name) {
 			t.Errorf("isUserPackageName(%q) = false, want true: excluded from cross-module data canonicalisation", name)
@@ -47,27 +62,34 @@ func TestIsUserPackageName(t *testing.T) {
 		"go.itabptr.*os.File,io.Reader",
 		"go.funcptr.go.uber.org/zap.New",
 		"strconv.isPrint16", // no slash: stdlib top-level
+		"os.Args",           // ditto, and the widened arm must not reach it
+		"main.someGlobal",   // the main package is slashless too
 		"testplugin/common..stmp_1",
+		"example%2ecom..inittask", // root-package inittask: still per-module
+		"example%2ecom..stmp_1",
+		"type:example%2ecom.T", // descriptor of a root-package type
 	} {
 		if isUserPackageName(name) {
 			t.Errorf("isUserPackageName(%q) = true, want false: must stay module-local", name)
 		}
 	}
-	// Known divergence, pinned rather than fixed (trendvidia/go#110):
-	// the "no slash means stdlib" arm also rejects the root package of
-	// a dotted module path. `module go.example.org` with its package at
-	// the module root emits `go%2eexample%2eorg.Counter` — PathToPrefix
-	// escapes the dots because the whole path is the last element — so
-	// the name carries no slash and never reaches userDataExports, and
-	// host and plugin keep separate instances on Windows. This is the
-	// same class of hole as #108 but a different arm, and it predates
-	// the `go.` fix (an unescaped `example.com.Counter` never existed).
+	// Known gap, pinned rather than fixed (trendvidia/go#115): a module
+	// path that is a single element with NO dot (`module testplugin`,
+	// `module foo`) has nothing for PathToPrefix to escape, so a
+	// package at its root is spelled exactly like a stdlib top-level
+	// package and the two cannot be told apart from the symbol name.
+	// The name is the only input both callers have — userDataLink's
+	// import half derives it from an `__imp_X` wrapper whose target
+	// need not be a symbol of this module — so the slashless arm
+	// rejects both and such a root package keeps one instance per
+	// module. #110's fix covers dotted module paths, which is every
+	// path that names a domain.
 	for _, name := range []string{
-		"go%2eexample%2eorg.Counter",
-		"example%2ecom.Counter",
+		"testplugin.RootGlobal",
+		"foo.Counter",
 	} {
 		if isUserPackageName(name) {
-			t.Errorf("isUserPackageName(%q) = true: #110 fixed? update this pin and the comment above it", name)
+			t.Errorf("isUserPackageName(%q) = true: #115 fixed? update this pin and the comment above it", name)
 		}
 	}
 }
@@ -104,15 +126,22 @@ func TestModuleSlotNameLockstep(t *testing.T) {
 	for _, name := range []string{
 		"go.uber.org/zap.Global",
 		"go.example.org/fakemod/lib.Counter",
+		// Root package of a dotted module path (trendvidia/go#110):
+		// both gates must admit it, and for the same reason as the
+		// go.*-domain names above — the rootmod fixture's host-shared
+		// half (rootorg.Value) needs the export table AND the
+		// canonicalisation registry to agree about it.
+		"example%2ecom.Counter",
+		"go%2eexample%2eorg.Counter",
 	} {
 		if isModuleSlotName(name) {
 			t.Errorf("isModuleSlotName(%q) = true, want false", name)
 		}
 		if !isUserPackageName(name) {
-			t.Errorf("isUserPackageName(%q) = false, want true: go.*-domain global must be registered for canonicalisation", name)
+			t.Errorf("isUserPackageName(%q) = false, want true: user global must be registered for canonicalisation", name)
 		}
 		if peSkipSymName(name) {
-			t.Errorf("peSkipSymName(%q) = true, want false: go.*-domain global must be exportable for host-plugin sharing", name)
+			t.Errorf("peSkipSymName(%q) = true, want false: user global must be exportable for host-plugin sharing", name)
 		}
 	}
 }
@@ -133,15 +162,23 @@ func TestModuleSlotNameLockstep(t *testing.T) {
 //     inittask exemption to isUserPackageName is the mistake this case
 //     exists to catch.
 //   - stdlib top-level names (`os.Args`, `strconv.isPrint16`): exportable
-//     from a host, but isUserPackageName's "no slash" arm keeps them out
+//     from a host, but isUserPackageName's slashless arm keeps them out
 //     of the canonicalisation registry; on Windows the host's import
 //     library is what shares them.
+//   - root packages of DOTLESS module paths (`testplugin.RootGlobal`):
+//     same shape as the stdlib names and rejected for the same reason,
+//     but unlike them the rejection is a known gap rather than a
+//     decision — nothing in the symbol name separates the two cases.
+//     trendvidia/go#115; the dotted paths #110 fixed have moved out of
+//     this list and into TestModuleSlotNameLockstep's admit region.
 func TestGateAsymmetryOutsideSlotFamilies(t *testing.T) {
 	for _, name := range []string{
 		"testplugin/common..inittask",
 		"sync..inittask",
+		"example%2ecom..inittask",
 		"os.Args",
 		"strconv.isPrint16",
+		"testplugin.RootGlobal",
 	} {
 		if peSkipSymName(name) {
 			t.Errorf("peSkipSymName(%q) = true, want false: host must be able to export it", name)

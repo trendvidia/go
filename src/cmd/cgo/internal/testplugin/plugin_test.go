@@ -100,13 +100,19 @@ func testMain(m *testing.M) int {
 	// lives under a go.*-style module domain (trendvidia/go#108), which
 	// no path inside module testplugin can spell. The gofakemod
 	// directory carries its own go.mod (module go.example.org/fakemod);
-	// point the main module at it. Only modRoot gets the require —
-	// altRoot has no copy of the replacement directory, so it keeps the
-	// bare `module testplugin`. Each root's go.mod is written exactly
-	// once, so the replayable transcript below shows one command per
-	// file rather than a write followed by a contradicting rewrite.
+	// point the main module at it. The rootmod fixture needs the
+	// neighbouring shape — a package at the ROOT of a single-element
+	// dotted module path, whose symbols carry no slash at all
+	// (trendvidia/go#110) — and a module root holds exactly one
+	// package, so its two halves (plugin-only and host-shared) need one
+	// module each: rootmodcom is `module example.com`, rootmodorg is
+	// `module example.org`. Only modRoot gets the requires — altRoot
+	// has no copy of the replacement directories, so it keeps the bare
+	// `module testplugin`. Each root's go.mod is written exactly once,
+	// so the replayable transcript below shows one command per file
+	// rather than a write followed by a contradicting rewrite.
 	goMods := map[string]string{
-		modRoot: "module testplugin\n\ngo 1.26\n\nrequire go.example.org/fakemod v0.0.0\n\nreplace go.example.org/fakemod => ./gofakemod\n",
+		modRoot: "module testplugin\n\ngo 1.26\n\nrequire (\n\texample.com v0.0.0\n\texample.org v0.0.0\n\tgo.example.org/fakemod v0.0.0\n)\n\nreplace (\n\texample.com => ./rootmodcom\n\texample.org => ./rootmodorg\n\tgo.example.org/fakemod => ./gofakemod\n)\n",
 		altRoot: "module testplugin\n\ngo 1.26\n",
 	}
 	for srcRoot, dstRoot := range map[string]string{
@@ -242,6 +248,24 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "godomain.exe", "./godomain/host")
 	goCmdBuildPluginFor(nil, "godomain", "-o=godomain-plugA"+pluginSuffix, "./godomain/plugA")
 	goCmdBuildPluginFor(nil, "godomain", "-o=godomain-plugB"+pluginSuffix, "./godomain/plugB")
+
+	// Root-of-dotted-module-path fixture (trendvidia/go#110): the
+	// shared packages sit at the roots of `module example.com` and
+	// `module example.org`, so PathToPrefix escapes their dots whole
+	// and the globals are named `example%2ecom.Counter` /
+	// `example%2eorg.Value` — no slash, which the "no slash means
+	// stdlib" arm used to reject.
+	goCmd(nil, "build", "-o", "rootmod.exe", "./rootmod/host")
+	goCmdBuildPluginFor(nil, "rootmod", "-o=rootmod-plugA"+pluginSuffix, "./rootmod/plugA")
+	goCmdBuildPluginFor(nil, "rootmod", "-o=rootmod-plugB"+pluginSuffix, "./rootmod/plugB")
+
+	// Escaped-symbol-name fixture (trendvidia/go#116): host and plugin
+	// share go.example.org/fakemod/yaml.v2, whose final path element
+	// carries a dot, so PathToPrefix escapes it and every symbol of the
+	// package is spelled `...yaml%2ev2.X`. Reading that '%' as a
+	// stdcall decoration failed the plugin link outright.
+	goCmd(nil, "build", "-o", "escname.exe", "./escname/host")
+	goCmdBuildPluginFor(nil, "escname", "-o=escname-plugin"+pluginSuffix, "./escname/plug")
 
 	// Post-Close hazard-envelope fixture (trendvidia/go#26): one host
 	// with subcommand-selected probes over an unprotected closure, an
@@ -1232,6 +1256,39 @@ func TestRefcountUnload(t *testing.T) {
 func TestGoDomainModuleCanonicalData(t *testing.T) {
 	globalSkip(t)
 	run(t, "./godomain.exe")
+}
+
+// TestRootModuleCanonicalData exercises the neighbouring arm of the
+// same gate (trendvidia/go#110): a package at the ROOT of a dotted
+// module path. objabi.PathToPrefix escapes every dot after the final
+// slash, so when the whole import path is the last element the symbol
+// name carries no slash — `module example.com` gives
+// `example%2ecom.Counter` — and isUserPackageName's "no slash means
+// stdlib top-level" arm rejected it, so the global never reached
+// userDataExports/Imports and each module kept its own instance on
+// Windows. rootcom.Counter (plugins only) covers the registry path and
+// rootorg.Value (host-linked) the export-table path; the host asserts
+// one instance of each.
+func TestRootModuleCanonicalData(t *testing.T) {
+	globalSkip(t)
+	run(t, "./rootmod.exe")
+}
+
+// TestEscapedSymbolNameSharing pins that a plugin can bind a host-shared
+// package whose symbol names carry a PathToPrefix %-escape
+// (trendvidia/go#116). objabi.PathToPrefix escapes every '.' after the
+// final slash, so a package whose import path ends in a dotted element
+// — every gopkg.in path in the wild: yaml.v2, yaml.v3, check.v1 — has a
+// `%2e` in all of its symbol names. On Windows those names become
+// SDYNIMPORT when the plugin binds them from the host's import library,
+// and initdynimport read the first '%' as a stdcall `%n` argument-count
+// decoration: the link failed with "failed to parse stdcall decoration"
+// after truncating `gopkg.in/yaml%2ev2.Set` to `gopkg.in/yaml`. The
+// build of this fixture is most of the test; the host then asserts the
+// global really is one instance.
+func TestEscapedSymbolNameSharing(t *testing.T) {
+	globalSkip(t)
+	run(t, "./escname.exe")
 }
 
 func TestUniqueTypesAndItabs(t *testing.T) {

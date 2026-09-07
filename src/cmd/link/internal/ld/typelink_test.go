@@ -49,6 +49,22 @@ func TestIsUserPackageName(t *testing.T) {
 		// funcval or method-value symbol of the same root package is
 		// still that package's.
 		"example%2ecom.Fn·f",
+		// Slashless names (trendvidia/go#115). The gate used to read a
+		// missing slash as "stdlib top-level package" and reject it,
+		// which cost correctness in both directions: a package at the
+		// root of a module named without a domain (`go mod init
+		// extensions`) kept one instance per module, and so did every
+		// stdlib package that plugins link and the host does not.
+		// There is no way to tell the two apart from the name, and no
+		// GOROOT marker in sym.Library to ask instead, so the arm is
+		// gone and both are canonicalised — which is what POSIX does.
+		"extensions.Counter",
+		"testplugin.RootGlobal",
+		"os.Args",
+		"strconv.isPrint16",
+		"net.DefaultResolver",
+		"main.someGlobal",
+		"os.Exit·f", // a stdlib funcval, for the same reason
 	} {
 		if !isUserPackageName(name) {
 			t.Errorf("isUserPackageName(%q) = false, want true: excluded from cross-module data canonicalisation", name)
@@ -62,9 +78,6 @@ func TestIsUserPackageName(t *testing.T) {
 		"go.typeptr.type:*go.uber.org/zap.Logger",
 		"go.itabptr.*os.File,io.Reader",
 		"go.funcptr.go.uber.org/zap.New",
-		"strconv.isPrint16", // no slash: stdlib top-level
-		"os.Args",           // ditto, and the widened arm must not reach it
-		"main.someGlobal",   // the main package is slashless too
 		"testplugin/common..stmp_1",
 		"example%2ecom..inittask", // root-package inittask: still per-module
 		"example%2ecom..stmp_1",
@@ -74,23 +87,40 @@ func TestIsUserPackageName(t *testing.T) {
 			t.Errorf("isUserPackageName(%q) = true, want false: must stay module-local", name)
 		}
 	}
-	// Known gap, pinned rather than fixed (trendvidia/go#115): a module
-	// path that is a single element with NO dot (`module testplugin`,
-	// `module foo`) has nothing for PathToPrefix to escape, so a
-	// package at its root is spelled exactly like a stdlib top-level
-	// package and the two cannot be told apart from the symbol name.
-	// The name is the only input both callers have — userDataLink's
-	// import half derives it from an `__imp_X` wrapper whose target
-	// need not be a symbol of this module — so the slashless arm
-	// rejects both and such a root package keeps one instance per
-	// module. #110's fix covers dotted module paths, which is every
-	// path that names a domain.
+	// A name with no package prefix is not a Go package symbol, and
+	// the old "must contain a slash" arm was quietly enforcing that
+	// too. Dropping it admitted C and cgo globals and the thousands of
+	// ANONYMOUS symbols a link carries — 7829 empty names in one
+	// testplugin test binary — whose relocations from the export
+	// carrier have no section and fail the link outright.
 	for _, name := range []string{
-		"testplugin.RootGlobal",
-		"foo.Counter",
+		"",
+		"_cgo_init",
+		"_crosscall2_ptr",
+		"timebase",
+		"block_size",
+		".rel",
+		"main", // a bare package name is not a symbol
 	} {
 		if isUserPackageName(name) {
-			t.Errorf("isUserPackageName(%q) = true: #115 fixed? update this pin and the comment above it", name)
+			t.Errorf("isUserPackageName(%q) = true, want false: not a Go package-level symbol", name)
+		}
+	}
+
+	// The exclusions still apply to slashless names — dropping the
+	// "no slash" arm widened the gate, it did not remove the arms that
+	// state actual facts about a subsystem.
+	for _, name := range []string{
+		"runtime.mheap_",
+		"internal/poll.CloseFunc",
+		"go:buildinfo",
+		"type:os.File",
+		"os..inittask",
+		"sync..stmp_3",
+	} {
+		if isUserPackageName(name) {
+			t.Errorf("isUserPackageName(%q) = true, want false: #115 widened the slashless case, "+
+				"it must not have widened the subsystem exclusions", name)
 		}
 	}
 }
@@ -162,24 +192,20 @@ func TestModuleSlotNameLockstep(t *testing.T) {
 //     per-module structure — so isUserPackageName rejects it. Adding the
 //     inittask exemption to isUserPackageName is the mistake this case
 //     exists to catch.
-//   - stdlib top-level names (`os.Args`, `strconv.isPrint16`): exportable
-//     from a host, but isUserPackageName's slashless arm keeps them out
-//     of the canonicalisation registry; on Windows the host's import
-//     library is what shares them.
-//   - root packages of DOTLESS module paths (`testplugin.RootGlobal`):
-//     same shape as the stdlib names and rejected for the same reason,
-//     but unlike them the rejection is a known gap rather than a
-//     decision — nothing in the symbol name separates the two cases.
-//     trendvidia/go#115; the dotted paths #110 fixed have moved out of
-//     this list and into TestModuleSlotNameLockstep's admit region.
+//
+// The `..inittask` carve-out is the ONLY divergence left. Slashless
+// names used to be the other one — stdlib top-level names and root
+// packages of dotless module paths, which peSkipSymName admitted and
+// isUserPackageName rejected — and that asymmetry was a heuristic, not
+// a decision: nothing separates `os.Args` from `extensions.Counter` by
+// name. Dropping it (trendvidia/go#115) made both gates agree, so those
+// cases moved to TestIsUserPackageName's admit loop.
 func TestGateAsymmetryOutsideSlotFamilies(t *testing.T) {
 	for _, name := range []string{
 		"testplugin/common..inittask",
 		"sync..inittask",
 		"example%2ecom..inittask",
-		"os.Args",
-		"strconv.isPrint16",
-		"testplugin.RootGlobal",
+		"os..inittask",
 	} {
 		if peSkipSymName(name) {
 			t.Errorf("peSkipSymName(%q) = true, want false: host must be able to export it", name)
@@ -349,13 +375,23 @@ func TestUserDataExportable(t *testing.T) {
 		}
 	}
 
-	// The name gate still applies to funcvals: a module-local or
-	// stdlib-named funcval must not be registered just because its
-	// kind now qualifies.
+	// A STDLIB funcval is exportable too, since trendvidia/go#115
+	// dropped the slashless arm. That closes the residual #106 left
+	// open: host and plugin now agree on the identity of a stdlib
+	// function value, not just a user-package one.
+	for _, st := range []sym.SymKind{sym.SRODATA, sym.SNOPTRDATA} {
+		if !userDataExportable("os.Exit·f", st) {
+			t.Errorf("userDataExportable(os.Exit·f, %v) = false, want true: host and plugin would "+
+				"disagree on the identity of a stdlib function value", st)
+		}
+	}
+
+	// The name gate still applies to funcvals: a funcval owned by an
+	// excluded subsystem must not be registered just because its kind
+	// qualifies.
 	for _, name := range []string{
 		"runtime.gcenable·f",
 		"internal/poll.CloseFunc·f",
-		"os.Exit·f", // stdlib top-level: no slash (trendvidia/go#115)
 		"testplugin/common..stmp_1·f",
 	} {
 		for _, st := range []sym.SymKind{sym.SRODATA, sym.SNOPTRDATA} {

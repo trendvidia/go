@@ -573,35 +573,54 @@ func isModuleSlotName(name string) bool {
 	return false
 }
 
-// isUserPackageName reports whether name belongs to a user (non-stdlib)
-// Go package AND is a "user-source" symbol — declared in the package's
-// own source rather than synthesized by the compiler. It reuses the
-// filters of the share-gate in pe_implib.go's peLoadImportLibrary
-// (peSkipSymName's type:* / slot-family / `..` filters plus the data
-// gate's runtime.* / internal/* / go:* exclusions) plus an extra
-// filter to skip compiler-generated symbols that share names with
-// each other across plugins but must NOT be merged.
+// isUserPackageName reports whether name is a Go package symbol that
+// may be canonicalised across modules — declared in a package's own
+// source rather than synthesized by the compiler, and not owned by a
+// subsystem that requires a per-module instance.
 //
-// The two gates agree exactly on the slot families (both reject) and
-// on go.*-domain package symbols (both admit); TestModuleSlotNameLockstep
-// pins that pair. They are NOT equivalent elsewhere and are not meant
-// to be — peSkipSymName is the wider gate. It carves `pkg..inittask`
-// out of its `..` filter so a host can publish init tasks for
-// peLoadImportLibrary to bind (trendvidia/go#61), while an inittask is
-// per-module layout and must never be registered for canonicalisation;
-// and it admits the slashless names the last arm below rejects —
-// stdlib top-level names, and root packages of module paths that carry
-// no dot to escape (trendvidia/go#115).
-// TestGateAsymmetryOutsideSlotFamilies pins those divergences.
+// It is an EXCLUSION list, deliberately. The rule it implements is the
+// one POSIX gets from the dynamic linker for free: identically-named
+// package symbols are one object across the host and every plugin,
+// unless something specific requires otherwise. Those exceptions are:
 //
-// Compiler-generated symbols are recognised by the `..` (consecutive
-// dot) pattern Go uses for them: `pkg..inittask`, `pkg..stmp_N`,
-// `pkg..autotmp_N`, etc. These are package-local internals — every
-// plugin gets its own instance, and intra-package address-taking on
-// them uses direct PC-rel, NOT @GOTPCREL. Merging them at the IAT
-// level produces an inconsistent state where data writes go through
-// __imp_ (to the canonical instance) but `&sym` evaluates to the local
-// address, breaking init-time patterns like `var X = &stmp{...}`.
+//   - runtime.*, whose singletons are shared through the curated
+//     peSharedRuntimeData list instead, because some must stay local;
+//   - internal/*, likewise shared by peLoadImportLibrary's gate when
+//     the host links the package (trendvidia/go#74);
+//   - go:* and type:*, linker-internal carriers and type descriptors,
+//     per-module by design;
+//   - the three go.<kind>. slot families, which the runtime rewrites
+//     per module (isModuleSlotName);
+//   - compiler-generated symbols, recognised by the `..` pattern Go
+//     uses for them: `pkg..inittask`, `pkg..stmp_N`, `pkg..autotmp_N`.
+//     These are package-local internals — every plugin gets its own,
+//     and intra-package address-taking on them uses direct PC-rel, NOT
+//     @GOTPCREL. Merging them at the IAT level produces an inconsistent
+//     state where data writes go through __imp_ (to the canonical
+//     instance) but `&sym` evaluates to the local address, breaking
+//     init-time patterns like `var X = &stmp{...}`.
+//
+// It used to carry a sixth exclusion: names with no slash, read as
+// "stdlib top-level package". That was a heuristic standing in for a
+// fact the linker does not have — nothing here can tell `os.Args` from
+// `extensions.Counter`, the root package of a module named without a
+// domain, and `sym.Library` carries no GOROOT marker to ask. It cost
+// correctness in both directions (trendvidia/go#115): a package at a
+// dotless module root kept one instance per module, and so did every
+// slashless STDLIB package that plugins link and the host does not —
+// two plugins importing net measured different `net.DefaultResolver`
+// where POSIX gives them one. Dropping it makes Windows agree with
+// POSIX and removes the guess; the exclusions above are all stated as
+// facts about specific subsystems rather than inferred from a name's
+// shape.
+//
+// peSkipSymName, pe_implib.go's share-gate, is still the wider of the
+// two: it carves `pkg..inittask` out of its `..` filter so a host can
+// publish init tasks for peLoadImportLibrary to bind (trendvidia/go#61),
+// while an inittask is per-module layout and must never be registered
+// for canonicalisation. TestModuleSlotNameLockstep pins where the two
+// must agree; TestGateAsymmetryOutsideSlotFamilies pins what is left of
+// the divergence.
 func isUserPackageName(name string) bool {
 	if strings.HasPrefix(name, "runtime.") ||
 		strings.HasPrefix(name, "internal/") ||
@@ -614,51 +633,24 @@ func isUserPackageName(name string) bool {
 		// Compiler-generated symbol; skip.
 		return false
 	}
-	if !strings.Contains(name, "/") && !isEscapedRootPackageName(name) {
-		// Stdlib top-level package names have no slash, and neither
-		// does `main`. User packages carry a module-path prefix with
-		// at least one slash, or — for a package at the root of a
-		// dotted module path — an escaped prefix that
-		// isEscapedRootPackageName recognises.
+	if i := strings.IndexByte(name, '.'); i <= 0 {
+		// Not a Go package-level symbol. A Go global is always
+		// `pkg.Name`, so a name with no package prefix belongs to
+		// something else: C and cgo globals (`_cgo_init`,
+		// `_crosscall2_ptr`, `timebase`, `block_size`), linker
+		// artifacts (`.rel`), and the thousands of ANONYMOUS symbols a
+		// link carries — measured, 7829 empty names in one
+		// testplugin test binary. Those have no section, so a
+		// relocation from the export carrier to one fails the link
+		// outright ("missing section for relocation target").
+		//
+		// The old "must contain a slash" arm hid this: requiring a
+		// module-path prefix also required a package prefix. Dropping
+		// it for trendvidia/go#115 separated the two, so the part that
+		// was doing real work is stated here on its own.
 		return false
 	}
 	return true
-}
-
-// isEscapedRootPackageName reports whether a slashless symbol name
-// belongs to a package sitting at the ROOT of a dotted module path
-// rather than to a stdlib top-level package (trendvidia/go#110).
-//
-// This is not a guess about name shapes; it reads objabi.PathToPrefix
-// backwards. That function escapes every '.' AFTER the final '/', so
-// for a name with no '/' at all every dot of the import path is
-// escaped and the first LITERAL '.' left in the symbol name is exactly
-// the package/symbol separator. The package part therefore contains
-// `%2e` if and only if the import path contained a dot:
-//
-//	module example.com,     package at root -> example%2ecom.Counter
-//	module go.example.org,  package at root -> go%2eexample%2eorg.Counter
-//	stdlib os / strconv / the main package  -> os.Args, main.someGlobal
-//
-// A stdlib import path is a single unadorned element (`os`, `strconv`,
-// `sync`) and `main` likewise, so neither can produce a `%2e` here; a
-// module path that names a domain always does. PathToPrefix writes the
-// escape with lowercase hex, so the literal spelling is stable.
-//
-// KNOWN GAP, pinned by TestIsUserPackageName: a module path that is a
-// single element WITHOUT a dot (`module testplugin`, with a package at
-// its root) is spelled `testplugin.X`, which is indistinguishable from
-// a stdlib top-level name by the symbol name alone — the only input
-// both callers have, since the `__imp_X` half derives its name from a
-// wrapper whose target may not be a symbol in this module at all. Such
-// a package keeps separate instances per module. See
-// trendvidia/go#115.
-func isEscapedRootPackageName(name string) bool {
-	pkg, _, ok := strings.Cut(name, ".")
-	if !ok {
-		return false
-	}
-	return strings.Contains(pkg, "%2e")
 }
 
 // isFuncValName reports whether name is a compiler-emitted funcval

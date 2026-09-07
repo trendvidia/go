@@ -112,7 +112,7 @@ func testMain(m *testing.M) int {
 	// so the replayable transcript below shows one command per file
 	// rather than a write followed by a contradicting rewrite.
 	goMods := map[string]string{
-		modRoot: "module testplugin\n\ngo 1.26\n\nrequire (\n\texample.com v0.0.0\n\texample.org v0.0.0\n\tgo.example.org/fakemod v0.0.0\n)\n\nreplace (\n\texample.com => ./rootmodcom\n\texample.org => ./rootmodorg\n\tgo.example.org/fakemod => ./gofakemod\n)\n",
+		modRoot: "module testplugin\n\ngo 1.26\n\nrequire (\n\texample.com v0.0.0\n\texample.org v0.0.0\n\textensions v0.0.0\n\tgo.example.org/fakemod v0.0.0\n)\n\nreplace (\n\texample.com => ./rootmodcom\n\texample.org => ./rootmodorg\n\textensions => ./dotlessmod\n\tgo.example.org/fakemod => ./gofakemod\n)\n",
 		altRoot: "module testplugin\n\ngo 1.26\n",
 	}
 	for srcRoot, dstRoot := range map[string]string{
@@ -266,6 +266,15 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "rootmod.exe", "./rootmod/host")
 	goCmdBuildPluginFor(nil, "rootmod", "-o=rootmod-plugA"+pluginSuffix, "./rootmod/plugA")
 	goCmdBuildPluginFor(nil, "rootmod", "-o=rootmod-plugB"+pluginSuffix, "./rootmod/plugB")
+
+	// Slashless-name fixture (trendvidia/go#115): `module extensions`
+	// has no dot to escape and no slash, so its root package is spelled
+	// exactly like a stdlib top-level name. The same fixture covers the
+	// other half of that gate — a slashless STDLIB package the plugins
+	// link and the host does not.
+	goCmd(nil, "build", "-o", "dotless.exe", "./dotless/host")
+	goCmdBuildPluginFor(nil, "dotless", "-o=dotless-plugA"+pluginSuffix, "./dotless/plugA")
+	goCmdBuildPluginFor(nil, "dotless", "-o=dotless-plugB"+pluginSuffix, "./dotless/plugB")
 
 	// Escaped-symbol-name fixture (trendvidia/go#116): host and plugin
 	// share go.example.org/fakemod/yaml.v2, whose final path element
@@ -1326,6 +1335,23 @@ func TestRootModuleCanonicalData(t *testing.T) {
 // after truncating `gopkg.in/yaml%2ev2.Set` to `gopkg.in/yaml`. The
 // build of this fixture is most of the test; the host then asserts the
 // global really is one instance.
+// TestSlashlessNameCanonicalData pins both halves of the gate that
+// isUserPackageName's "no slash means stdlib" arm used to close
+// (trendvidia/go#115): a package at the root of a module named without
+// a domain — `go mod init extensions`, which is how first-party
+// extension code is laid out — and a slashless STDLIB package that the
+// plugins link and the host does not, where the host's import library
+// cannot share it either.
+//
+// Nothing separates `extensions.Counter` from `os.Args` by name, and
+// the linker has no std-package list to ask instead, so the arm was a
+// guess standing in for a fact. POSIX gives one instance in both cases;
+// this is how Windows is held to that.
+func TestSlashlessNameCanonicalData(t *testing.T) {
+	globalSkip(t)
+	run(t, "./dotless.exe")
+}
+
 func TestEscapedSymbolNameSharing(t *testing.T) {
 	globalSkip(t)
 	run(t, "./escname.exe")

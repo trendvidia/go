@@ -265,9 +265,36 @@ func (p *Plugin) Lookup(symName string) (Symbol, error) {
 //     closures, and pointers to the plugin's variables all point at
 //     memory the OS unmaps during Close. Using one after Close
 //     faults unrecoverably (the process dies even under defer/
-//     recover). If the same path is re-opened afterwards, stale
-//     pointers may additionally alias the new instance, because the
-//     loader can map it at the same addresses.
+//     recover).
+//
+// Close reserves the address range the image occupied, so a later
+// Open cannot be placed over it. A stale reference therefore faults
+// rather than silently addressing whatever the next plugin puts at
+// that address — which, since a new version of a plugin lays its data
+// out differently, need not even be the same variable. The reservation
+// costs address space and nothing else; it holds no memory.
+//
+// # Upgrading a plugin
+//
+// Replacing a loaded plugin with a new build is Close followed by
+// Open, and it is safe when the host holds nothing that points into
+// the old image. Two rules are enough:
+//
+//   - Reach the plugin only through function values obtained from
+//     [Plugin.Lookup]. Those are the references Close protects, so one
+//     left over from the previous version panics recoverably instead
+//     of running freed code.
+//
+//   - Exchange only types the HOST defines, or types from packages
+//     both sides import. A value whose type belongs to the plugin
+//     carries method code and type descriptors that live in the
+//     plugin's image; the value itself survives Close, but calling a
+//     method on it afterwards faults.
+//
+// A host that follows both can upgrade a plugin repeatedly with no
+// unsafe reference to drop first. One that caches &pluginVar, or holds
+// a closure a plugin call returned, must release it before Close, and
+// nothing in this package can check that for it.
 //
 // A call that was already in flight when Close began may still be
 // executing plugin code as its image unmaps; the application must

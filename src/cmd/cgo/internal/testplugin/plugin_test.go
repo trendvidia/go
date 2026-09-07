@@ -309,6 +309,13 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "upgrade", "-o=upgrade-v1"+pluginSuffix, "./upgrade/v1")
 	goCmdBuildPluginFor(nil, "upgrade", "-o=upgrade-v2"+pluginSuffix, "./upgrade/v2")
 
+	// The other half of the upgrade story (trendvidia/go#122): an
+	// extension that follows the contract Plugin.Close documents,
+	// upgraded with nothing unsafe to release first.
+	goCmd(nil, "build", "-o", "upgradesafe.exe", "./upgradesafe/host")
+	goCmdBuildPluginFor(nil, "upgradesafe", "-o=upgradesafe-v1"+pluginSuffix, "./upgradesafe/v1")
+	goCmdBuildPluginFor(nil, "upgradesafe", "-o=upgradesafe-v2"+pluginSuffix, "./upgradesafe/v2")
+
 	goCmd(nil, "build", "-o", "hazards.exe", "./hazards")
 	goCmdBuildPluginFor(nil, "hazards", "-o=hazards-plugin"+pluginSuffix, "./hazards/hazard")
 
@@ -1254,6 +1261,24 @@ func runExpectFault(t *testing.T, bin string, args ...string) {
 // is what this asserts against — reaching it means a reservation
 // silently stopped happening and the upgrade path is quietly wrong
 // again, which is the failure this whole fixture exists to catch.
+// TestUpgradeSafe pins the contract Plugin.Close documents for
+// replacing a loaded plugin: a host that reaches the plugin only
+// through Lookup-obtained function values, and exchanges only types it
+// already knows, upgrades cleanly with nothing to release first. The
+// leftover handle on the old build panics recoverably with the
+// documented value, and the new build is unaffected.
+//
+// It is the positive counterpart of TestUpgradeStalePointer. That one
+// proves breaking the contract fails loudly; without this one, a change
+// that made every upgrade fault would satisfy it and be useless.
+func TestUpgradeSafe(t *testing.T) {
+	globalSkip(t)
+	out := run(t, "./upgradesafe.exe")
+	if !strings.Contains(out, "upgradesafe ok") {
+		t.Fatalf("upgradesafe did not report success:\n%s", out)
+	}
+}
+
 func TestUpgradeStalePointer(t *testing.T) {
 	globalSkip(t)
 	runExpectFault(t, "./upgrade.exe")

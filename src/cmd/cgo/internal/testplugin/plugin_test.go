@@ -301,6 +301,14 @@ func testMain(m *testing.M) int {
 	// Post-Close hazard-envelope fixture (trendvidia/go#26): one host
 	// with subcommand-selected probes over an unprotected closure, an
 	// exported-variable pointer, and the reopen-aliasing cell.
+	// Extension-upgrade fixture (trendvidia/go#122): v1 and v2 lay
+	// their exported fields out differently on purpose, so a pointer
+	// held across the upgrade lands on the WRONG field of the new
+	// image unless the freed range is reserved.
+	goCmd(nil, "build", "-o", "upgrade.exe", "./upgrade/host")
+	goCmdBuildPluginFor(nil, "upgrade", "-o=upgrade-v1"+pluginSuffix, "./upgrade/v1")
+	goCmdBuildPluginFor(nil, "upgrade", "-o=upgrade-v2"+pluginSuffix, "./upgrade/v2")
+
 	goCmd(nil, "build", "-o", "hazards.exe", "./hazards")
 	goCmdBuildPluginFor(nil, "hazards", "-o=hazards-plugin"+pluginSuffix, "./hazards/hazard")
 
@@ -1231,6 +1239,34 @@ func runExpectFault(t *testing.T, bin string, args ...string) {
 // two Lookup addresses first and only asserts aliasing when they
 // match. Either outcome is a pass; the parent requires the probe to
 // say which it took so a silently non-asserting fixture cannot hide.
+// TestUpgradeStalePointer pins what a pointer held across an extension
+// UPGRADE does (trendvidia/go#122). Upgrading is close(v1) then
+// open(v2) — the flow unloading exists to serve — and the loader reuses
+// a freed image's base despite ASLR, so a stale pointer used to address
+// whatever the NEW image put at that offset. The fixture's v2 moves its
+// fields deliberately, so the host writing what it believes is
+// Threshold silently set Budget: a wrong value applied to live state,
+// with no error anywhere.
+//
+// Windows now reserves the freed range on unload, so the stale write
+// faults instead. POSIX does not yet — reserving there needs MAP_FIXED,
+// which clobbers a still-mapped image rather than failing, so it needs
+// per-OS handling — and the corrupting outcome is asserted there rather
+// than hidden, so this test starts failing the day POSIX is fixed and
+// says what to do about it.
+func TestUpgradeStalePointer(t *testing.T) {
+	globalSkip(t)
+	if runtime.GOOS == "windows" {
+		runExpectFault(t, "./upgrade.exe")
+		return
+	}
+	out := run(t, "./upgrade.exe")
+	if !strings.Contains(out, "upgrade: stale write corrupted Budget") {
+		t.Fatalf("upgrade: want the pinned POSIX corruption verdict, got:\n%s", out)
+	}
+	t.Logf("POSIX still corrupts on upgrade (trendvidia/go#123): %s", strings.TrimSpace(out))
+}
+
 func TestCloseHazardEnvelope(t *testing.T) {
 	globalSkip(t)
 	runExpectFault(t, "./hazards.exe", "closure")

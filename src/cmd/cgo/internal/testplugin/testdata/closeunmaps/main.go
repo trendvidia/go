@@ -65,9 +65,12 @@ func main() {
 	//   - Linux: dlclose with refcount==0 reliably triggers munmap,
 	//     so the page MUST report ENOMEM. We assert that.
 	//
-	//   - Windows: FreeLibrary releases the mapping and VirtualQuery
-	//     reports MEM_FREE for the formerly-mapped region. Strict
-	//     assertion, like Linux.
+	//   - Windows: FreeLibrary releases the mapping. The region then
+	//     reports MEM_FREE, or — since trendvidia/go#122 reserves the
+	//     range so the loader cannot reuse it — MEM_RESERVE over
+	//     non-image memory. Both mean the image is gone and an access
+	//     faults; isUnmapped accepts either and still rejects a
+	//     committed image mapping. Strict assertion, like Linux.
 	//
 	//   - Darwin: dyld may retain dylibs in process memory after
 	//     dlclose for caching reasons even when refcount drops to

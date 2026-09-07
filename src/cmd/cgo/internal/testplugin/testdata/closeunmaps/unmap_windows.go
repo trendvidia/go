@@ -30,6 +30,7 @@ const (
 	memCommit  = 0x1000
 	memReserve = 0x2000
 	memFree    = 0x10000
+	memImage   = 0x1000000
 )
 
 var (
@@ -38,12 +39,25 @@ var (
 )
 
 // isUnmapped probes the region containing addr with VirtualQuery.
-// FreeLibrary releases the plugin's image mapping; the formerly-
-// mapped region then reports State == MEM_FREE (0x10000).
+// FreeLibrary releases the plugin's image mapping, and the question
+// this fixture asks is whether the IMAGE is gone — not whether the
+// address range went back to the free list.
 //
-// Returns: 1 = unmapped (MEM_FREE), 0 = mapped (MEM_COMMIT or
-// MEM_RESERVE), -1 = VirtualQuery failed (errnoOut holds the
-// Windows error code from GetLastError).
+// Those stopped being the same thing with trendvidia/go#122:
+// unloadPlugin now reserves the range the image occupied, so the
+// loader cannot reuse it and a stale pointer faults instead of
+// silently addressing the next plugin. A reserved region reports
+// MEM_RESERVE with Type 0 — no committed pages, no image, nothing
+// mapped; accessing it faults exactly as MEM_FREE would. Treating
+// that as "still mapped" would fail this fixture for the mechanism
+// that makes unload safe.
+//
+// What "still loaded" actually looks like is MEM_COMMIT with
+// Type == MEM_IMAGE, and that is what this must still catch.
+//
+// Returns: 1 = image unmapped (MEM_FREE, or MEM_RESERVE over
+// non-image memory), 0 = still mapped, -1 = VirtualQuery failed
+// (errnoOut holds the Windows error code from GetLastError).
 func isUnmapped(addr uintptr) (status int, errnoOut int) {
 	var mbi memoryBasicInformation
 	r1, _, e1 := procVirtualQuery.Call(addr, uintptr(unsafe.Pointer(&mbi)), unsafe.Sizeof(mbi))
@@ -53,7 +67,11 @@ func isUnmapped(addr uintptr) (status int, errnoOut int) {
 		}
 		return -1, 0
 	}
-	if mbi.State == memFree {
+	switch {
+	case mbi.State == memFree:
+		return 1, 0
+	case mbi.State == memReserve && mbi.Type != memImage:
+		// The #122 reservation: address space held, nothing mapped.
 		return 1, 0
 	}
 	return 0, 0

@@ -26,6 +26,7 @@ var (
 	modkernel32            = syscall.NewLazyDLL("kernel32.dll")
 	procGetModuleFileNameW = modkernel32.NewProc("GetModuleFileNameW")
 	procGetLongPathNameW   = modkernel32.NewProc("GetLongPathNameW")
+	procVirtualAlloc       = modkernel32.NewProc("VirtualAlloc")
 )
 
 func open(name string) (*Plugin, error) {
@@ -426,13 +427,96 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 // image and fault unrecoverably if used now; see Plugin.Close.
 //
 // Caller (closePlugin) holds pluginsMu.
+// imageExtent returns the base address and byte length of a loaded
+// module's image, or (0, 0) if the headers do not read as a 64-bit PE.
+//
+// An HMODULE IS the image base on Windows, and the loader's own notion
+// of how much address space the image occupies is SizeOfImage in the
+// optional header. Both are read from the MAPPED image, so this must
+// run before FreeLibrary.
+//
+// Returning (0, 0) rather than guessing is deliberate: reserveUnmapped
+// would otherwise reserve a range that is not the image's, and a wrong
+// reservation is worse than none.
+func imageExtent(handle uintptr) (base, size uintptr) {
+	if handle == 0 {
+		return 0, 0
+	}
+	read16 := func(off uintptr) uint16 {
+		return *(*uint16)(unsafe.Pointer(handle + off))
+	}
+	read32 := func(off uintptr) uint32 {
+		return *(*uint32)(unsafe.Pointer(handle + off))
+	}
+	// IMAGE_DOS_HEADER.e_magic == "MZ", e_lfanew at 0x3c.
+	if read16(0) != 0x5a4d {
+		return 0, 0
+	}
+	nt := uintptr(read32(0x3c))
+	// IMAGE_NT_HEADERS.Signature == "PE\0\0", then a 20-byte
+	// IMAGE_FILE_HEADER, then the optional header.
+	if read32(nt) != 0x00004550 {
+		return 0, 0
+	}
+	opt := nt + 4 + 20
+	// IMAGE_NT_OPTIONAL_HDR64_MAGIC. Only 64-bit images are
+	// supported here, and SizeOfImage sits at a different offset in
+	// the 32-bit layout, so refuse rather than misread it.
+	if read16(opt) != 0x20b {
+		return 0, 0
+	}
+	sz := uintptr(read32(opt + 56)) // OptionalHeader.SizeOfImage
+	if sz == 0 {
+		return 0, 0
+	}
+	return handle, sz
+}
+
+// reserveUnmapped reserves the address range a just-unloaded plugin
+// occupied, so the loader cannot hand it to the NEXT plugin
+// (trendvidia/go#122).
+//
+// Without it, a host pointer held across Close does not dangle in any
+// detectable way: Windows reuses the freed base for the next image
+// despite ASLR (measured on amd64 and arm64), so the pointer silently
+// addresses whatever the new image put at that offset. During a plugin
+// UPGRADE that is a different variable — measured, a host writing what
+// it believed was one exported field set an unrelated one. Reserving
+// the range turns that into an access violation at the point of use.
+//
+// MEM_RESERVE only: no memory is committed, so this costs address
+// space and nothing else. Reserved-but-uncommitted pages fault on any
+// access, which is exactly the desired behaviour for a stale pointer.
+//
+// Best-effort by design. The reservation fails when the range is not
+// free, and the honest reading of that is "the image did not actually
+// go away" — FreeLibrary decrements a refcount, so another loader
+// reference (or a dependency holding it) keeps the image mapped. In
+// that case the old pointers remain valid and no aliasing is possible,
+// so there is nothing to protect against. Failing Close over it would
+// turn a benign case into an error.
+func reserveUnmapped(base, size uintptr) {
+	if base == 0 || size == 0 {
+		return
+	}
+	const (
+		memReserve   = 0x2000
+		pageNoAccess = 0x01
+	)
+	procVirtualAlloc.Call(base, size, memReserve, pageNoAccess)
+}
+
 func unloadPlugin(p *Plugin) error {
 	if p.handle == 0 {
 		return nil
 	}
+	// Read the image extent while it is still mapped; after
+	// FreeLibrary the headers are gone (trendvidia/go#122).
+	base, size := imageExtent(p.handle)
 	if err := syscall.FreeLibrary(syscall.Handle(p.handle)); err != nil {
 		return err
 	}
+	reserveUnmapped(base, size)
 	for path, q := range plugins {
 		if q == p {
 			delete(plugins, path)

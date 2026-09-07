@@ -267,6 +267,13 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "escname.exe", "./escname/host")
 	goCmdBuildPluginFor(nil, "escname", "-o=escname-plugin"+pluginSuffix, "./escname/plug")
 
+	// Plugin-local ABI0 assembly fixture (trendvidia/go#117): the host
+	// links no crypto, so the plugin's own text makes the ABI0 calls
+	// and carries the g-reload the windows/amd64 rewrite turns into a
+	// load through __imp_runtime.tls_g.
+	goCmd(nil, "build", "-o", "asmplugin.exe", "./asmplugin/host")
+	goCmdBuildPluginFor(nil, "asmplugin", "-o=asmplugin-plugin"+pluginSuffix, "./asmplugin/plug")
+
 	// Post-Close hazard-envelope fixture (trendvidia/go#26): one host
 	// with subcommand-selected probes over an unprotected closure, an
 	// exported-variable pointer, and the reopen-aliasing cell.
@@ -1289,6 +1296,26 @@ func TestRootModuleCanonicalData(t *testing.T) {
 func TestEscapedSymbolNameSharing(t *testing.T) {
 	globalSkip(t)
 	run(t, "./escname.exe")
+}
+
+// TestPluginLocalAsmCall pins that a plugin whose OWN text calls ABI0
+// assembly loads and runs (trendvidia/go#117). On windows/amd64 the
+// compiler rewrites the g-register reload after such a call into a load
+// through a symbol named `__imp_runtime.tls_g`; internal linking used to
+// wrap that into a slot holding the image's rebasing delta, so the
+// reload faulted with 0xc0000005 inside plugin.Open — before any Lookup
+// could guard against it, since edwards25519's init makes the call.
+//
+// Every other fixture here shares its assembly-carrying packages with
+// the host, so the call happens in host text, which is not -dynlink and
+// uses the direct two-instruction form. This one's host links no
+// crypto, which is the whole point of it.
+// TestPEImpWrapperTargetsIATSlot in cmd/link/internal/ld pins the slot's
+// content directly, and can fail on any platform; this one is the
+// does-the-process-survive half.
+func TestPluginLocalAsmCall(t *testing.T) {
+	globalSkip(t)
+	run(t, "./asmplugin.exe")
 }
 
 func TestUniqueTypesAndItabs(t *testing.T) {

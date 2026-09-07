@@ -531,3 +531,135 @@ func peScheduledInittasks(t *testing.T, path string) map[string]bool {
 	}
 	return out
 }
+
+// TestPEImpWrapperTargetsIATSlot pins what a `__imp_`-named GOT target
+// resolves to in an internal-linked Windows plugin (trendvidia/go#117).
+//
+// cmd/internal/obj/x86 rewrites the g-reload that follows an ABI0 call
+// in a Windows plugin into a load from a symbol NAMED
+// `__imp_runtime.tls_g` — deliberately, because an external link
+// resolves that from the host's import library and so avoids the mingw
+// pseudo-reloc-v2 overflow a direct memory ref would hit. peGotRedirect
+// then wraps it, and the wrapper's CONTENT is what the sequence
+// dereferences: it must be the address of the `.windynamic` IAT slot.
+//
+// Nothing defines `__imp_runtime.tls_g` under internal linking, so the
+// wrapper used to hold the address of an undefined symbol — 0 in the
+// image plus a base relocation, i.e. the rebasing DELTA at load. The
+// g-reload then faulted inside plugin.Open, killing any plugin whose
+// own text calls an ABI0 assembly function. A plugin importing
+// crypto/ed25519 or net/http crashed on load; every fixture in the
+// suite escaped it only because it shares its assembly-carrying
+// packages with the host, so the call happens in host text, which is
+// not -dynlink and uses the direct two-instruction form.
+//
+// The failure is silent at link time, which is why this reads the image
+// rather than trusting a green build. hash/crc32 is the cheapest import
+// that reaches the rewrite (measured: crc32 443KB vs crypto/sha256
+// 908KB; hash/adler32 has no assembly and does not reach it at all),
+// and the host below does not link it.
+func TestPEImpWrapperTargetsIATSlot(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	t.Parallel()
+
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module p117pin\n\ngo 1.26\n")
+	write("host/main.go", `package main
+
+import (
+	"fmt"
+	"plugin"
+)
+
+func main() { fmt.Println(plugin.Open) }
+`)
+	write("plug/main.go", `package main
+
+import "hash/crc32"
+
+// Calls into crc32's ABI0 assembly, which the host does not link, so
+// the g-reload after the call lands in PLUGIN text.
+func F(b []byte) uint32 { return crc32.ChecksumIEEE(b) }
+
+func main() {}
+`)
+
+	goBuild := func(args ...string) {
+		t.Helper()
+		cmd := testenv.Command(t, testenv.GoToolPath(t), append([]string{"build"}, args...)...)
+		cmd.Dir = dir
+		cmd.Env = append(cmd.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go build %v: %v\n%s", args, err, out)
+		}
+	}
+	goBuild("-o", filepath.Join("host", "host.exe"), "./host")
+	goBuild("-buildmode=plugin",
+		"-ldflags=-pluginimplib="+filepath.Join("host", "host.exe.a"),
+		"-o", "plug.dll", "./plug")
+
+	const wrapper = "__imp___imp_runtime.tls_g"
+	word, ok := peSymbolWord(t, filepath.Join(dir, "plug.dll"), wrapper)
+	if !ok {
+		// Not a pass. If the compiler stops emitting the __imp_ form,
+		// or crc32 stops carrying assembly, this test silently stops
+		// exercising the bug it exists for.
+		t.Fatalf("%s not present in plug.dll: this test no longer reaches the g-reload rewrite it pins", wrapper)
+	}
+	if word == 0 {
+		t.Errorf("%s holds 0: the wrapper points at an undefined symbol, so at load it holds the "+
+			"rebasing delta and the g-reload after an ABI0 call faults inside plugin.Open (trendvidia/go#117)", wrapper)
+	}
+}
+
+// peSymbolWord returns the pointer-sized word stored at the address of
+// the named symbol in a PE image, and whether that symbol is defined in
+// it. Used to check what a synthesized slot actually holds, which is
+// invisible to the symbol table alone.
+func peSymbolWord(t *testing.T, path, name string) (uint64, bool) {
+	t.Helper()
+	f, err := pe.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	var imageBase uint64
+	switch oh := f.OptionalHeader.(type) {
+	case *pe.OptionalHeader64:
+		imageBase = oh.ImageBase
+	case *pe.OptionalHeader32:
+		imageBase = uint64(oh.ImageBase)
+	default:
+		t.Fatalf("%s: no optional header", path)
+	}
+
+	for _, sym := range f.Symbols {
+		if sym.Name != name || sym.SectionNumber <= 0 || int(sym.SectionNumber) > len(f.Sections) {
+			continue
+		}
+		sec := f.Sections[sym.SectionNumber-1]
+		data, err := sec.Data()
+		if err != nil {
+			t.Fatal(err)
+		}
+		off := uint64(sym.Value)
+		if off+8 > uint64(len(data)) {
+			// Past the raw data: a virtual-only (zero-filled) tail,
+			// which reads as 0 at load.
+			return 0, true
+		}
+		_ = imageBase
+		return binary.LittleEndian.Uint64(data[off : off+8]), true
+	}
+	return 0, false
+}

@@ -470,6 +470,44 @@ func peGotRedirect(arch *sys.Arch, ldr *loader.Loader, targ loader.Sym) loader.S
 	// `runtime.findfunc` whose callers receive PCs that the host's
 	// findfunc cannot resolve.
 	internalName := ldr.SymName(targ)
+
+	// A target that is ALREADY an `__imp_` name needs the wrapper to
+	// point at the IAT SLOT, not at the undefined `__imp_X` symbol
+	// (trendvidia/go#117). One symbol arrives here that way:
+	// cmd/internal/obj/x86's Windows plugin TLS sequence names
+	// `__imp_runtime.tls_g` deliberately, because an EXTERNAL link
+	// resolves that from the host's import library and so avoids the
+	// mingw pseudo-reloc-v2 overflow a direct memory ref would hit.
+	//
+	// A GOT-based load yields a symbol's CONTENT, so the sequence the
+	// compiler emits needs three things in order: the wrapper's content
+	// must be the slot's ADDRESS, the slot's content is host's &tls_g,
+	// and the compiler's own extra deref then produces the TLS offset.
+	// Under external linking that already holds — `__imp_runtime.tls_g`
+	// is an SHOSTOBJ the external linker binds to the real IAT slot, so
+	// wrapping it gives a wrapper holding &slot. Under INTERNAL linking
+	// nothing defines it: the wrapper held the address of an undefined
+	// symbol, which is 0 in the image plus a base relocation, so at load
+	// it held the rebasing DELTA and the g-reload after any plugin-local
+	// ABI0 call faulted inside plugin.Open.
+	//
+	// initdynimport makes the underlying import an interior symbol of
+	// `.windynamic`, whose address IS the IAT slot, so pointing the
+	// wrapper at that symbol restores the intended chain. The wrapper
+	// keeps its `__imp___imp_X` name: it is a distinct object from the
+	// slot, and the external-link path names it the same way.
+	//
+	// Note this is NOT the SWINDOWS arm at the top of this function.
+	// That arm returns the slot itself for a DIRECT reference, where
+	// the GOT load must produce the slot's content; here one more
+	// indirection is required because the compiler already spends one.
+	addrTarget := targ
+	if under, ok := strings.CutPrefix(internalName, "__imp_"); ok {
+		if us := ldr.Lookup(under, 0); us != 0 && ldr.SymType(us) == sym.SWINDOWS {
+			addrTarget = us
+		}
+	}
+
 	name := "__imp_" + internalName
 	if ldr.SymType(targ) == sym.SHOSTOBJ {
 		if ext := ldr.SymExtname(targ); ext != "" && ext != internalName {
@@ -492,7 +530,7 @@ func peGotRedirect(arch *sys.Arch, ldr *loader.Loader, targ loader.Sym) loader.S
 	sb.SetType(sym.SNOPTRDATA)
 	sb.SetSize(0)
 	sb.SetData(nil)
-	sb.AddAddrPlus(arch, targ, 0)
+	sb.AddAddrPlus(arch, addrTarget, 0)
 	ldr.SetAttrReachable(s, true)
 	return s
 }

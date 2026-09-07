@@ -661,6 +661,57 @@ func isEscapedRootPackageName(name string) bool {
 	return strings.Contains(pkg, "%2e")
 }
 
+// isFuncValName reports whether name is a compiler-emitted funcval
+// symbol — the one-word object a func VALUE points at, holding the
+// function's ABIInternal entry address. staticdata.WriteFuncSyms emits
+// one per function used as a value rather than called directly, named
+// ir.FuncSymName(f), which is f + "\u00b7f".
+func isFuncValName(name string) bool {
+	return strings.HasSuffix(name, "\u00b7f")
+}
+
+// userDataExportable reports whether a reachable symbol named name with
+// symbol kind st belongs in runtime.userDataExports — the registry the
+// runtime canonicalises cross-module references against.
+//
+// The four writable data kinds are the original set: a package-level
+// global lives in one of them, and canonicalisation exists to give
+// every module one instance of it.
+//
+// SRODATA is admitted for funcval symbols ONLY (trendvidia/go#106).
+// A funcval is read-only in an exe and writable under -dynlink
+// (WriteFuncSyms marks it NOPTR there so Plugin.Close can overwrite the
+// code pointer), and that symbol-KIND asymmetry is exactly what used to
+// exclude a plugin HOST's funcvals from this walk while including every
+// plugin's. Nothing then canonicalised a plugin's funcval against the
+// host's, so a func value the plugin materialised for a host-shared
+// function pointed at the plugin's own `·f`, whose word is the address
+// of the plugin's IAT thunk. Measured on windows/{amd64,arm64}:
+// reflect.ValueOf(shared.Fn).Pointer() disagreed with the host's, and
+// runtime.FuncForPC named the value ".rel" — the linker's thunk table —
+// where POSIX names the function. Registering the host's funcvals feeds
+// BOTH consumers of canonicalSyms, since canonicalizeSlots keys the
+// funcptr carrier on the funcval's own name and userDataInit keys the
+// data walk the same way.
+//
+// The kind is narrowed to funcvals rather than opened to SRODATA: the
+// rest of that section is type descriptors, strings and the slot
+// carriers, which are per-module by design and which isUserPackageName
+// already rejects by name. Both filters are pinned by
+// TestUserDataExportable.
+func userDataExportable(name string, st sym.SymKind) bool {
+	if !isUserPackageName(name) {
+		return false
+	}
+	switch st {
+	case sym.SDATA, sym.SBSS, sym.SNOPTRDATA, sym.SNOPTRBSS:
+		return true
+	case sym.SRODATA:
+		return isFuncValName(name)
+	}
+	return false
+}
+
 // userDataLink collects the per-module user-package DATA symbol tables
 // that L3 uses for peer-plugin canonicalisation on platforms where the
 // OS dynamic linker doesn't merge symbol namespaces (Windows).
@@ -710,11 +761,7 @@ func (ctxt *Link) userDataLink() {
 			imports = append(imports, s)
 			continue
 		}
-		if !isUserPackageName(name) {
-			continue
-		}
-		switch st {
-		case sym.SDATA, sym.SBSS, sym.SNOPTRDATA, sym.SNOPTRBSS:
+		if userDataExportable(name, st) {
 			exports = append(exports, s)
 		}
 	}

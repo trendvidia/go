@@ -298,6 +298,32 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 		}
 	}
 
+	// Register the HOST's data exports before anything canonicalises
+	// the new module's slots (trendvidia/go#106). userDataInit only
+	// ever runs for a freshly loaded plugin, so the host's udexports
+	// carrier — which the linker has always emitted — was never read,
+	// and the host could not own a canonical name. That is invisible
+	// for a package the host links, because the plugin's references to
+	// it are bound to the host through the PE import library and the
+	// plugin defines no copy to register; it is NOT invisible for
+	// funcvals, where a plugin emits its own `pkg.Fn·f` even when
+	// pkg.Fn's body is the host's, and that copy holds the address of
+	// the plugin's IAT thunk.
+	//
+	// Ordering is the point: funcptrsinit below is what rewrites the
+	// new module's funcptr slots, and first-loader-wins means whoever
+	// registered a name first owns it. The host has to be in
+	// canonicalSyms by then or the plugin's own funcval wins and
+	// nothing changes.
+	//
+	// Done here rather than at startup because canonicalSyms is
+	// otherwise never built in a process that loads no plugin, and the
+	// host's export table runs to thousands of names — every Windows
+	// program would pay to build a map nothing reads.
+	lock(&canonicalSymsLock)
+	registerHostExports()
+	unlock(&canonicalSymsLock)
+
 	// Initialize the freshly loaded module.
 	modulesinit()
 	funcptrsinit()

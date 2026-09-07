@@ -87,6 +87,46 @@ type pkgKey struct {
 // Access is serialised by canonicalSymsLock.
 var pkgOwners map[pkgKey]*moduledata
 
+// hostExportsRegistered records whether registerHostExports has run.
+// The host's exports never change after startup, so once is enough.
+var hostExportsRegistered bool
+
+// registerHostExports enters the host's user-package data exports in
+// canonicalSyms, so the host owns those names under first-loader-wins
+// (trendvidia/go#106).
+//
+// The host is firstmoduledata: the main program's module is always the
+// first in the list, and a plugin is only ever appended. Its exports
+// are registered here rather than in userDataInit because that runs per
+// freshly-loaded module and the host is never one of those — its
+// carrier was emitted by every Windows link and read by nothing.
+//
+// Only pass 1 of userDataInit applies. The host has no `__imp_X`
+// SNOPTRDATA wrappers to rewrite: those are synthesized by
+// peGotRedirect for -dynlink code, and a host is not built that way
+// (measured: a host's userDataImports carriers are empty).
+//
+// Caller holds canonicalSymsLock.
+func registerHostExports() {
+	if hostExportsRegistered {
+		return
+	}
+	hostExportsRegistered = true
+	md := &firstmoduledata
+	if len(md.udexports) == 0 {
+		return
+	}
+	if canonicalSyms == nil {
+		canonicalSyms = make(map[string]canonicalEntry, 1024)
+	}
+	for i, addr := range md.udexports {
+		name := canonicalSymName(md.udexportnames, md.udexportnameoffs, i)
+		if _, ok := canonicalSyms[name]; !ok {
+			canonicalSyms[name] = canonicalEntry{addr: addr, owner: md}
+		}
+	}
+}
+
 // userDataInit handles L3.b's peer-plugin DATA canonicalisation. Two
 // passes, both under canonicalSymsLock:
 //

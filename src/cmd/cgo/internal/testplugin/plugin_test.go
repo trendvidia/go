@@ -249,6 +249,14 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "godomain", "-o=godomain-plugA"+pluginSuffix, "./godomain/plugA")
 	goCmdBuildPluginFor(nil, "godomain", "-o=godomain-plugB"+pluginSuffix, "./godomain/plugB")
 
+	// Cross-module func VALUE identity fixture (trendvidia/go#106):
+	// the host links funcident/shared so Fn's body is host-shared,
+	// while each plugin emits its own `shared.Fn·f` and a plugin-only
+	// package statically initializes a word pointing at it.
+	goCmd(nil, "build", "-o", "funcident.exe", "./funcident/host")
+	goCmdBuildPluginFor(nil, "funcident", "-o=funcident-plugA"+pluginSuffix, "./funcident/plugA")
+	goCmdBuildPluginFor(nil, "funcident", "-o=funcident-plugB"+pluginSuffix, "./funcident/plugB")
+
 	// Root-of-dotted-module-path fixture (trendvidia/go#110): the
 	// shared packages sit at the roots of `module example.com` and
 	// `module example.org`, so PathToPrefix escapes their dots whole
@@ -1263,6 +1271,24 @@ func TestRefcountUnload(t *testing.T) {
 func TestGoDomainModuleCanonicalData(t *testing.T) {
 	globalSkip(t)
 	run(t, "./godomain.exe")
+}
+
+// TestCrossModuleFuncValueIdentity pins that a func value means the
+// same object in every module (trendvidia/go#106). A func value points
+// at a one-word funcval, and each module emits its own `pkg.Fn·f`; when
+// Fn's body is the host's, a plugin's copy holds the address of the
+// plugin's IAT thunk. Calls worked through that thunk, so the symptom
+// was silent: identity comparisons failed and runtime.FuncForPC named
+// the value ".rel", the linker's thunk table, where POSIX names the
+// function.
+//
+// The fixture covers all four shapes — host-linked var, materialized
+// value, statically initialized word in a plugin-only package, and peer
+// agreement — because a fix that repairs only the static word would
+// pass a narrower test while leaving the materialized case broken.
+func TestCrossModuleFuncValueIdentity(t *testing.T) {
+	globalSkip(t)
+	run(t, "./funcident.exe")
 }
 
 // TestRootModuleCanonicalData exercises the neighbouring arm of the

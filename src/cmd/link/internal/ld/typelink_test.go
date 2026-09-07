@@ -5,6 +5,7 @@
 package ld
 
 import (
+	"cmd/link/internal/sym"
 	"strings"
 	"testing"
 )
@@ -281,6 +282,115 @@ func TestSkipStaticCanonContainer(t *testing.T) {
 	} {
 		if got := skipStaticCanonContainer(tc.name); got != tc.skip {
 			t.Errorf("skipStaticCanonContainer(%q) = %v, want %v", tc.name, got, tc.skip)
+		}
+	}
+}
+
+// TestUserDataExportable pins both halves of userDataLink's export
+// gate: which NAMES may be registered for cross-module canonicalisation
+// (isUserPackageName, covered above) and which symbol KINDS
+// (trendvidia/go#106).
+//
+// The kind half exists because of an asymmetry nothing else notices:
+// staticdata.WriteFuncSyms emits a funcval as RODATA in an ordinary
+// build and as NOPTR — writable, so Plugin.Close can overwrite the code
+// pointer — under -dynlink. A plugin's funcvals therefore landed in the
+// writable kinds this walk always covered, while a plugin HOST's landed
+// in SRODATA and were skipped. The host published no funcvals at all,
+// so neither consumer of canonicalSyms (canonicalizeSlots for the
+// funcptr slots, userDataInit for data words) had anything to
+// canonicalise a plugin's copy against: a func value materialised in a
+// plugin for a host-shared function kept the plugin's own funcval,
+// whose word is the plugin's IAT thunk.
+//
+// SRODATA is admitted for funcvals ONLY. The rest of that section is
+// type descriptors, strings and the slot carriers — per-module by
+// design, and mostly rejected by name already; the kind filter is what
+// stops a future rename from letting one through.
+func TestUserDataExportable(t *testing.T) {
+	const funcval = "testplugin/funcident/shared.Fn·f"
+
+	// A funcval is exportable in BOTH kinds it can be emitted as: the
+	// plugin's writable copy and the host's read-only one. Registering
+	// only one of them is the bug.
+	for _, st := range []sym.SymKind{sym.SRODATA, sym.SNOPTRDATA} {
+		if !userDataExportable(funcval, st) {
+			t.Errorf("userDataExportable(%q, %v) = false, want true: a %v funcval is left out of the "+
+				"registry, so nothing canonicalises a peer module's copy against it", funcval, st, st)
+		}
+	}
+
+	// Ordinary package-level data, unchanged by #106.
+	for _, st := range []sym.SymKind{sym.SDATA, sym.SBSS, sym.SNOPTRDATA, sym.SNOPTRBSS} {
+		if !userDataExportable("testplugin/common.X", st) {
+			t.Errorf("userDataExportable(testplugin/common.X, %v) = false, want true", st)
+		}
+	}
+
+	// SRODATA is admitted for funcvals only: everything else in that
+	// section is per-module.
+	for _, name := range []string{
+		"testplugin/common.X",
+		"type:testplugin/common.T",
+		"go:string.hello",
+		"go.funcptr.testplugin/common.F·f",
+		"runtime.funcptrlinks",
+	} {
+		if userDataExportable(name, sym.SRODATA) {
+			t.Errorf("userDataExportable(%q, SRODATA) = true, want false: only funcvals are read-only "+
+				"symbols eligible for cross-module canonicalisation", name)
+		}
+	}
+
+	// Kinds that are never eligible, funcval name or not.
+	for _, st := range []sym.SymKind{sym.STEXT, sym.SDYNIMPORT, sym.SHOSTOBJ, sym.SWINDOWS} {
+		if userDataExportable(funcval, st) {
+			t.Errorf("userDataExportable(%q, %v) = true, want false", funcval, st)
+		}
+	}
+
+	// The name gate still applies to funcvals: a module-local or
+	// stdlib-named funcval must not be registered just because its
+	// kind now qualifies.
+	for _, name := range []string{
+		"runtime.gcenable·f",
+		"internal/poll.CloseFunc·f",
+		"os.Exit·f", // stdlib top-level: no slash (trendvidia/go#115)
+		"testplugin/common..stmp_1·f",
+	} {
+		for _, st := range []sym.SymKind{sym.SRODATA, sym.SNOPTRDATA} {
+			if userDataExportable(name, st) {
+				t.Errorf("userDataExportable(%q, %v) = true, want false: the name gate applies to funcvals too", name, st)
+			}
+		}
+	}
+}
+
+// TestIsFuncValName pins the funcval spelling this package depends on.
+// It is ir.FuncSymName's output — the function's symbol name plus a
+// MIDDLE DOT (U+00B7) and 'f' — not an ASCII dot, and not a suffix any
+// user-declared identifier can produce, since U+00B7 is not legal in a
+// Go identifier.
+func TestIsFuncValName(t *testing.T) {
+	for _, name := range []string{
+		"testplugin/common.F·f",
+		"i106/shared.Fn·f",
+		"testplugin/common.(*T).M·f",
+		"testplugin/common.F.func1·f",
+	} {
+		if !isFuncValName(name) {
+			t.Errorf("isFuncValName(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{
+		"testplugin/common.F",
+		"testplugin/common.Ff",
+		"testplugin/common.F.f", // ASCII dot, not the middle dot
+		"go.funcptr.testplugin/common.F·f.slot",
+		"",
+	} {
+		if isFuncValName(name) {
+			t.Errorf("isFuncValName(%q) = true, want false", name)
 		}
 	}
 }

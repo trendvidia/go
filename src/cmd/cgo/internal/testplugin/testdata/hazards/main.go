@@ -158,45 +158,28 @@ func aliasProbe() {
 	}
 
 	// Counter sits at the same image-relative offset in both
-	// instances, so the two Lookup results are equal exactly when
-	// the loader mapped the reopened image at the closed one's base.
-	// Nothing reserves the old range once it is unmapped, and on
-	// Windows a different mapping decision was measured at about 1 in
-	// 6 runs on arm64 (trendvidia/go#47): the stale pointer then
-	// addresses unmapped memory or an unrelated mapping. Do NOT
-	// restore an unconditional dereference here — the only claim the
-	// loader supports is "same base ⇒ aliased".
-	if freshCtr != staleCtr {
-		// Two causes reach here: the loader picked a different base
-		// (the expected one), or Close failed to unload and the
-		// reopen mapped a second instance alongside a still-resident
-		// first. This probe cannot tell them apart without touching
-		// stale memory, and it does not have to: TestCloseUnloadsMemory
-		// pins the unload independently (strictly on linux/windows,
-		// leniently on darwin, where dyld may retain by policy), and
-		// the freshness check above already rules out "the reopen was
-		// not a reopen at all".
-		fmt.Printf("hazards alias skipped: reopened at a different base (stale Counter %p, fresh Counter %p)\n", staleCtr, freshCtr)
-		return
+	// instances, so the two Lookup results are equal exactly when the
+	// loader mapped the reopened image at the closed one's base.
+	//
+	// That USED to be the common outcome, and this cell existed to
+	// document it: the loader reused a freed base despite ASLR, so a
+	// stale pointer silently addressed the new instance. Unload now
+	// reserves the range the image occupied (trendvidia/go#122 on
+	// Windows, #123 on POSIX), so the reopen cannot land there and the
+	// aliasing is gone by construction.
+	//
+	// The assertion is therefore inverted from what it was. Equal
+	// addresses no longer mean "the loader happened to reuse the
+	// base"; they mean the reservation did not happen, and the silent
+	// corruption it prevents is back. The upgrade fixture covers the
+	// consequence — a stale write landing in the NEXT plugin — while
+	// this one pins the mechanism at its source.
+	if freshCtr == staleCtr {
+		fail("reopened at the SAME base (Counter %p): the freed range was not reserved, so a "+
+			"pointer held across Close silently addresses the new instance", freshCtr)
 	}
-
-	// From here staleCtr and freshCtr are the SAME address, so that
-	// pointer equality is itself the data-aliasing observation — a
-	// write through one is by construction visible through the other,
-	// and re-reading *staleCtr after writing *freshCtr would assert
-	// nothing. What still has to be demonstrated is the stale CODE
-	// reference: staleF is a func value taken from the closed image,
-	// and it must now run the reopened instance's text against the
-	// reopened instance's Counter.
-	*freshCtr = 100
-
-	if got := staleF(); got != 101 {
-		fail("staleF() after reopen = %d; want 101 (new instance)", got)
-	}
-	if got := *freshCtr; got != 101 {
-		fail("*freshCtr after staleF() = %d; want 101", got)
-	}
-	fmt.Printf("hazards alias ok: reopened at the same base (Counter %p)\n", freshCtr)
+	fmt.Printf("hazards alias ok: reopened at a different base (stale Counter %p, fresh Counter %p)\n", staleCtr, freshCtr)
+	_ = staleF
 }
 
 func fail(format string, args ...interface{}) {

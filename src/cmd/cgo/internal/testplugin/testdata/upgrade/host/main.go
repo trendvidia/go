@@ -14,10 +14,11 @@
 // is Threshold silently sets Budget instead — a wrong value applied to
 // live state, with no error anywhere.
 //
-// Windows reserves the freed range on unload, so the stale write now
-// faults. POSIX does not yet (see the pinned verdict below): reserving
-// there needs MAP_FIXED, which would clobber a still-mapped image
-// rather than fail, so it needs per-OS handling.
+// Both halves now reserve the freed range on unload — Windows with
+// VirtualAlloc(MEM_RESERVE) (trendvidia/go#122), POSIX with a hint-only
+// mmap that never uses MAP_FIXED (#123) — so the stale write faults and
+// the process dies. Reaching the "corrupted Budget" branch below means
+// a reservation stopped happening.
 package main
 
 import (
@@ -77,7 +78,10 @@ func main() {
 	case th == 999:
 		fail("stale pointer wrote v2's Threshold (%d): the freed image's address was reused", th)
 	case bu == 999:
-		// The measured POSIX behaviour, pinned rather than fixed.
+		// Reached only if the freed range was not reserved: the
+		// loader reused it and the host silently retuned the wrong
+		// field. The test drives this fixture with runExpectFault,
+		// so exiting cleanly here fails it.
 		fmt.Println("upgrade: stale write corrupted Budget")
 	default:
 		fail("stale write landed somewhere else in v2 (Threshold=%d Budget=%d)", th, bu)

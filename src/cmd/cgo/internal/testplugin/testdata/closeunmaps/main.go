@@ -62,8 +62,12 @@ func main() {
 
 	// Post-Close mapping check. The strictness is OS-policy-bound:
 	//
-	//   - Linux: dlclose with refcount==0 reliably triggers munmap,
-	//     so the page MUST report ENOMEM. We assert that.
+	//   - Linux: dlclose with refcount==0 reliably triggers munmap, so
+	//     the page must no longer hold a readable image. Since #123
+	//     reserves the freed range, "gone" covers both an absent
+	//     mapping and the PROT_NONE reservation over it; isUnmapped
+	//     distinguishes those from a still-loaded image by
+	//     readability. We assert that.
 	//
 	//   - Windows: FreeLibrary releases the mapping. The region then
 	//     reports MEM_FREE, or — since trendvidia/go#122 reserves the

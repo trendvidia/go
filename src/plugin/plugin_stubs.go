@@ -21,6 +21,6 @@ func open(name string) (*Plugin, error) {
 // platforms that do not support plugins, so this is unconditionally
 // a no-op. closePlugin still calls it so the platform-independent
 // path stays uniform.
-func unloadPlugin(p *Plugin) error {
+func unloadPlugin(p *Plugin, _, _ uintptr) error {
 	return nil
 }

@@ -744,23 +744,47 @@ func neutraliseStaticDescriptors(md *moduledata, stubPC uintptr) {
 	}
 }
 
+// The base and size returned describe the address range the module
+// occupied — its own text..end bounds, which is not the whole mapping
+// (the ELF/Mach-O or PE header sits below text) but is the part a host
+// can hold a pointer into. package plugin reserves that range once the
+// image is unmapped, so the loader cannot place the NEXT plugin over it
+// and a stale pointer faults instead of silently addressing the new
+// image (trendvidia/go#122, #123). They are (0, 0) on any path that
+// does not unlink a module, and reading them is only meaningful when
+// errstr is "".
+//
+// Returned from here rather than from a separate hook so the bounds
+// are read under the same lock acquisition that unlinks the module —
+// there is no window in which the two could disagree — and so the set
+// of runtime symbols pushed into package plugin's namespace does not
+// grow (pinned by TestRuntimePushesIntoPluginNamespace, and open on
+// trendvidia/go#86).
+//
 //go:linkname plugin_close plugin.pluginClose
-func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string) {
+func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string, base, size uintptr) {
 	if pluginpath == "" {
 		// Belt and braces with findPluginModule: "" names the host
 		// executable's moduledata, which must never be closed
 		// (trendvidia/go#35).
-		return "empty pluginpath names the host program, not a plugin"
+		return "empty pluginpath names the host program, not a plugin", 0, 0
 	}
 	lock(&canonicalSymsLock)
 	defer unlock(&canonicalSymsLock)
 
 	md := findPluginModule(pluginpath)
 	if md == nil {
-		return "plugin not found: " + pluginpath
+		return "plugin not found: " + pluginpath, 0, 0
 	}
 	if md.refcount > 0 {
-		return pluginDependentsMsg(md)
+		return pluginDependentsMsg(md), 0, 0
+	}
+
+	// Capture the module's extent before the teardown below unlinks
+	// it; package plugin reserves this range after the image is
+	// unmapped (trendvidia/go#122, #123).
+	if md.end > md.text {
+		base, size = md.text, md.end-md.text
 	}
 
 	// Convert every reachable held descriptor pointing into this
@@ -851,7 +875,7 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string)
 	// Rebuild activeModules so the unlinked module disappears from
 	// future iterations.
 	modulesinit()
-	return ""
+	return "", base, size
 }
 
 // detachModule unlinks md from the firstmoduledata chain. Shared by

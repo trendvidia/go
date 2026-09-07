@@ -1248,36 +1248,31 @@ func runExpectFault(t *testing.T, bin string, args ...string) {
 // Threshold silently set Budget: a wrong value applied to live state,
 // with no error anywhere.
 //
-// Windows now reserves the freed range on unload, so the stale write
-// faults instead. POSIX does not yet — reserving there needs MAP_FIXED,
-// which clobbers a still-mapped image rather than failing, so it needs
-// per-OS handling — and the corrupting outcome is asserted there rather
-// than hidden, so this test starts failing the day POSIX is fixed and
-// says what to do about it.
+// Every platform reserves the freed range on unload now, so the stale
+// write faults: Windows via VirtualAlloc (trendvidia/go#122), POSIX via
+// a hint-only mmap (#123). The fixture's own "corrupted Budget" branch
+// is what this asserts against — reaching it means a reservation
+// silently stopped happening and the upgrade path is quietly wrong
+// again, which is the failure this whole fixture exists to catch.
 func TestUpgradeStalePointer(t *testing.T) {
 	globalSkip(t)
-	if runtime.GOOS == "windows" {
-		runExpectFault(t, "./upgrade.exe")
-		return
-	}
-	out := run(t, "./upgrade.exe")
-	if !strings.Contains(out, "upgrade: stale write corrupted Budget") {
-		t.Fatalf("upgrade: want the pinned POSIX corruption verdict, got:\n%s", out)
-	}
-	t.Logf("POSIX still corrupts on upgrade (trendvidia/go#123): %s", strings.TrimSpace(out))
+	runExpectFault(t, "./upgrade.exe")
 }
 
 func TestCloseHazardEnvelope(t *testing.T) {
 	globalSkip(t)
 	runExpectFault(t, "./hazards.exe", "closure")
 	runExpectFault(t, "./hazards.exe", "dataptr")
+	// The alias cell no longer tolerates a "skipped" outcome. It used
+	// to, because whether the loader reused a freed base was its
+	// decision and it varied (measured at about 1 in 6 on windows/arm64,
+	// trendvidia/go#47). Unload now reserves the range (#122, #123), so
+	// reusing the base is not a loader coin-flip any more — it is the
+	// reservation having failed to happen, which is exactly what this
+	// must catch.
 	out := run(t, "./hazards.exe", "alias")
-	switch {
-	case strings.Contains(out, "hazards alias ok:"):
-	case strings.Contains(out, "hazards alias skipped:"):
-		t.Logf("alias cell not asserted this run: %s", strings.TrimSpace(out))
-	default:
-		t.Fatalf("hazards alias: neither \"ok\" nor \"skipped\" reported; output:\n%s", out)
+	if !strings.Contains(out, "hazards alias ok:") {
+		t.Fatalf("hazards alias: want the reopened image at a different base; output:\n%s", out)
 	}
 }
 

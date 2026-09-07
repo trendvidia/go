@@ -9,6 +9,8 @@ package plugin
 /*
 #cgo linux LDFLAGS: -ldl
 #include <dlfcn.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -29,6 +31,49 @@ static void* pluginLookup(uintptr_t h, const char* name, char** err) {
 		*err = (char*)dlerror();
 	}
 	return r;
+}
+
+// pluginReserveRange takes the address range a just-unloaded plugin
+// occupied, so the dynamic linker cannot place the NEXT plugin over it
+// and a stale host pointer faults instead of silently addressing the
+// new image (trendvidia/go#123).
+//
+// Deliberately WITHOUT MAP_FIXED. MAP_FIXED would succeed by unmapping
+// whatever is already there, and "already there" is exactly the case
+// this must not touch: dlclose decrements a refcount, so another
+// reference (the host's own dlopen, a dependency) can keep the image
+// mapped. Windows gets that safety for free — VirtualAlloc simply
+// fails on an occupied range — and here it has to be built.
+//
+// Without MAP_FIXED the address is a hint: the kernel honours it when
+// the range is free and places the mapping elsewhere when it is not.
+// Landing elsewhere means the range was not free, so the mapping is
+// released and nothing is reserved, which is the correct outcome for
+// the still-mapped case.
+//
+// PROT_NONE: no memory is committed and any access faults, which is
+// what a stale pointer should do.
+static void pluginReserveRange(uintptr_t base, uintptr_t size) {
+	if (base == 0 || size == 0) {
+		return;
+	}
+	// mmap only honours a PAGE-ALIGNED hint. The module bounds are
+	// not aligned (text starts partway into a page), so round the
+	// range outward to whole pages first.
+	uintptr_t ps = (uintptr_t)sysconf(_SC_PAGESIZE);
+	if (ps == 0) {
+		return;
+	}
+	uintptr_t end = (base + size + ps - 1) & ~(ps - 1);
+	uintptr_t start = base & ~(ps - 1);
+	void* got = mmap((void*)start, (size_t)(end - start), PROT_NONE,
+		MAP_PRIVATE|MAP_ANON, -1, 0);
+	if (got == MAP_FAILED) {
+		return;
+	}
+	if (got != (void*)start) {
+		munmap(got, (size_t)(end - start));
+	}
 }
 
 static int pluginCloseHandle(uintptr_t h, char** err) {
@@ -266,7 +311,7 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 // short-circuit on the cached closed *Plugin.
 //
 // Caller (closePlugin) holds pluginsMu.
-func unloadPlugin(p *Plugin) error {
+func unloadPlugin(p *Plugin, base, size uintptr) error {
 	if p.handle == 0 {
 		return nil
 	}
@@ -274,6 +319,10 @@ func unloadPlugin(p *Plugin) error {
 	if C.pluginCloseHandle(C.uintptr_t(p.handle), &cErr) != 0 {
 		return errors.New(C.GoString(cErr))
 	}
+	// Reserve what the image occupied so the loader cannot reuse it
+	// for the next plugin (trendvidia/go#123). base/size are the
+	// module's own bounds, captured before the runtime unlinked it.
+	C.pluginReserveRange(C.uintptr_t(base), C.uintptr_t(size))
 	for path, q := range plugins {
 		if q == p {
 			delete(plugins, path)

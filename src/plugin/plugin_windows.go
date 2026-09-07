@@ -506,7 +506,10 @@ func reserveUnmapped(base, size uintptr) {
 	procVirtualAlloc.Call(base, size, memReserve, pageNoAccess)
 }
 
-func unloadPlugin(p *Plugin) error {
+// unloadPlugin ignores the runtime-supplied range: an HMODULE gives
+// the exact image extent, headers included, where the module bounds
+// stop at text..end.
+func unloadPlugin(p *Plugin, _, _ uintptr) error {
 	if p.handle == 0 {
 		return nil
 	}

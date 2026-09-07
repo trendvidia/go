@@ -365,8 +365,13 @@ func pluginHasDependents(pluginpath string) bool
 //go:linkname pluginDependents
 func pluginDependents(pluginpath string) []string
 
+// pluginClose also reports the address range the module occupied, so
+// unloadPlugin can reserve it once the image is unmapped and the loader
+// cannot hand it to the next plugin (trendvidia/go#122, #123). Zero on
+// any path that returns an error.
+//
 //go:linkname pluginClose
-func pluginClose(pluginpath string, funcDescriptors []*uintptr) (errstr string)
+func pluginClose(pluginpath string, funcDescriptors []*uintptr) (errstr string, base, size uintptr)
 
 // syncBeforeUnmap is a runtime stop-the-world barrier taken between the
 // moduledata unlink in pluginClose and unmapping the plugin image in
@@ -478,7 +483,11 @@ func closePlugin(p *Plugin) error {
 	// usable for diagnostics, and so pluginErr below — which also
 	// formats with p.pluginpath — works after a unloadPlugin failure.
 	p.pluginpath = cloneString(p.pluginpath)
-	if errstr := pluginClose(p.pluginpath, p.funcDescriptors); errstr != "" {
+	// pluginClose reports the range the module occupied as it tears
+	// it down; unloadPlugin reserves it after the unmap so the loader
+	// cannot reuse it (trendvidia/go#122, #123).
+	errstr, imgBase, imgSize := pluginClose(p.pluginpath, p.funcDescriptors)
+	if errstr != "" {
 		return pluginErr("Close", p.pluginpath, errstr)
 	}
 	// Stop-the-world barrier between the moduledata unlink above and the
@@ -488,7 +497,7 @@ func closePlugin(p *Plugin) error {
 	// a worker holding the pre-unlink module slice faults on the unmapped
 	// memory (a windows/amd64 Plugin.Close access violation in markroot).
 	syncBeforeUnmap()
-	if err := unloadPlugin(p); err != nil {
+	if err := unloadPlugin(p, imgBase, imgSize); err != nil {
 		// Runtime state is already torn down. Surface the dlclose
 		// error but mark the plugin closed regardless: re-trying
 		// Close would no-op (p.err is set below) and the OS

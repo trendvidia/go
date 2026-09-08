@@ -51,6 +51,25 @@ func open(name string) (*Plugin, error) {
 	// gave, so a short name that keeps a deep path inside MAX_PATH
 	// keeps loading. Spellings longPathName cannot expand (a file that
 	// does not exist yet) key by themselves, as before.
+	//
+	// LIMITATION, deliberate (trendvidia/go#100): the key is NOT
+	// case-folded. GetLongPathNameW canonicalises the case of every
+	// component it resolves, but not the drive letter, so
+	// Open(`c:\dir\p.dll`) after Open(`C:\dir\p.dll`) still misses the
+	// cache — the second Open re-LoadLibrary's the already-mapped
+	// module and caches the chain-did-not-grow diagnosis under its own
+	// spelling. Folding case here would close that, and is not done
+	// because Windows paths are only case-insensitive by convention: a
+	// directory carrying the NTFS per-directory case-sensitivity flag
+	// (fsutil file setCaseSensitiveInfo) really does hold p.dll and
+	// P.DLL as two files, and folding would then alias two distinct
+	// plugins onto one cache entry. A false cache MISS is a loud,
+	// diagnosable error; a false cache HIT hands a caller the wrong
+	// module. The trade is decided in favour of the miss.
+	//
+	// Callers that may spell a path more than one way should
+	// canonicalise it once before Open; the doc comment on Open says
+	// so.
 	pluginKey := longPathName(pluginPath)
 
 	pluginsMu.Lock()

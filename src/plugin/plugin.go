@@ -207,6 +207,18 @@ type Plugin struct {
 // Open opens a Go plugin.
 // If a path has already been opened, then the existing *[Plugin] is returned.
 // It is safe for concurrent use by multiple goroutines.
+//
+// "Already been opened" is decided by the path as given, after the
+// platform's own canonicalisation. On Windows that expands 8.3
+// short-name components and the case of every component it resolves,
+// but not the drive letter, so opening a plugin as `c:\dir\p.dll`
+// after `C:\dir\p.dll` is not recognised as the same path and fails
+// rather than returning the open plugin. Case is deliberately not
+// folded, because a directory with the NTFS per-directory
+// case-sensitivity flag really can hold two files whose names differ
+// only in case (trendvidia/go#100). A program that may spell a path
+// more than one way should canonicalise it once and open it by that
+// spelling.
 func Open(path string) (*Plugin, error) {
 	return open(path)
 }

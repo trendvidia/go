@@ -28,14 +28,12 @@ jobs:
       matrix:
         include:
           - { runner: mini, goos: darwin, goarch: arm64 }
-          # linux/amd64 moved off `trader` while its provider throttles it (#87).
-          # NOTE: `maclin` cannot run all.bash (#88) and dist-test's linux/amd64
-          # row is removed, so nothing runs the dist suite on amd64 anywhere:
-          # this artifact is built — and its baked-CGO assert below run — on a
-          # host no full dist test has ever passed on. The amd64 evidence behind
-          # a release is plugin-matrix's amd64 leg plus the arch-generic
-          # linux/arm64 dist-test leg, until #87 or #88 restores the row.
-          - { runner: maclin, goos: linux, goarch: amd64 }
+          # linux/amd64 is back on `trader` along with dist-test's row
+          # (trendvidia/go#87), which also retires the gap this comment used to
+          # record: the artifact was being built on maclin, a host no full dist
+          # test had ever passed on. It is now built on the same host that runs
+          # all.bash for this arch.
+          - { runner: trader, goos: linux, goarch: amd64 }
           - { runner: linux_parallels, goos: linux, goarch: arm64 }
           - { runner: windows_omen, goos: windows, goarch: amd64 }
           - { runner: windows_parallels, goos: windows, goarch: arm64 }

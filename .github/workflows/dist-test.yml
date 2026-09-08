@@ -46,22 +46,26 @@ jobs:
       matrix:
         include:
           - { runner: mini, goos: darwin, goarch: arm64 }
-          # TEMPORARY (trendvidia/go#87): linux/amd64 all.bash has no host.
-          # `trader` is throttled by its provider: a 9.3-minute run completed
-          # 2026-08-27 14:32 and nothing has completed since; the 18:01 run was
-          # killed at the 120-minute timeout. `maclin`, the replacement, cannot
-          # run this leg either -- all.bash SIGILLs there because the 128-bit
-          # simd compare tests are unguarded while their helper needs AVX2, and
-          # that CPU is pre-Haswell (trendvidia/go#88).
+          # linux/amd64 is back on `trader`. Its provider throttled that VPS
+          # in 2026-08 -- a 9.3-minute run became 78+ minutes and false-red'd
+          # runtime/pprof's magnitude assertion -- and this row was removed
+          # rather than left red, so PRs gated on checks that could pass
+          # (trendvidia/go#87). Measured 2026-09-08 at 3bf1139668: all.bash
+          # 13.4 min, ALL TESTS PASSED, back inside the 5.5-15.1 min band the
+          # row ran in before.
           #
-          # Removed rather than left red, so PRs gate on checks that can pass.
-          # THE COVERAGE IS GONE, NOT RELOCATED: linux/arm64 still runs
-          # all.bash so Linux-generic behaviour is covered, and plugin-matrix
-          # still exercises linux/amd64 -- but amd64-specific all.bash coverage
-          # is absent until this row comes back.
+          # It has to be this host. `trader` is the only amd64 machine here
+          # with AVX2 and AVX-512; maclin is a pre-Haswell AVX-only box, which
+          # is where #88's SIGILL was found. plugin-matrix keeps its
+          # linux/amd64 leg on maclin, so the two hosts cover different CPUs on
+          # purpose -- but that leg runs the plugin suites, NOT all.bash.
           #
-          # RESTORE when #87 (hardware) or #88 (the simd guard) resolves.
-          # Both issues name this line.
+          # Nothing in CI runs all.bash on an AVX-only host. Measured by hand
+          # 2026-09-08 at 3bf1139668, maclin now passes it (ALL TESTS PASSED),
+          # so #88's fix holds on the box that found it and maclin is a usable
+          # fallback for this row; a regression of #88's class would not be
+          # caught by CI, only by rerunning that.
+          - { runner: trader, goos: linux, goarch: amd64 }
           - { runner: linux_parallels, goos: linux, goarch: arm64 }
           - { runner: windows_omen, goos: windows, goarch: amd64 }
           - { runner: windows_parallels, goos: windows, goarch: arm64 }

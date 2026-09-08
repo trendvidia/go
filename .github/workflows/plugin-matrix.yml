@@ -49,6 +49,53 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # trendvidia/go#81: give every run a cold, private build cache.
+      #
+      # This fork's VERSION is release-style (go1.26.5), so cmd/go keys
+      # the build cache on the compiler's version STRING alone --
+      # upstream's assumption that a released toolchain never changes.
+      # Here the compiler and linker change on every commit while the
+      # string does not, so a persistent GOCACHE on a self-hosted runner
+      # can serve std package archives built by a PREVIOUS commit's
+      # toolchain, and a change to compiler or linker output for std --
+      # exactly the work this repo is made of -- gets judged green
+      # against objects it never produced. `-count=1` does not help: it
+      # defeats test-result caching, not the package cache.
+      #
+      # A private directory per run rather than `go clean -cache` on the
+      # shared one: these runners host several jobs each, and wiping a
+      # shared cache mid-run has been observed pruning a concurrent
+      # job's entries out from under it.
+      #
+      # Set here rather than in a job-level `env:` because the value
+      # needs RUNNER_TEMP, and the `runner` context is not available to
+      # `jobs.<id>.env` -- a workflow that tries is rejected outright,
+      # with zero jobs scheduled.
+      #
+      # The cold start is asserted, not assumed: the done-when accepts
+      # "provably starts from an empty GOCACHE", and a guarantee nothing
+      # checks is one that quietly stops holding.
+      - name: Use a cold, per-run build cache (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cache="$RUNNER_TEMP/gocache-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [ -e "$cache" ]; then
+            echo "::error::$cache already exists: this run is not starting cold (trendvidia/go#81)"
+            exit 1
+          fi
+          echo "cold: $cache does not exist yet"
+          echo "GOCACHE=$cache" >> "$GITHUB_ENV"
+
+      - name: Use a cold, per-run build cache (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          set "cache=%RUNNER_TEMP%\gocache-%GITHUB_RUN_ID%-%GITHUB_RUN_ATTEMPT%"
+          if exist "%cache%" echo ::error::%cache% already exists - this run is not starting cold, see trendvidia/go#81
+          if exist "%cache%" exit /b 1
+          echo cold: %cache% does not exist yet
+          echo GOCACHE=%cache%>>"%GITHUB_ENV%"
+
       # --- Unix (darwin, linux) ---
       - name: Build toolchain
         if: runner.os != 'Windows'
@@ -100,3 +147,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         run: bin\go test -count=1 plugin cmd/link/internal/ld cmd/cgo/internal/testplugin cmd/internal/testplugin
+
+      # Drop this run's cache whatever the outcome, so per-run
+      # directories do not accumulate on the runners' disks (#81).
+      - name: Remove this run's build cache (Unix)
+        if: always() && runner.os != 'Windows'
+        run: test -n "$GOCACHE" && rm -rf "$GOCACHE" || true
+
+      - name: Remove this run's build cache (Windows)
+        if: always() && runner.os == 'Windows'
+        shell: cmd
+        run: if exist "%GOCACHE%" rmdir /s /q "%GOCACHE%"

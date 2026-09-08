@@ -2034,6 +2034,7 @@ func (ctxt *Link) dope() {
 	if ctxt.BuildMode == BuildModePlugin && ctxt.HeadType == objabi.Hwindows {
 		addPluginPkghashesExport(ctxt)
 		addPluginAbiExport(ctxt)
+		addCgoNotifyExport(ctxt)
 	}
 	// Pick a plugin host's exports here, in both link modes, so the export
 	// table, the host.exe.a plugins link against, and the .def handed to
@@ -2099,6 +2100,63 @@ func addPluginAbiExport(ctxt *Link) {
 	export.AddUint32(ctxt.Arch, pluginabi.Version)
 	ldr.SetAttrReachable(export.Sym(), true)
 	ldr.SetAttrCgoExportDynamic(export.Sym(), true)
+}
+
+// addCgoNotifyExport publishes x_cgo_notify_runtime_init_done from an
+// externally linked plugin that contains runtime/cgo.
+//
+// Such a plugin carries its own libcgo, with its own runtime_init_done
+// flag that starts out clear. Every C->Go entry point cgo generates
+// opens with _cgo_wait_runtime_init_done (cmd/cgo/out.go), which blocks
+// until that flag is set, and the only thing that sets it is
+// x_cgo_notify_runtime_init_done — which plugin.Open calls by
+// GetProcAddress once the image is loaded. If the name is not in the
+// export table, Open cannot find it, and the plugin's first callback
+// from C into Go never returns.
+//
+// Nothing put it there on purpose. On mingw it was present because ld
+// auto-exports what it can, which is also why this went unnoticed:
+// measured on windows_omen at 376044e969, a plugin whose .def named 6
+// symbols published 2195, the notify among them. Narrow that — the .def
+// becomes authoritative under -Wl,--exclude-all-symbols — and the export
+// goes with it. The same plugin then published 6 names, loaded, ran a
+// Go->C call fine (that direction carries no handshake) and hung forever
+// on its first C->Go callback (trendvidia/go#62). Naming it here makes
+// the export a decision rather than a side effect of someone else's
+// heuristics.
+//
+// Deliberately external-only. windows/arm64 links plugins internally
+// (external linking of a cgo plugin there fails outright: "unsupported
+// obj reloc R_ARM64_GOTPCREL"), and on that path this linker writes the
+// export table itself, so no auto-export heuristic can drop anything and
+// #62 has no way to occur. Exporting it there is not merely unnecessary
+// but harmful: it makes plugin.Open call into libcgo code that an
+// internally linked plugin has never executed, and that call dies on an
+// execute violation before reaching Go (measured on windows_parallels,
+// TestIssue18676, Exception 0xc0000005 info 0x8). Why that path is not
+// callable is trendvidia/go#130 — a defect this change neither causes
+// nor repairs, and one whose fix belongs with the internal-link cgo
+// support rather than inside an export decision.
+//
+// peSkipSymName drops names beginning with '_', which is why the symbol
+// is reachable at all under its own 'x' name.
+func addCgoNotifyExport(ctxt *Link) {
+	if !iscgo || ctxt.LinkMode != LinkExternal {
+		return
+	}
+	ldr := ctxt.loader
+	s := ldr.Lookup("x_cgo_notify_runtime_init_done", 0)
+	if s == 0 {
+		// runtime/cgo is in the link (iscgo) but the C half of it is
+		// not. No configuration this fork builds does that, so say so
+		// here rather than emit a plugin whose callbacks would hang for
+		// its caller to discover.
+		Errorf("link: %s contains runtime/cgo but has no x_cgo_notify_runtime_init_done to export; its cgo callbacks could never run",
+			peOutputDisplayName())
+		return
+	}
+	ldr.SetAttrReachable(s, true)
+	ldr.SetAttrCgoExportDynamic(s, true)
 }
 
 func setpersrc(ctxt *Link, syms []loader.Sym) {

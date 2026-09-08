@@ -1194,6 +1194,25 @@ func TestGCAfterClose(t *testing.T) {
 // fails, as does a death without the fault marker — in particular a
 // recoverable "panic:" exit would mean the stub rewrite over-reached
 // onto an unprotected class.
+// runWithTimeout runs bin under a deadline and fails if it outlives it.
+//
+// For a test whose regression mode is a wedged process rather than a bad
+// answer, an ordinary run gives no signal at all — it just never returns,
+// and the package times out tens of minutes later naming no test.
+func runWithTimeout(t *testing.T, d time.Duration, bin string, args ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("%s did not finish within %v; output so far:\n%s", bin, d, out)
+	}
+	if err != nil {
+		t.Fatalf("%s: %v\n%s", bin, err, out)
+	}
+}
+
 func runExpectFault(t *testing.T, bin string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
@@ -1890,4 +1909,48 @@ func TestIssue75102(t *testing.T) {
 	goCmd(t, "build", "-o", "issue75102.exe", "./issue75102/main.go")
 	goCmdBuildPluginFor(t, "issue75102", "-gcflags=all=-N -l", "-o", "issue75102"+pluginSuffix, "./issue75102/plugin.go")
 	run(t, "./issue75102.exe")
+}
+
+// TestCgoPluginNotifyExport pins the cgo runtime-init handshake export
+// (trendvidia/go#62).
+//
+// A plugin containing runtime/cgo carries its own libcgo, whose
+// runtime_init_done starts clear; every C->Go entry point cgo emits
+// blocks on it until plugin.Open calls x_cgo_notify_runtime_init_done
+// through the DLL's export table. On the external-link path that export
+// was there only because mingw ld auto-exports what it can, so narrowing
+// the export set removed it and the first callback hung forever
+// (measured: 2195 exported names became 6). cmd/link now names it.
+//
+// The plugin is built with the narrowing flag precisely because that is
+// what used to strip it.
+func TestCgoPluginNotifyExport(t *testing.T) {
+	globalSkip(t)
+	if runtime.GOOS != "windows" {
+		t.Skip("the cgo runtime-init handshake this exercises is Windows-only")
+	}
+	if !testenv.HasCGO() {
+		t.Skip("needs cgo: the plugin must contain runtime/cgo")
+	}
+	goCmd(t, "build", "-o", "cgonotify.exe", "./cgonotify/host")
+
+	// Ask this platform for an external link rather than assume which
+	// ones can do it. Only that path can lose the export: an internally
+	// linked plugin gets its export table from cmd/link itself, where no
+	// auto-export heuristic gets a vote and #62 cannot arise.
+	// windows/arm64 links plugins internally and cannot link a cgo
+	// plugin externally at all ("unsupported obj reloc
+	// R_ARM64_GOTPCREL"), so it skips here — and if that ever changes,
+	// this starts covering it instead of silently not.
+	ldflags := "-ldflags=-linkmode=external -extldflags=-Wl,--exclude-all-symbols" +
+		" -pluginimplib=" + filepath.Join(filepath.Dir(hostImplib), "cgonotify.exe.a")
+	build := exec.Command(filepath.Join(goroot, "bin", "go"), "build", "-gcflags", gcflags,
+		"-buildmode=plugin", ldflags, "-o=cgonotify-plugin.dll", "./cgonotify/plug")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Skipf("cannot link a cgo plugin externally here, so there is no auto-export to lose: %v\n%s", err, out)
+	}
+
+	// A regression HANGS rather than failing: the callback blocks in
+	// _cgo_wait_runtime_init_done and nothing is logged.
+	runWithTimeout(t, 2*time.Minute, "./cgonotify.exe")
 }

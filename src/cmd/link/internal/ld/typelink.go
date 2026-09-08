@@ -61,11 +61,7 @@ func skipStaticCanonContainer(name string) bool {
 			return true
 		}
 	}
-	return strings.HasPrefix(name, "type:") ||
-		strings.HasPrefix(name, "go:") ||
-		strings.HasPrefix(name, "runtime.") ||
-		strings.HasPrefix(name, "internal/") ||
-		strings.HasPrefix(name, "__imp_")
+	return isToolchainOwnedName(name) || strings.HasPrefix(name, "__imp_")
 }
 
 // staticCanonWords scans reachable static data for pointer-sized R_ADDR
@@ -573,6 +569,59 @@ func isModuleSlotName(name string) bool {
 	return false
 }
 
+// isInternalPkgName reports whether name's package is an internal
+// package — one whose import path has "internal" as a path element, so
+// only the tree containing it may import it.
+//
+// This is the Go rule, not a prefix: crypto/internal/fips140/bigmod is
+// as internal as internal/abi is. Both predicates below used to test
+// strings.HasPrefix(name, "internal/"), which catches only the
+// top-level tree and admits every nested one, so the whole
+// crypto/internal/... subtree was treated as user code and entered
+// cross-module canonicalisation (trendvidia/go#111).
+//
+// The three arms are the three positions the element can occupy: first
+// ("internal/abi.Kind"), middle ("crypto/internal/fips140/bigmod.X")
+// and last, where the package itself is named internal and the symbol's
+// dot follows it directly ("golang.org/x/tools/internal.Version").
+// Requiring the slash is what keeps "mypkg/notinternal/x.Y" and
+// "github.com/internal-tools/x.Y" out — neither has such an element.
+//
+// A version-suffixed path is why this cannot be done by splitting on
+// dots: crypto/internal/fips140/v1.26.0/bigmod.addMulVVW1024 carries
+// dots in a path element, not only in the symbol.
+func isInternalPkgName(name string) bool {
+	return strings.HasPrefix(name, "internal/") ||
+		strings.Contains(name, "/internal/") ||
+		strings.Contains(name, "/internal.")
+}
+
+// isToolchainOwnedName reports whether name belongs to the runtime, to
+// one of the toolchain's own symbol namespaces, or to an internal
+// package — the names cross-module data canonicalisation must leave
+// module-local.
+//
+// One definition, because this scoping rule existed in copies and had
+// been wrong in a different direction in each (trendvidia/go#111, and
+// #108/#110/#115 before it). isUserPackageName gates what gets
+// REGISTERED for canonicalisation and skipStaticCanonContainer gates
+// which static containers get SCANNED for words to rewrite: the two ask
+// the same question about a name and now get the same answer, while
+// keeping the arms that are genuinely their own (module slots for the
+// first, `__imp_` and the slot prefixes for the second).
+//
+// Distinct from peShareHostData in pe_implib.go, which deliberately does
+// NOT exclude internal packages: PE symbol sharing gives host and plugin
+// one instance of a symbol at link time (trendvidia/go#74), while this
+// governs a runtime rewrite over data the runtime may itself be reading
+// while the rewrite runs.
+func isToolchainOwnedName(name string) bool {
+	return strings.HasPrefix(name, "runtime.") ||
+		strings.HasPrefix(name, "go:") ||
+		strings.HasPrefix(name, "type:") ||
+		isInternalPkgName(name)
+}
+
 // isUserPackageName reports whether name is a Go package symbol that
 // may be canonicalised across modules — declared in a package's own
 // source rather than synthesized by the compiler, and not owned by a
@@ -622,11 +671,7 @@ func isModuleSlotName(name string) bool {
 // must agree; TestGateAsymmetryOutsideSlotFamilies pins what is left of
 // the divergence.
 func isUserPackageName(name string) bool {
-	if strings.HasPrefix(name, "runtime.") ||
-		strings.HasPrefix(name, "internal/") ||
-		strings.HasPrefix(name, "go:") ||
-		strings.HasPrefix(name, "type:") ||
-		isModuleSlotName(name) {
+	if isToolchainOwnedName(name) || isModuleSlotName(name) {
 		return false
 	}
 	if strings.Contains(name, "..") {

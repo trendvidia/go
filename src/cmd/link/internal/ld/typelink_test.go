@@ -65,6 +65,13 @@ func TestIsUserPackageName(t *testing.T) {
 		"net.DefaultResolver",
 		"main.someGlobal",
 		"os.Exit·f", // a stdlib funcval, for the same reason
+		// Near-misses for the nested-internal arm (trendvidia/go#111):
+		// "internal" has to be a whole path element, so a package
+		// merely SPELLED with it is ordinary user code.
+		"mypkg/notinternal/x.Y",
+		"github.com/internal-tools/cli.Verbose",
+		"example.com/m/internalish.Global",
+		"example.com/m/pkg.InternalCounter",
 	} {
 		if !isUserPackageName(name) {
 			t.Errorf("isUserPackageName(%q) = false, want true: excluded from cross-module data canonicalisation", name)
@@ -73,6 +80,17 @@ func TestIsUserPackageName(t *testing.T) {
 	for _, name := range []string{
 		"runtime.writeBarrier",
 		"internal/bytealg.MaxLen",
+		// Nested internal packages (trendvidia/go#111). "internal" is
+		// a path ELEMENT in Go's rule, not a prefix, and the gate used
+		// to test only the top-level tree — so the whole
+		// crypto/internal/... subtree was admitted as user code.
+		"crypto/internal/fips140/bigmod.addMulVVW1024",
+		"crypto/internal/fips140/v1.26.0/bigmod.addMulVVW1024",
+		"crypto/internal/boring.ErrOpen",
+		"golang.org/x/tools/internal/event.Err",
+		// The element can also be last, with the symbol's dot right
+		// after it: the package itself is named internal.
+		"golang.org/x/tools/internal.Version",
 		"go:itab.*os.File,io.Reader",
 		"type:go.uber.org/zap.Logger",
 		"go.typeptr.type:*go.uber.org/zap.Logger",
@@ -286,6 +304,13 @@ func TestSkipStaticCanonContainer(t *testing.T) {
 		{"runtime.typeptrs", true},
 		{"runtime.udaddrwords", true},
 		{"internal/abi.Kind", true},
+		// Nested internal packages, the second copy of the rule
+		// (trendvidia/go#111). Both predicates now share one
+		// definition, so these move in lockstep with the
+		// isUserPackageName cases above.
+		{"crypto/internal/fips140/bigmod.table", true},
+		{"crypto/internal/fips140/v1.26.0/bigmod.table", true},
+		{"golang.org/x/tools/internal.Version", true},
 		{"__imp_example.com/m/pkg.Global", true},
 
 		// Ordinary containers the scan must look inside.
@@ -293,6 +318,8 @@ func TestSkipStaticCanonContainer(t *testing.T) {
 		{"example.com/m/pkg.Table", false},
 		{"main..dict.boxAny[main.T]", false},
 		{"net/http.statusText", false},
+		{"mypkg/notinternal/x.Table", false},
+		{"github.com/internal-tools/cli.Flags", false},
 
 		// Packages on go.* module domains: NOT slot symbols. A blanket
 		// "go." prefix would exclude every one of these.
@@ -308,6 +335,54 @@ func TestSkipStaticCanonContainer(t *testing.T) {
 	} {
 		if got := skipStaticCanonContainer(tc.name); got != tc.skip {
 			t.Errorf("skipStaticCanonContainer(%q) = %v, want %v", tc.name, got, tc.skip)
+		}
+	}
+}
+
+// TestInternalPkgScopingShared pins the thing trendvidia/go#111 is
+// actually about: the internal-package scoping rule has ONE definition,
+// and the two gates that consume it cannot drift apart again.
+//
+// They had drifted. Both spelled the rule strings.HasPrefix(name,
+// "internal/"), which is not Go's rule — "internal" is a path ELEMENT —
+// so every nested internal package was admitted as user code by both.
+// A copy that is wrong twice looks consistent, which is why the fix is a
+// shared definition rather than two corrections.
+func TestInternalPkgScopingShared(t *testing.T) {
+	internal := []string{
+		"internal/abi.Kind",
+		"internal/bytealg.MaxLen",
+		"crypto/internal/fips140/bigmod.table",
+		"crypto/internal/fips140/v1.26.0/bigmod.table",
+		"crypto/internal/boring.ErrOpen",
+		"golang.org/x/tools/internal/event.Err",
+		"golang.org/x/tools/internal.Version",
+	}
+	notInternal := []string{
+		"mypkg/notinternal/x.Y",
+		"github.com/internal-tools/cli.Verbose",
+		"example.com/m/internalish.Global",
+		"example.com/m/pkg.InternalCounter",
+		"example.com/m/pkg.Table",
+		"os.Args",
+	}
+	for _, name := range internal {
+		if !isInternalPkgName(name) {
+			t.Errorf("isInternalPkgName(%q) = false, want true", name)
+		}
+		// The two consumers must agree, in their own directions:
+		// nothing internal is registered for canonicalisation, and
+		// nothing internal is scanned as a container.
+		if isUserPackageName(name) {
+			t.Errorf("isUserPackageName(%q) = true, want false: an internal package must stay module-local", name)
+		}
+		if !skipStaticCanonContainer(name) {
+			t.Errorf("skipStaticCanonContainer(%q) = false, want true: the gates disagree, which is the drift #111 removed", name)
+		}
+	}
+	for _, name := range notInternal {
+		if isInternalPkgName(name) {
+			t.Errorf("isInternalPkgName(%q) = true, want false: \"internal\" must be a whole path element", name)
 		}
 	}
 }

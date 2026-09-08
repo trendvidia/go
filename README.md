@@ -84,6 +84,45 @@ the end of compilation; builds are now bit-for-bit reproducible and the
 upstream `cmd/go` `TestScript/repro_build` test passes. See
 [trendvidia/go#8](https://github.com/trendvidia/go/issues/8).
 
+### Known limitations of the plugin support
+
+Measured, current as of go1.26.5-plus. Each is tracked; none prevents
+loading a plugin on any supported platform.
+
+**A plugin cannot link a third-party C or C++ library on windows/arm64.**
+Measured 2026-09-08 on both arches with a static archive built by
+clang/gcc: windows/amd64 links and runs it (C and C++ alike, STL
+included), windows/arm64 fails. Plugins there are linked internally,
+which resolves no `-l` archive, and external linking of a cgo plugin on
+that arch does not work yet
+([#131](https://github.com/trendvidia/go/issues/131)). Self-contained cgo
+and calls into system DLLs do work on arm64. Keeping native dependencies
+in the host, which has no such restriction, avoids the question on both
+arches.
+
+**Replacing a plugin at run time requires closing the old one first.**
+The first module carrying a `(package, link-time hash)` owns it, and
+later modules carrying that package depend on the owner, so a newly
+loaded generation pins the one it replaces and only the newest is ever
+closable. An upgrade must quiesce, `Close`, then `Open` the replacement —
+which leaves a window where nothing is serving: 26 ms median on
+windows/arm64, 54 ms on windows/amd64, 141 ms on darwin/arm64, measured
+over 200 cycles. `cmd/cgo/internal/testplugin/testdata/hotswap` is both
+the pin and a worked example of the supervisor
+([#136](https://github.com/trendvidia/go/issues/136) tracks removing the
+window).
+
+**`plugin.Open` keys its cache on the path as given**, so the same DLL
+opened under two spellings of a Windows drive letter (`C:\` vs `c:\`)
+loads twice ([#100](https://github.com/trendvidia/go/issues/100)).
+Canonicalise paths before calling `Open`.
+
+**The upgrade contract is the caller's to keep.** `Plugin.Close`
+neutralises the func values `Lookup` returned and the static `·f`
+descriptors; it cannot protect a pointer into the image, a
+plugin-defined type, or an interface whose dynamic type lives there. See
+`Plugin.Close`'s "Upgrading a plugin" section.
+
 ### Contributing
 
 Go is the work of thousands of contributors. We appreciate your help!

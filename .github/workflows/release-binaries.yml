@@ -82,6 +82,40 @@ jobs:
         run: |
           ..\bin\go.exe test -count=1 internal/buildcfg || exit /b 1
 
+      # --- Verify the toolchain names the release it is being cut as ---
+      # forkVersionMarker in src/cmd/go/internal/version/version.go is a
+      # hardcoded constant whose own comment says "bump this on every fork
+      # release". Nothing enforced it: forget the bump and the archives
+      # ship reporting the PREVIOUS release, silently and durably, since
+      # the string is baked into the toolchain a consumer then runs for
+      # months. Checked before packaging so the run fails with nothing
+      # uploaded.
+      - name: Assert the fork version marker names this tag (Unix)
+        if: runner.os != 'Windows'
+        working-directory: src
+        run: |
+          set -uo pipefail
+          got=$(../bin/go version)
+          case "$got" in
+            *"(plus ${{ inputs.tag }})"*)
+              echo "ok: $got" ;;
+            *)
+              echo "::error::built toolchain reports '$got', which does not name ${{ inputs.tag }}. Bump forkVersionMarker in src/cmd/go/internal/version/version.go, re-tag, and dispatch again."
+              exit 1 ;;
+          esac
+
+      - name: Assert the fork version marker names this tag (Windows)
+        if: runner.os == 'Windows'
+        working-directory: src
+        shell: powershell
+        run: |
+          $got = & ..\bin\go.exe version
+          if ($got -notlike "*(plus ${{ inputs.tag }})*") {
+            Write-Output "::error::built toolchain reports '$got', which does not name ${{ inputs.tag }}. Bump forkVersionMarker in src/cmd/go/internal/version/version.go, re-tag, and dispatch again."
+            exit 1
+          }
+          Write-Output "ok: $got"
+
       # --- Package the built go tree as go<version>-plus.<os>-<arch>.tar.gz ---
       # The checkout dir is named "go" (repo name), so archiving it from
       # its parent yields a top-level go/ prefix, matching the upstream

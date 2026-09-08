@@ -287,24 +287,6 @@ func open(name string) (*Plugin, error) {
 		}
 	}
 
-	// Wake up the plugin's own cgo runtime-init handshake. Plugin DLLs
-	// statically link their own copy of runtime/cgo, including the
-	// runtime_init_done flag and runtime_init_wait Event in
-	// gcc_libinit_windows.c. Host's runtime.main called notify on host's
-	// copy at startup; plugin has no runtime.main of its own, so plugin's
-	// flag stays 0 and any cgo entry-point in the plugin would block
-	// forever in _cgo_wait_runtime_init_done.
-	//
-	// Invoke plugin's notify ourselves. The function is mingw-auto-
-	// exported from any plugin DLL that contains runtime/cgo (i.e. has
-	// `import "C"` somewhere); pure-Go plugins don't export it and we
-	// silently skip via GetProcAddress's not-found error. The notify
-	// function is idempotent (gated by InterlockedExchangeAdd) and
-	// touches only this DLL's local statics — host is unaffected.
-	if proc, err := syscall.GetProcAddress(h, "x_cgo_notify_runtime_init_done"); err == nil {
-		syscall.SyscallN(uintptr(proc), 0)
-	}
-
 	pluginpath, syms, initTasks, errstr := lastmoduleinit()
 	if errstr != "" {
 		plugins[pluginKey] = &Plugin{
@@ -322,6 +304,8 @@ func open(name string) (*Plugin, error) {
 	}
 	plugins[pluginKey] = p
 	pluginsMu.Unlock()
+
+	notifyCgoRuntimeInit(h)
 
 	doInit(initTasks)
 
@@ -1015,4 +999,47 @@ func doInit(t []*initTask)
 type initTask struct {
 	// fields defined in runtime.initTask. We only handle pointers to an initTask
 	// in this package, so the contents are irrelevant.
+}
+
+// notifyCgoRuntimeInit completes the plugin's own cgo runtime-init
+// handshake.
+//
+// A plugin containing runtime/cgo statically links its own libcgo, with
+// its own runtime_init_done flag and runtime_init_wait event
+// (gcc_libinit_windows.c). The host's runtime.main called notify on the
+// HOST's copy at startup; the plugin has no runtime.main of its own, so
+// its flag stays clear and every C->Go entry point cgo generates — each
+// one opens with _cgo_wait_runtime_init_done — would block forever.
+// cmd/link exports the notify from any plugin that contains runtime/cgo
+// so this can find it; a pure-Go plugin exports none and GetProcAddress's
+// not-found is the expected answer, not an error.
+//
+// WHERE this is called from is load-bearing, and is why it is a function
+// rather than four lines inline.
+//
+// It must come after lastmoduleinit. An internally linked plugin reaches
+// the Windows APIs its C code calls — EnterCriticalSection, CreateEvent,
+// SetEvent — through this fork's own indirection slots, and those are
+// populated by the canonicalisation lastmoduleinit performs. Called any
+// earlier, the notify loads a slot that is still empty and branches to
+// it: measured on windows/arm64 as an execute violation (0xc0000005,
+// info[0] 0x8) inside x_cgo_notify_runtime_init_done's first
+// EnterCriticalSection, at `MOVD 488(R8), R8; CALL (R8)`
+// (trendvidia/go#130). The external-link path did not show this because
+// there the same calls go through the real PE import table, which the OS
+// fills at LoadLibrary time — which is the whole reason the old placement
+// survived on windows/amd64.
+//
+// It must also come before doInit. A plugin's init functions are the
+// first of its Go code to run, and an init that calls into C which calls
+// back into Go needs the handshake already complete or it blocks there.
+//
+// The notify is idempotent (InterlockedExchangeAdd gates the preinit) and
+// touches only this DLL's own statics, so the host is unaffected.
+func notifyCgoRuntimeInit(h syscall.Handle) {
+	proc, err := syscall.GetProcAddress(h, "x_cgo_notify_runtime_init_done")
+	if err != nil {
+		return // a pure-Go plugin: nothing to notify
+	}
+	syscall.SyscallN(uintptr(proc), 0)
 }

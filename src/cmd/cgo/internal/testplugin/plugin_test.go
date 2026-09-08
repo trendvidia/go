@@ -1911,19 +1911,25 @@ func TestIssue75102(t *testing.T) {
 	run(t, "./issue75102.exe")
 }
 
-// TestCgoPluginNotifyExport pins the cgo runtime-init handshake export
-// (trendvidia/go#62).
+// TestCgoPluginNotifyExport pins the cgo runtime-init handshake
+// (trendvidia/go#62, trendvidia/go#130).
 //
 // A plugin containing runtime/cgo carries its own libcgo, whose
-// runtime_init_done starts clear; every C->Go entry point cgo emits
+// runtime_init_done starts clear. Every C->Go entry point cgo emits
 // blocks on it until plugin.Open calls x_cgo_notify_runtime_init_done
-// through the DLL's export table. On the external-link path that export
-// was there only because mingw ld auto-exports what it can, so narrowing
-// the export set removed it and the first callback hung forever
-// (measured: 2195 exported names became 6). cmd/link now names it.
+// through the DLL's export table, so a plugin missing that export takes
+// its first callback and never returns.
 //
-// The plugin is built with the narrowing flag precisely because that is
-// what used to strip it.
+// Both link modes were broken, in different ways. Externally linked, the
+// export existed only because mingw ld auto-exports what it can, so
+// narrowing the export set removed it (2195 exported names became 6, #62).
+// Internally linked, it was never exported at all and the notify was
+// never called: measured on windows/arm64, suppressing the call leaves
+// runtime_init_done at 0 after Open and the callback hangs, where calling
+// it leaves the flag at 1 and the callback returns (#130).
+//
+// So the default build is the case that matters on every platform, and
+// the narrowed build is the extra one #62 was about.
 func TestCgoPluginNotifyExport(t *testing.T) {
 	globalSkip(t)
 	if runtime.GOOS != "windows" {
@@ -1933,24 +1939,47 @@ func TestCgoPluginNotifyExport(t *testing.T) {
 		t.Skip("needs cgo: the plugin must contain runtime/cgo")
 	}
 	goCmd(t, "build", "-o", "cgonotify.exe", "./cgonotify/host")
+	implib := filepath.Join(filepath.Dir(hostImplib), "cgonotify.exe.a")
 
-	// Ask this platform for an external link rather than assume which
-	// ones can do it. Only that path can lose the export: an internally
-	// linked plugin gets its export table from cmd/link itself, where no
-	// auto-export heuristic gets a vote and #62 cannot arise.
-	// windows/arm64 links plugins internally and cannot link a cgo
-	// plugin externally at all ("unsupported obj reloc
-	// R_ARM64_GOTPCREL"), so it skips here — and if that ever changes,
-	// this starts covering it instead of silently not.
-	ldflags := "-ldflags=-linkmode=external -extldflags=-Wl,--exclude-all-symbols" +
-		" -pluginimplib=" + filepath.Join(filepath.Dir(hostImplib), "cgonotify.exe.a")
-	build := exec.Command(filepath.Join(goroot, "bin", "go"), "build", "-gcflags", gcflags,
-		"-buildmode=plugin", ldflags, "-o=cgonotify-plugin.dll", "./cgonotify/plug")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Skipf("cannot link a cgo plugin externally here, so there is no auto-export to lose: %v\n%s", err, out)
-	}
+	// A regression HANGS rather than failing -- the callback blocks in
+	// _cgo_wait_runtime_init_done with nothing logged -- so every run
+	// here is under a deadline.
+	t.Run("default", func(t *testing.T) {
+		goCmdBuildPluginFor(t, "cgonotify",
+			"-o=cgonotify-plugin.dll", "./cgonotify/plug")
+		runWithTimeout(t, 2*time.Minute, "./cgonotify.exe")
+	})
 
-	// A regression HANGS rather than failing: the callback blocks in
-	// _cgo_wait_runtime_init_done and nothing is logged.
-	runWithTimeout(t, 2*time.Minute, "./cgonotify.exe")
+	// A plugin whose only cgo is `import "C"`. runtime/cgo is in the
+	// link, so the linker's iscgo is set, but nothing references the
+	// handshake and deadcode drops it -- the image has neither the wait
+	// to block on nor the notify to publish. Exporting one anyway is
+	// what broke six tests on windows/arm64: on the internal-link path
+	// cmd/link writes the export table itself, an unreachable symbol has
+	// no address yet, and the export went out as RVA 0xc00003e8, so
+	// plugin.Open called base+0x3e8 and died inside the PE headers
+	// (trendvidia/go#130).
+	t.Run("import C only", func(t *testing.T) {
+		goCmd(t, "build", "-o", "cgonotify-bare.exe", "./cgonotify/barehost")
+		goCmdBuildPluginFor(t, "cgonotify-bare",
+			"-o=cgonotify-bare.dll", "./cgonotify/bare")
+		runWithTimeout(t, 2*time.Minute, "./cgonotify-bare.exe")
+	})
+
+	// The external-link path, where the export used to be mingw's
+	// accident and -Wl,--exclude-all-symbols swept it away with
+	// everything else the .def did not name. Ask the platform for the
+	// link rather than assuming which ones can do it: windows/arm64
+	// cannot link a cgo plugin externally at all (#131), and if that
+	// changes this starts covering it instead of silently not.
+	t.Run("exports narrowed", func(t *testing.T) {
+		ldflags := "-ldflags=-linkmode=external -extldflags=-Wl,--exclude-all-symbols" +
+			" -pluginimplib=" + implib
+		build := exec.Command(filepath.Join(goroot, "bin", "go"), "build", "-gcflags", gcflags,
+			"-buildmode=plugin", ldflags, "-o=cgonotify-plugin.dll", "./cgonotify/plug")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Skipf("cannot link a cgo plugin externally here, so there is no auto-export to lose: %v\n%s", err, out)
+		}
+		runWithTimeout(t, 2*time.Minute, "./cgonotify.exe")
+	})
 }

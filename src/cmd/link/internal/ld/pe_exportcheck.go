@@ -139,11 +139,18 @@ func peImageExportDir(path string) (peImageExports, error) {
 // a proxy for it.
 //
 // Making the .def authoritative (-Wl,--exclude-all-symbols) would make the
-// cheap check correct, and was tried and rejected: it strips
+// cheap check correct. It was tried and rejected once because it stripped
 // x_cgo_notify_runtime_init_done, which plugin.Open reaches by
-// GetProcAddress and which is present only because mingw auto-exports it.
-// Losing it makes every cgo plugin hang forever in
-// _cgo_wait_runtime_init_done with no diagnostic (#62).
+// GetProcAddress and which was present only because mingw auto-exported
+// it; losing it hung every cgo plugin in _cgo_wait_runtime_init_done with
+// no diagnostic (#62).
+//
+// That objection no longer holds: addCgoNotifyExport names the symbol in
+// the .def itself, and TestCgoPluginNotifyExport builds its plugin with
+// -Wl,--exclude-all-symbols precisely to hold that. Whether the cheap
+// check is now worth having in place of this one is a live question and
+// nobody has measured it, so this stays as it is rather than being
+// changed on the strength of a comment.
 func peVerifyImageExportCount(ctxt *Link) {
 	if ctxt.HeadType != objabi.Hwindows || ctxt.BuildMode != BuildModePlugin {
 		return

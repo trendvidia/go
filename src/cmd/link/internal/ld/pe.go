@@ -2102,17 +2102,17 @@ func addPluginAbiExport(ctxt *Link) {
 	ldr.SetAttrCgoExportDynamic(export.Sym(), true)
 }
 
-// addCgoNotifyExport publishes x_cgo_notify_runtime_init_done from an
-// externally linked plugin that contains runtime/cgo.
+// addCgoNotifyExport publishes x_cgo_notify_runtime_init_done from a
+// plugin that contains runtime/cgo.
 //
 // Such a plugin carries its own libcgo, with its own runtime_init_done
 // flag that starts out clear. Every C->Go entry point cgo generates
 // opens with _cgo_wait_runtime_init_done (cmd/cgo/out.go), which blocks
 // until that flag is set, and the only thing that sets it is
 // x_cgo_notify_runtime_init_done — which plugin.Open calls by
-// GetProcAddress once the image is loaded. If the name is not in the
-// export table, Open cannot find it, and the plugin's first callback
-// from C into Go never returns.
+// GetProcAddress once the image is loaded and its slots are
+// canonicalised. If the name is not in the export table, Open cannot
+// find it, and the plugin's first callback from C into Go never returns.
 //
 // Nothing put it there on purpose. On mingw it was present because ld
 // auto-exports what it can, which is also why this went unnoticed:
@@ -2121,41 +2121,56 @@ func addPluginAbiExport(ctxt *Link) {
 // becomes authoritative under -Wl,--exclude-all-symbols — and the export
 // goes with it. The same plugin then published 6 names, loaded, ran a
 // Go->C call fine (that direction carries no handshake) and hung forever
-// on its first C->Go callback (trendvidia/go#62). Naming it here makes
-// the export a decision rather than a side effect of someone else's
-// heuristics.
+// on its first C->Go callback (trendvidia/go#62).
 //
-// Deliberately external-only. windows/arm64 links plugins internally
-// (external linking of a cgo plugin there fails outright: "unsupported
-// obj reloc R_ARM64_GOTPCREL"), and on that path this linker writes the
-// export table itself, so no auto-export heuristic can drop anything and
-// #62 has no way to occur. Exporting it there is not merely unnecessary
-// but harmful: it makes plugin.Open call into libcgo code that an
-// internally linked plugin has never executed, and that call dies on an
-// execute violation before reaching Go (measured on windows_parallels,
-// TestIssue18676, Exception 0xc0000005 info 0x8). Why that path is not
-// callable is trendvidia/go#130 — a defect this change neither causes
-// nor repairs, and one whose fix belongs with the internal-link cgo
-// support rather than inside an export decision.
+// Both link modes, deliberately. windows/arm64 links plugins internally
+// (external linking of a cgo plugin there fails outright, #131) and
+// published no notify at all: 25 exported names, none of them this. Its
+// callbacks nonetheless ran, which they had no right to do — the flag
+// they wait on had no writer — so that path was working by accident and
+// is tracked as #130. Exporting here is half of closing it; the other
+// half is package plugin calling the notify after lastmoduleinit rather
+// than before, without which this export is not merely useless on the
+// internal path but fatal, since the C code's Windows-API calls go
+// through slots that are still empty that early.
 //
 // peSkipSymName drops names beginning with '_', which is why the symbol
 // is reachable at all under its own 'x' name.
 func addCgoNotifyExport(ctxt *Link) {
-	if !iscgo || ctxt.LinkMode != LinkExternal {
+	if !iscgo {
 		return
 	}
 	ldr := ctxt.loader
 	s := ldr.Lookup("x_cgo_notify_runtime_init_done", 0)
 	if s == 0 {
-		// runtime/cgo is in the link (iscgo) but the C half of it is
-		// not. No configuration this fork builds does that, so say so
-		// here rather than emit a plugin whose callbacks would hang for
-		// its caller to discover.
-		Errorf("link: %s contains runtime/cgo but has no x_cgo_notify_runtime_init_done to export; its cgo callbacks could never run",
-			peOutputDisplayName())
 		return
 	}
-	ldr.SetAttrReachable(s, true)
+	if ctxt.LinkMode == LinkExternal {
+		// The .def is a request to mingw ld, which resolves the name
+		// out of libcgo itself; this linker never sees a definition and
+		// never lays one out (measured: SHOSTOBJ, value 0, not
+		// reachable, for every external-link plugin). Marking it
+		// reachable is only how it reaches pePluginExportFile's walk.
+		ldr.SetAttrReachable(s, true)
+	} else if !ldr.AttrReachable(s) {
+		// Internal linking, and this image does not contain libcgo's C
+		// half: `import "C"` alone puts runtime/cgo in the link (so
+		// iscgo is set) without pulling in anything that references the
+		// notify, and deadcode drops it. There is then nothing to
+		// notify -- no _cgo_wait_runtime_init_done in the image either,
+		// so nothing can block -- and nothing to publish.
+		//
+		// Publishing it anyway is not harmless, which is how this arm
+		// was found: this linker writes the export table itself on the
+		// internal path, and an unreachable symbol has no address yet,
+		// so the export got the placeholder. Measured on windows/arm64,
+		// a plugin whose only cgo is `import "C"` published the notify
+		// at RVA 0xc00003e8; GetProcAddress handed plugin.Open
+		// base+0x3e8, inside the PE headers, and the call died on an
+		// execute violation (0xc0000005 info 0x8) taking six tests with
+		// it.
+		return
+	}
 	ldr.SetAttrCgoExportDynamic(s, true)
 }
 

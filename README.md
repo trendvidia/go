@@ -111,8 +111,9 @@ which leaves a window where nothing is serving: 26 ms median on
 windows/arm64, 54 ms on windows/amd64, 141 ms on darwin/arm64, measured
 over 200 cycles. `cmd/cgo/internal/testplugin/testdata/hotswap` is both
 the pin and a worked example of the supervisor
-([#136](https://github.com/trendvidia/go/issues/136) tracks removing the
-window).
+([#136](https://github.com/trendvidia/go/issues/136) records why the
+window exists; closing it is not currently planned, so treat the window as
+part of the upgrade contract rather than as a defect awaiting a fix).
 
 **`plugin.Open` keys its cache on the path as given**, so the same DLL
 opened under two spellings of a Windows drive letter (`C:\` vs `c:\`)

@@ -864,6 +864,22 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string,
 		md.dependents = nil
 	}
 
+	// Drop this module's itabs from the global itab table. They are
+	// not reachable through any plugin API, but find() dereferences
+	// every non-nil entry it probes, so leaving them makes an
+	// unrelated interface lookup anywhere in the process fault once
+	// the image is unmapped (trendvidia/go#150). Nothing else removes
+	// them: upstream never unloads a module, so addModuleItabs only
+	// ever grows the table.
+	//
+	// Done before the chain unlink so md.types/itaboffset/itabsize are
+	// still the module's own, and before Plugin.Close's
+	// syncBeforeUnmap, whose stop-the-world is what orders this against
+	// the unmap that follows.
+	lock(&itabLock)
+	itabsPurgeModule(md)
+	unlock(&itabLock)
+
 	// Mark the module bad so it won't appear in subsequent
 	// modulesinit results, and unlink it from the firstmoduledata
 	// chain so the chain walker skips it. We don't dlclose the .so

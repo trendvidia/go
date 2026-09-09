@@ -2035,6 +2035,27 @@ func TestHotSwapUpgrade(t *testing.T) {
 		runWithTimeout(t, 3*time.Minute, "./hotswap.exe",
 			append(args, "-cycles=12", "-workers=4", "-settle=5ms")...)
 	})
+
+	// The same pattern, run long enough to catch state that accumulates
+	// per Close rather than breaking on the first one.
+	//
+	// The cycle count is measured, not chosen for roundness.
+	// trendvidia/go#150 was a stale entry left in the global itab table
+	// by every Close: it does not fault until the table has grown enough
+	// for a probe to reach one, so 12 cycles never saw it while an
+	// unrelated interface lookup in the host faulted reliably above the
+	// threshold. Bracketed on darwin/arm64 at the go1.27.1 base: 60
+	// cycles passed, 75 faulted. 150 is twice the first failure, and the
+	// threshold depends on how many itabs a plugin contributes and on the
+	// table's load factor, so it is margin rather than a bound.
+	//
+	// If this becomes too slow, lower it against a re-measured threshold
+	// and say what the new number is twice. Do not lower it to make a red
+	// leg green: below the threshold this test cannot fail.
+	t.Run("state does not accumulate across closes", func(t *testing.T) {
+		runWithTimeout(t, 5*time.Minute, "./hotswap.exe",
+			append(args, "-cycles=150", "-workers=4", "-settle=1ms")...)
+	})
 }
 
 // TestPEDataDirectoriesInsideImage pins that every PE data directory a

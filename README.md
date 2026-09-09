@@ -86,8 +86,10 @@ upstream `cmd/go` `TestScript/repro_build` test passes. See
 
 ### Known limitations of the plugin support
 
-Measured, current as of go1.26.5-plus. Each is tracked; none prevents
-loading a plugin on any supported platform.
+Measured against go1.26.5-plus and still current for go1.26.8-plus: that
+release was a base bump that changed nothing in the plugin path, and the
+plugin suites are green on all five legs at its commit. Each is tracked;
+none prevents loading a plugin on any supported platform.
 
 **A plugin cannot link a third-party C or C++ library on windows/arm64.**
 Measured 2026-09-08 on both arches with a static archive built by

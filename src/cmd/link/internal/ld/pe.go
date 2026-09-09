@@ -2522,7 +2522,7 @@ func peCreateExportFile(ctxt *Link, libName string) (fname string) {
 	var buf bytes.Buffer
 
 	if ctxt.BuildMode == BuildModeCShared {
-		fmt.Fprintf(&buf, "LIBRARY %s\n", libName)
+		fmt.Fprintf(&buf, "LIBRARY %q\n", libName)
 	}
 	buf.WriteString("EXPORTS\n")
 

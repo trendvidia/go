@@ -468,7 +468,7 @@ type moduledata struct {
 	funcptrnames    []byte
 
 	// L3.b user-package DATA tables. Emitted by the linker's
-	// userDataLink() in typelink.go. Two parallel triplets:
+	// userDataLink() in canonlink.go. Two parallel triplets:
 	//
 	//   - udexports: user-package data symbols this module DEFINES.
 	//     Each udexports[i] is the symbol's resolved address;

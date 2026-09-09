@@ -194,19 +194,19 @@ func (ctxt *Link) staticCanonWords() (typeWords, itabWords, addrWords []staticWo
 	return typeWords, itabWords, addrWords
 }
 
-// typelink emits the fork's per-module canonicalisation tables: the
+// canonlink emits the fork's per-module canonicalisation tables: the
 // typeptrs/typeptroffs and itabptrs slot tables the runtime rewrites at
 // plugin load, plus the udaddr carrier triplet for static-data words
 // that embed a user-package data address.
 //
-// go1.27 deleted upstream's half of this function — the runtime.typelink
-// and runtime.itablink tables (CL "cmd/link, runtime: remove typelinks"
-// and "runtime, cmd/link: remove itablinks"). reflect.typelinks now
-// walks the type-descriptor range lazily and itabs are walked in place,
-// so nothing here emits them any more. The function and its file keep
-// the upstream name pending the naming decision recorded in
-// trendvidia/go#139.
-func (ctxt *Link) typelink() {
+// It was called typelink, in a file called typelink.go, because it grew
+// inside upstream's function of that name. go1.27 deleted upstream's
+// half — the runtime.typelink and runtime.itablink tables (CL "cmd/link,
+// runtime: remove typelinks" and "runtime, cmd/link: remove itablinks")
+// — leaving nothing here that emits a typelink. reflect.typelinks now
+// walks the type-descriptor range lazily and itabs are walked in place.
+// The name went with the deleted half (trendvidia/go#139).
+func (ctxt *Link) canonlink() {
 	ldr := ctxt.loader
 	ptrsize := ctxt.Arch.PtrSize
 

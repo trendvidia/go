@@ -1479,7 +1479,7 @@ func TestUniqueTypesAndItabs(t *testing.T) {
 
 // TestTypetabLinkedTables pins what the linker does with the -typetab
 // slots that TestTypetabSlotsPresent (cmd/compile/internal/test) only
-// proves the compiler emits. ld/typelink.go builds runtime.typeptrs /
+// proves the compiler emits. ld/canonlink.go builds runtime.typeptrs /
 // runtime.typeptroffs / runtime.itabptrs from a reachable-symbol walk
 // with three silent `continue` filters (size != ptrsize, no reloc,
 // duplicate name); a wrong filter yields an EMPTY table and every
@@ -1645,7 +1645,7 @@ func checkTypetabTables(t *testing.T, image string) {
 		}
 		slotCount[prefix]++
 		if s.Size != ptrsize {
-			t.Errorf("%s: slot %s has size %d, want %d; typelink's size filter would drop it", image, s.Name, s.Size, ptrsize)
+			t.Errorf("%s: slot %s has size %d, want %d; canonlink's size filter would drop it", image, s.Name, s.Size, ptrsize)
 		}
 		if int(s.Section) >= len(f.Sections) {
 			t.Errorf("%s: slot %s has section index %d out of range", image, s.Name, s.Section)
@@ -1672,7 +1672,7 @@ func checkTypetabTables(t *testing.T, image string) {
 			return 0, false
 		}
 		if s.Size == 0 {
-			t.Errorf("%s: %s is empty; typelink's reachable-symbol walk found no slots", image, name)
+			t.Errorf("%s: %s is empty; canonlink's reachable-symbol walk found no slots", image, name)
 		}
 		if s.Size%entry != 0 {
 			t.Errorf("%s: %s has size %d, not a multiple of the %d-byte entry", image, name, s.Size, entry)
@@ -1696,7 +1696,7 @@ func checkTypetabTables(t *testing.T, image string) {
 	// Every slot the linker kept reachable got exactly one table entry:
 	// the walk's filters must not drop a slot, and DUPOK dedup must not
 	// double-count one. Exact equality holds because this test is ELF-
-	// only: on a Windows plugin ld/typelink.go's staticCanonWords
+	// only: on a Windows plugin ld/canonlink.go's staticCanonWords
 	// appends static-data word entries to both tables after the slots,
 	// and the counts would then differ by design.
 	// Gated on the symbol existing: table() already reported a missing

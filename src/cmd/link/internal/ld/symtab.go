@@ -797,7 +797,7 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 	}
 
 	// L2 funcptrs slot table and parallel name tables. Carriers
-	// are emitted by funcptrlink() in typelink.go; in
+	// are emitted by funcptrlink() in canonlink.go; in
 	// -buildmode=exe all carriers are zero-sized so the slice headers
 	// come out empty. Order matches the moduledata struct layout in
 	// runtime/symtab.go.
@@ -817,7 +817,7 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 	emitSlotSlice("runtime.funcptrnames", 1)
 
 	// L3.b user-package DATA tables — emitted by userDataLink() in
-	// typelink.go. Used by the runtime's L3 peer-plugin canonicalisation
+	// canonlink.go. Used by the runtime's L3 peer-plugin canonicalisation
 	// for symbols whose canonical owner isn't host (where the OS PE
 	// loader can't bind via host's import library). Empty in -buildmode=
 	// exe and on POSIX (the dynamic linker handles symbol merging).
@@ -829,7 +829,7 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 	emitSlotSlice("runtime.userDataImportsnames", 1)
 
 	// Static-data address words and their __imp_ slots — emitted by
-	// emitAddrCarriers() in typelink.go (trendvidia/go#25). Empty
+	// emitAddrCarriers() in canonlink.go (trendvidia/go#25). Empty
 	// except for Windows plugins.
 	emitSlotSlice("runtime.udaddrwords", ptrSz)
 	emitSlotSlice("runtime.udaddrslots", ptrSz)

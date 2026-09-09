@@ -454,8 +454,8 @@ func Main(arch *sys.Arch, theArch Arch) {
 
 	bench.Start("textaddress")
 	ctxt.textaddress()
-	bench.Start("typelink")
-	ctxt.typelink()
+	bench.Start("canonlink")
+	ctxt.canonlink()
 	bench.Start("funcptrlink")
 	ctxt.funcptrlink()
 	bench.Start("userDataLink")

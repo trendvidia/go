@@ -734,3 +734,64 @@ func TestPEInittaskSharesWithItsData(t *testing.T) {
 		}
 	}
 }
+
+// TestIsMethodBodyName pins the receiver parse against the shape go1.27
+// made reachable: a method whose NAME is package-qualified, because it
+// was promoted from a type embedded from another package. Working back
+// from the last dot reads the qualifying path as the receiver, and
+// answering false there converts the ABIInternal body at v=1 and
+// orphans the type descriptor's R_METHODOFF — the plugin link then
+// fails with "missing section for relocation target ..."
+// (trendvidia/go#139).
+//
+// Measured on a plugin host built from this tree: go1.26.8's import
+// library carried 0 names of this shape and go1.27.1's carries 13.
+func TestIsMethodBodyName(t *testing.T) {
+	for _, name := range []string{
+		// Package-qualified method names. These are the regression.
+		"reflect.(*ptrType).internal/abi.descriptorSizes",
+		"reflect.(*structType).internal/abi.descriptorSizes",
+		"reflect.(*structTypeUncommon).internal/abi.descriptorSizes",
+		"go.shape.(*struct { internal/sync.node = internal/sync.node[go.shape.interface {},go.shape.interface {}] }).internal/sync.entry",
+		// Plain method bodies, which already worked.
+		"runtime.(*mheap).alloc",
+		"sync.(*Mutex).Lock",
+		"gopkg.in/yaml.v2.(*decoder).unmarshal",
+		"testplugin/common.T.Value",
+	} {
+		if !isMethodBodyName(name) {
+			t.Errorf("isMethodBodyName(%q) = false, want true: converting this at v=1 orphans a type descriptor's R_METHODOFF", name)
+		}
+	}
+	for _, name := range []string{
+		// Package-level functions: one dot after the path.
+		"fmt.Println",
+		"internal/abi.Escape",
+		"runtime.addmoduledata",
+		// No dot at all.
+		"main",
+	} {
+		if isMethodBodyName(name) {
+			t.Errorf("isMethodBodyName(%q) = true, want false", name)
+		}
+	}
+
+	// The value-receiver branch is deliberately conservative: a package
+	// path whose last element contains a dot reads as `pkg.Recv.Method`
+	// and answers true. isMethodBodyName's own comment accepts that
+	// ("false positives at worst keep things plugin-local") and names
+	// `pkg.init.N` as the measured case. Pinned rather than fixed, so
+	// that tightening it is a deliberate change with this consequence
+	// in view: each of these keeps its ABIInternal body in the plugin
+	// instead of binding to the host's.
+	for _, name := range []string{
+		"gopkg.in/yaml.v2.Marshal",
+		"sync.init.0",
+	} {
+		if !isMethodBodyName(name) {
+			t.Errorf("isMethodBodyName(%q) = false; the documented conservative false positive changed. "+
+				"That is not a bug by itself, but it changes which bodies bind to the host — re-read the "+
+				"init-task reasoning in TestPEInittaskOutranksItsInits before accepting it.", name)
+		}
+	}
+}

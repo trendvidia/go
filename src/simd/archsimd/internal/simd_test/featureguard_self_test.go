@@ -108,11 +108,41 @@ func TestFeatureGuardsChecker(t *testing.T) {
 		want:    []string{"Uint8x16).Less needs AVX2"},
 		checked: 1,
 	}, {
-		// LoadInt8x64 is bodyless and unannotated: its requirement cannot be
-		// computed, and calling it must not be counted as a checked
-		// reference.
+		// The multi-arch shapes go1.27's *_128_test.go files use. Writing
+		// the plain guard there would skip the op on arm64 and wasm, where
+		// archsimd.X86 never reports a feature.
+		name:    "arch-qualified block",
+		body:    `func TestF(t *testing.T) { if runtime.GOARCH != "amd64" || archsimd.X86.AVX2() { sinkFixture = u8.Less(u8) } }`,
+		checked: 1,
+	}, {
+		name: "arch-qualified skip preamble",
+		body: `func TestF(t *testing.T) {
+			if runtime.GOARCH == "amd64" && !archsimd.X86.AVX2() { t.Skip("no AVX2") }
+			sinkFixture = u8.Less(u8)
+		}`,
+		checked: 1,
+	}, {
+		// Only the two arch-qualified shapes are accepted. An arbitrary
+		// left disjunct establishes nothing on amd64, so it must not be
+		// mistaken for one.
+		name:    "unrelated disjunct establishes nothing",
+		body:    `func TestF(t *testing.T) { if sinkFixture == nil || archsimd.X86.AVX2() { sinkFixture = u8.Less(u8) } }`,
+		want:    []string{"Uint8x16).Less needs AVX2"},
+		checked: 1,
+	}, {
+		// The mirror image: `GOARCH == "amd64" || F()` is true on every
+		// amd64 target regardless of F, so it is not a guard.
+		name:    "wrong arch comparison in a block",
+		body:    `func TestF(t *testing.T) { if runtime.GOARCH == "amd64" || archsimd.X86.AVX2() { sinkFixture = u8.Less(u8) } }`,
+		want:    []string{"Uint8x16).Less needs AVX2"},
+		checked: 1,
+	}, {
+		// LoadInt8x64Array is bodyless and unannotated: its requirement
+		// cannot be computed, and calling it must not be counted as a
+		// checked reference. (go1.27 gave LoadInt8x64 a slice signature and
+		// a body; the bodyless intrinsic is now the Array form.)
 		name:       "unannotated intrinsic counted as unresolved",
-		body:       `func TestF(t *testing.T) { sinkFixture = archsimd.LoadInt8x64(&i8arr) }`,
+		body:       `func TestF(t *testing.T) { sinkFixture = archsimd.LoadInt8x64Array(&i8arr) }`,
 		unresolved: 1,
 	}, {
 		// A wrapper over an unresolved declaration is unresolved too, rather
@@ -120,7 +150,7 @@ func TestFeatureGuardsChecker(t *testing.T) {
 		// know are still enforced.
 		name: "unknown propagates but does not swallow known features",
 		body: `func helperF() {
-			sinkFixture = archsimd.LoadInt8x64(&i8arr)
+			sinkFixture = archsimd.LoadInt8x64Array(&i8arr)
 			sinkFixture = u8.Less(u8)
 		}
 		func TestF(t *testing.T) { helperF() }`,
@@ -149,10 +179,13 @@ func TestFeatureGuardsChecker(t *testing.T) {
 const fixturePreamble = `package simd_test
 
 import (
+	"runtime"
 	"testing"
 
 	"simd/archsimd"
 )
+
+var _ = runtime.GOARCH
 
 var sinkFixture any
 var u8 archsimd.Uint8x16

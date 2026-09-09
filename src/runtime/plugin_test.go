@@ -39,3 +39,50 @@ func TestPkgFromInitName(t *testing.T) {
 		}
 	}
 }
+
+// TestModuleItabsSitInsideTypesRange pins the go1.27 module layout that
+// runtime/type.go's canonicalizeTypeInModule depends on.
+//
+// Through go1.26 the linker packed only type descriptors into
+// [md.types, md.etypes), so "does md's linker own this type descriptor"
+// was an address-range test, and canonicalizeTypeInModule used one before
+// consulting md.typemap. go1.27 packs the module's itabs into the same
+// range -- moduledata gained typedesclen, itaboffset and itabsize, and
+// ld/data.go lays out typelinked descriptors, then the rest, then itabs.
+// The range test therefore answers yes for an itab address, which is why
+// canonicalizeTypeInModule now carries no range test at all and keys
+// straight off the (go1.27, pointer-keyed) typemap.
+//
+// The assertions below are that hazard, stated: the itab block is
+// non-empty and lies wholly inside [types, etypes), after the descriptor
+// prefix. If this test fails, the layout moved -- go re-read
+// canonicalizeTypeInModule before concluding a range test is safe again
+// (trendvidia/go#139, port item 4).
+func TestModuleItabsSitInsideTypesRange(t *testing.T) {
+	types, typedesclen, itaboffset, itabsize, etypes := runtime.FirstModuleTypeRegion()
+
+	if types == 0 || etypes <= types {
+		t.Fatalf("first module has no type region: types=%#x etypes=%#x", types, etypes)
+	}
+	if typedesclen == 0 || typedesclen > etypes-types {
+		t.Fatalf("typedesclen=%#x outside [types, etypes) of size %#x", typedesclen, etypes-types)
+	}
+	// A test binary links the testing package, so it has itabs. A zero
+	// here would make the rest of the test vacuous rather than fail it.
+	if itabsize == 0 {
+		t.Fatal("first module reports no itabs; the layout this pins cannot be checked")
+	}
+	if itaboffset < typedesclen {
+		t.Errorf("itabs start at +%#x, inside the %#x-byte type-descriptor prefix", itaboffset, typedesclen)
+	}
+	if end := itaboffset + itabsize; end > etypes-types {
+		t.Errorf("itabs end at +%#x, past etypes at +%#x", end, etypes-types)
+	}
+	// The point of the whole test: an address-range test over
+	// [types, etypes) matches an itab.
+	itab := types + itaboffset
+	if !(itab >= types && itab < etypes) {
+		t.Errorf("itab address %#x is outside [%#x, %#x); the go1.26 range test would still be sound",
+			itab, types, etypes)
+	}
+}

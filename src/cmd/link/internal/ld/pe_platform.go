@@ -17,13 +17,11 @@
 package ld
 
 import (
-	"bytes"
 	"cmd/internal/bio"
 	"cmd/internal/objabi"
 	"cmd/link/internal/loadpe"
 	"cmd/link/internal/sym"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -37,9 +35,7 @@ func ldpe(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 	if len(ls.Resources) != 0 {
 		setpersrc(ctxt, ls.Resources)
 	}
-	if ls.PData != 0 {
-		sehp.pdata = append(sehp.pdata, ls.PData)
-	}
+	sehp.pdata = append(sehp.pdata, ls.PData...)
 	if ls.XData != 0 {
 		sehp.xdata = append(sehp.xdata, ls.XData)
 	}
@@ -84,32 +80,19 @@ func peNeedsGdbScriptWorkaround(ctxt *Link) bool {
 // argument list. Called from hostlink AFTER all earlier flags and .o
 // files have been queued, so the libraries are linked last.
 //
-// Detects whether the active linker is LLD (mingw-clang's lld-link or
-// equivalent) by running -Wl,--version and grepping the output. The
-// gcc gdb-script workaround is only needed for non-LLD linkers
-// (https://golang.org/issue/20183).
+// The gcc gdb-script workaround is only needed for non-LLD linkers
+// (https://golang.org/issue/20183); isLLD comes from peArgs, which
+// detects the linker once per link (go1.27 hoisted that detection out
+// of this step and into ctxt.isLLD).
 //
 // No-op on non-Windows targets so callers can invoke unconditionally.
-func peAppendMingwLibs(ctxt *Link, argv []string, isMSVC bool) []string {
+func peAppendMingwLibs(ctxt *Link, argv []string, isMSVC, isLLD bool) []string {
 	if ctxt.HeadType != objabi.Hwindows {
 		return argv
 	}
-	// Determine which linker we're using. Add in the extldflags in
-	// case the user has specified "-fuse-ld=...".
-	extld := ctxt.extld()
-	name, args := extld[0], extld[1:]
-	args = append(args, trimLinkerArgv(flagExtldflags)...)
-	args = append(args, "-Wl,--version")
-	cmd := exec.Command(name, args...)
-	usingLLD := false
-	if out, err := cmd.CombinedOutput(); err == nil {
-		if bytes.Contains(out, []byte("LLD ")) {
-			usingLLD = true
-		}
-	}
 
 	// gcc linker script workaround (golang.org/issue/20183).
-	if !usingLLD {
+	if !isLLD {
 		p := writeGDBLinkerScript()
 		argv = append(argv, "-Wl,-T,"+p)
 	}
@@ -130,10 +113,12 @@ func peAppendMingwLibs(ctxt *Link, argv []string, isMSVC bool) []string {
 
 // peArgs appends Windows PE-specific external-linker flags to argv
 // during hostlink, and returns the updated argv together with the
-// linker-style detection (isMSVC) and the -Wl flag prefix to use for
-// the rest of the link. MSVC's lld-link expects single-dash options
+// linker-style detection (isMSVC, isLLD) and the -Wl flag prefix to use
+// for the rest of the link. MSVC's lld-link expects single-dash options
 // while mingw expects double-dash, so the caller must use the
-// returned wlPrefix for any later -Wl flags it appends.
+// returned wlPrefix for any later -Wl flags it appends. isLLD is
+// reported because the late-stage mingw block needs it too, and
+// detecting the linker costs a subprocess.
 //
 // Flags appended:
 //   - -mwindows / -mconsole based on the windowsgui package flag.
@@ -141,9 +126,10 @@ func peAppendMingwLibs(ctxt *Link, argv []string, isMSVC bool) []string {
 //   - nxcompat: enables Data Execution Prevention.
 //   - --major/minor-os-version and --major/minor-subsystem-version
 //     (mingw only): set PE minimum target versions.
-func peArgs(ctxt *Link, argv []string) (newArgv []string, isMSVC bool, wlPrefix string) {
+func peArgs(ctxt *Link, argv []string) (newArgv []string, isMSVC, isLLD bool, wlPrefix string) {
 	wlPrefix = "-Wl,--"
 	isMSVC = ctxt.isMSVC()
+	isLLD = ctxt.isLLD()
 	if isMSVC {
 		// MSVC lld-link only accepts one-dash options for many flags.
 		// TODO: mingw clang appears to accept either; we may be able
@@ -161,12 +147,24 @@ func peArgs(ctxt *Link, argv []string) (newArgv []string, isMSVC bool, wlPrefix 
 	argv = append(argv, wlPrefix+"nxcompat")
 
 	if !isMSVC {
-		argv = append(argv, fmt.Sprintf("-Wl,--major-os-version=%d", PeMinimumTargetMajorVersion))
-		argv = append(argv, fmt.Sprintf("-Wl,--minor-os-version=%d", PeMinimumTargetMinorVersion))
-		argv = append(argv, fmt.Sprintf("-Wl,--major-subsystem-version=%d", PeMinimumTargetMajorVersion))
-		argv = append(argv, fmt.Sprintf("-Wl,--minor-subsystem-version=%d", PeMinimumTargetMinorVersion))
+		peMajorVersion := PeMinimumTargetMajorVersion
+		peMinorVersion := PeMinimumTargetMinorVersion
+		if peMajorVersion >= 10 && !isLLD &&
+			!peHasLoadConfigDirectorySupport(ctxt.Arch, argv[0]) {
+			// The external linker doesn't support wiring up
+			// _load_config_used to the PE Load Configuration
+			// Directory. Windows 10+ validates this directory,
+			// so fall back to an older version to avoid
+			// load failures.
+			peMajorVersion = 6
+			peMinorVersion = 1
+		}
+		argv = append(argv, fmt.Sprintf("-Wl,--major-os-version=%d", peMajorVersion))
+		argv = append(argv, fmt.Sprintf("-Wl,--minor-os-version=%d", peMinorVersion))
+		argv = append(argv, fmt.Sprintf("-Wl,--major-subsystem-version=%d", peMajorVersion))
+		argv = append(argv, fmt.Sprintf("-Wl,--minor-subsystem-version=%d", peMinorVersion))
 	}
-	return argv, isMSVC, wlPrefix
+	return argv, isMSVC, isLLD, wlPrefix
 }
 
 // peNoTimestampArgs appends --no-insert-timestamp to argv for Windows
@@ -223,3 +221,22 @@ func stdcallDecoration(name string) int {
 	}
 	return i
 }
+
+// peLoadConfigSym is the linker's own name for the PE load config
+// structure it synthesizes on an internal link.
+//
+// It is deliberately NOT upstream's `_load_config_used`: go1.27's
+// runtime/cgo defines that name in C, and adopting the C object's symbol
+// yields one the linker cannot place. See Peinit, which explains the
+// 0xc0000005 that produced.
+//
+// It KEEPS the leading underscore, which is load-bearing rather than
+// cosmetic. peSkipSymName drops `_`-prefixed names, and it gates both
+// the plugin export table (peExportAllSymbols) and the import-library
+// conversion (peLoadImportLibrary). A per-image PE structure must be
+// neither: exporting it publishes a linker internal, and a host that
+// exported one would have the plugin's copy converted into an import,
+// which is precisely the unplaced-symbol state this fix exists to
+// avoid. A `go:`-prefixed name was measured leaking into the export
+// directory for that reason.
+const peLoadConfigSym = "_go_load_config_used"

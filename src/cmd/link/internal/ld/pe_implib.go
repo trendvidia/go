@@ -34,7 +34,33 @@ import (
 // method name. We check for the receiver `(` first (cheap), then for
 // the value-receiver shape (more expensive: need to make sure the
 // middle segment isn't a package path component).
+//
+// The parenthesised receiver is found by its own delimiters rather
+// than by counting dots back from the end, because THE METHOD NAME CAN
+// ITSELF BE PACKAGE-QUALIFIED. An unexported method promoted from a
+// type embedded from another package carries that package's path in
+// the method segment:
+//
+//	reflect.(*ptrType).internal/abi.descriptorSizes
+//	go.shape.(*struct { ... }).internal/sync.entry
+//
+// Working back from the last dot reads `internal/abi` as the receiver,
+// rejects it for containing a slash, and answers false for what is a
+// method body. The plugin then converts the ABIInternal entry at v=1,
+// which orphans the type descriptor's R_METHODOFF and fails the link
+// with "missing section for relocation target ..." (trendvidia/go#139).
+// go1.26 had no such name in a plugin host's import library and go1.27
+// has 13; the `descriptorSizes` family is reachable from every plugin
+// that touches reflect.
 func isMethodBodyName(name string) bool {
+	// Parenthesised receiver: `pkg.(*T).Method`, `pkg.(T).Method`.
+	// A package path cannot contain a parenthesis, so the first `.(`
+	// with a later `).` delimits the receiver wherever the method name
+	// ends up.
+	if i := strings.Index(name, ".("); i >= 0 && strings.Contains(name[i+2:], ").") {
+		return true
+	}
+
 	// Find the LAST dot — it separates Method from the rest.
 	lastDot := strings.LastIndexByte(name, '.')
 	if lastDot < 0 {
@@ -46,10 +72,6 @@ func isMethodBodyName(name string) bool {
 		return false
 	}
 	recv := name[prevDot+1 : lastDot]
-	// Pointer receiver: "(*T)".
-	if len(recv) >= 4 && recv[0] == '(' && recv[1] == '*' && recv[len(recv)-1] == ')' {
-		return true
-	}
 	// Value receiver: bare identifier. To avoid false positives on
 	// package paths like `internal/abi.foo`, ensure recv starts with
 	// an uppercase letter (Go exported type) or contains no '/'.

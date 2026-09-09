@@ -79,7 +79,7 @@ func pickSegmentLayout(ctxt *Link) segmentLayout {
 // Fields are populated incrementally as hostlink runs:
 //   - argv, combineDwarf, wlPrefix: ready before the hostlinkExtender
 //     dispatch (~lib.go:1467).
-//   - isMSVC: written by peHostlink during that dispatch.
+//   - isMSVC, isLLD: written by peHostlink during that dispatch.
 //   - altLinker, outopt: set later in hostlink and mirrored into the
 //     struct just before the exportSymbolDispatcher dispatch (~1700).
 //
@@ -90,6 +90,7 @@ type hostlinkState struct {
 	argv         []string
 	combineDwarf bool
 	isMSVC       bool
+	isLLD        bool
 	wlPrefix     string
 	altLinker    string
 	outopt       string
@@ -97,7 +98,7 @@ type hostlinkState struct {
 
 // hostlinkExtender appends format-specific flags to a hostlink
 // invocation. Implementations mutate st.argv (and, for PE, also
-// st.isMSVC and st.wlPrefix). Linux/FreeBSD/etc. have no per-format
+// st.isMSVC, st.isLLD and st.wlPrefix). Linux/FreeBSD/etc. have no per-format
 // extensions and are represented by a nil return from
 // pickHostlinkExtender — callers must guard the dispatch.
 type hostlinkExtender interface {
@@ -119,7 +120,7 @@ func (openbsdHostlink) hostlinkArgs(ctxt *Link, st *hostlinkState) {
 type peHostlink struct{}
 
 func (peHostlink) hostlinkArgs(ctxt *Link, st *hostlinkState) {
-	st.argv, st.isMSVC, st.wlPrefix = peArgs(ctxt, st.argv)
+	st.argv, st.isMSVC, st.isLLD, st.wlPrefix = peArgs(ctxt, st.argv)
 }
 
 type xcoffHostlink struct{}

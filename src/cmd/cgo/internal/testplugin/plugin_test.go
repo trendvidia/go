@@ -2036,3 +2036,131 @@ func TestHotSwapUpgrade(t *testing.T) {
 			append(args, "-cycles=12", "-workers=4", "-settle=5ms")...)
 	})
 }
+
+// TestPEDataDirectoriesInsideImage pins that every PE data directory a
+// plugin DLL publishes points inside that DLL.
+//
+// Windows validates some of these directories at load. It validates the
+// Load Configuration Directory on Windows 10+, which go1.27 started
+// emitting (cmd/link: raise minimum windows version to 10) — and a
+// directory whose RVA lies outside the image faults inside LoadLibrary
+// with 0xc0000005 rather than returning an error, so the failure arrives
+// as a dead host process with no diagnostic.
+//
+// That is not hypothetical: go1.27's runtime/cgo defines
+// _load_config_used in C as well, so in a cgo build Peinit adopts the C
+// object's symbol instead of creating one. It arrives as a sub-symbol of
+// a section container the plugin link drops, never gets an address, and
+// the directory was published as (0 - PEBASE) = RVA 0xc0000000. Every
+// cgo plugin then failed to load on windows/arm64, where the fork links
+// them internally. See the guard in ld/pe.go's asmbPe.
+//
+// Omitting the directory is not a safe answer either, and the test
+// asserts its presence for that reason: measured on windows/arm64, the
+// same DLL with no Load Configuration Directory is rejected outright
+// with "%1 is not a valid Win32 application" (ERROR_BAD_EXE_FORMAT).
+// Valid loads, bogus faults, absent is refused.
+//
+// The range check is deliberately general rather than aimed at that one
+// directory: any RVA the linker computes from an unplaced symbol lands
+// outside the image the same way.
+func TestPEDataDirectoriesInsideImage(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PE-specific")
+	}
+	names, err := filepath.Glob("*.dll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) == 0 {
+		t.Fatal("no plugin DLLs found; this test would pass vacuously")
+	}
+	dirNames := map[int]string{
+		0: "EXPORT", 1: "IMPORT", 2: "RESOURCE", 3: "EXCEPTION", 4: "SECURITY",
+		5: "BASERELOC", 6: "DEBUG", 7: "ARCHITECTURE", 8: "GLOBALPTR", 9: "TLS",
+		10: "LOAD_CONFIG", 11: "BOUND_IMPORT", 12: "IAT", 13: "DELAY_IMPORT",
+		14: "COM_DESCRIPTOR",
+	}
+	checked := 0
+	for _, name := range names {
+		f, err := pe.Open(name)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		var dd []pe.DataDirectory
+		var sizeOfImage uint32
+		switch oh := f.OptionalHeader.(type) {
+		case *pe.OptionalHeader64:
+			dd, sizeOfImage = oh.DataDirectory[:], oh.SizeOfImage
+		case *pe.OptionalHeader32:
+			dd, sizeOfImage = oh.DataDirectory[:], oh.SizeOfImage
+		default:
+			t.Errorf("%s: unexpected optional header %T", name, f.OptionalHeader)
+			f.Close()
+			continue
+		}
+		for i, d := range dd {
+			if d.VirtualAddress == 0 {
+				continue // absent, which is always legal
+			}
+			checked++
+			// SECURITY is a file OFFSET, not an RVA; skip it.
+			if i == 4 {
+				continue
+			}
+			if uint64(d.VirtualAddress)+uint64(d.Size) > uint64(sizeOfImage) {
+				dn := dirNames[i]
+				if dn == "" {
+					dn = fmt.Sprintf("dir%d", i)
+				}
+				t.Errorf("%s: %s data directory at rva=%#x size=%#x extends past SizeOfImage=%#x; "+
+					"Windows faults inside LoadLibrary validating this",
+					name, dn, d.VirtualAddress, d.Size, sizeOfImage)
+			}
+		}
+		f.Close()
+	}
+	if checked == 0 {
+		t.Error("no non-empty data directories examined; the test proved nothing")
+	}
+	t.Logf("checked %d non-empty data directories across %d DLLs", checked, len(names))
+}
+
+// TestPELoadConfigPresent pins that every plugin DLL carries a Load
+// Configuration Directory. cmd/link marks these images minimum-OS 10.0,
+// and windows/arm64 refuses such an image without one: measured as
+// plugin.Open failing with "%1 is not a valid Win32 application".
+// TestPEDataDirectoriesInsideImage covers the other half — that the one
+// we emit points inside the image.
+func TestPELoadConfigPresent(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PE-specific")
+	}
+	names, err := filepath.Glob("*.dll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) == 0 {
+		t.Fatal("no plugin DLLs found; this test would pass vacuously")
+	}
+	for _, name := range names {
+		f, err := pe.Open(name)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		var d pe.DataDirectory
+		switch oh := f.OptionalHeader.(type) {
+		case *pe.OptionalHeader64:
+			d = oh.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG]
+		case *pe.OptionalHeader32:
+			d = oh.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG]
+		}
+		if d.VirtualAddress == 0 || d.Size == 0 {
+			t.Errorf("%s: no Load Configuration Directory; windows/arm64 refuses a "+
+				"minimum-OS-10 image without one (\"%%1 is not a valid Win32 application\")", name)
+		}
+		f.Close()
+	}
+}

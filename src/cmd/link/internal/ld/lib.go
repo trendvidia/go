@@ -34,6 +34,7 @@ import (
 	"bytes"
 	"debug/elf"
 	"debug/macho"
+	"debug/pe"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -1530,6 +1531,7 @@ func (ctxt *Link) hostlink() {
 	}
 	argv = st.argv
 	isMSVC := st.isMSVC
+	isLLD := st.isLLD
 	wlPrefix := st.wlPrefix
 	combineDwarf := st.combineDwarf
 
@@ -1851,7 +1853,7 @@ func (ctxt *Link) hostlink() {
 		argv = append(argv, p)
 		checkStatic(p)
 	}
-	argv = peAppendMingwLibs(ctxt, argv, isMSVC)
+	argv = peAppendMingwLibs(ctxt, argv, isMSVC, isLLD)
 
 	argv = ctxt.passLongArgsInResponseFile(argv, altLinker)
 
@@ -2087,26 +2089,84 @@ func linkerFlagSupported(arch *sys.Arch, linker, altLinker, flag string) bool {
 	return err == nil && !bytes.Contains(out, []byte("unrecognized")) && !bytes.Contains(out, []byte("unknown"))
 }
 
+// peHasLoadConfigDirectorySupport checks whether the external linker
+// populates the PE Load Configuration Directory data directory entry
+// when it encounters a _load_config_used symbol.
+//
+// GNU ld gained this support in binutils 2.45. MSVC link.exe and
+// LLVM lld-link have always supported it.
+func peHasLoadConfigDirectorySupport(arch *sys.Arch, linker string) bool {
+	src := filepath.Join(*flagTmpdir, "loadcfg_test.c")
+	if err := os.WriteFile(src, []byte(`
+#ifdef _WIN64
+typedef unsigned long long uintptr;
+#else
+typedef unsigned long uintptr;
+#endif
+const uintptr _load_config_used[2] = { sizeof(_load_config_used), 0 };
+int main() { return 0; }
+`), 0666); err != nil {
+		return false
+	}
+
+	outPath := filepath.Join(*flagTmpdir, "loadcfg_test.exe")
+	flags := hostlinkArchArgs(arch)
+	flags = append(flags, "-o", outPath, src)
+	cmd := exec.Command(linker, flags...)
+	cmd.Env = append([]string{"LC_ALL=C"}, os.Environ()...)
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+
+	f, err := pe.Open(outPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	switch oh := f.OptionalHeader.(type) {
+	case *pe.OptionalHeader64:
+		if int(pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) < len(oh.DataDirectory) {
+			return oh.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress != 0
+		}
+	case *pe.OptionalHeader32:
+		if int(pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) < len(oh.DataDirectory) {
+			return oh.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress != 0
+		}
+	}
+	return false
+}
+
 // trimLinkerArgv returns a new copy of argv that does not include flags
 // that are not relevant for testing whether some linker option works.
 func trimLinkerArgv(argv []string) []string {
 	flagsWithNextArgSkip := []string{
 		"-F",
 		"-l",
-		"-L",
 		"-framework",
 		"-Wl,-framework",
 		"-Wl,-rpath",
 		"-Wl,-undefined",
 	}
 	flagsWithNextArgKeep := []string{
+		"-B",
+		"-L",
 		"-arch",
 		"-isysroot",
 		"--sysroot",
 		"-target",
 		"--target",
+		"-resource-dir",
+		"-rtlib",
+		"--rtlib",
+		"-stdlib",
+		"--stdlib",
+		"-unwindlib",
+		"--unwindlib",
 	}
 	prefixesToKeep := []string{
+		"-B",
+		"-L",
 		"-f",
 		"-m",
 		"-p",
@@ -2116,6 +2176,20 @@ func trimLinkerArgv(argv []string) []string {
 		"--sysroot",
 		"-target",
 		"--target",
+		"-resource-dir",
+		"-rtlib",
+		"--rtlib",
+		"-stdlib",
+		"--stdlib",
+		"-unwindlib",
+		"--unwindlib",
+		"-nostdlib++",
+		"-nostdlib",
+		"-nodefaultlibs",
+		"-nostartfiles",
+		"-nostdinc++",
+		"-nostdinc",
+		"-nobuiltininc",
 	}
 
 	var flags []string
@@ -2253,7 +2327,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 	}
 
 	// First, check that the basic GOOS, GOARCH, and Version match.
-	if line != wantHdr {
+	if line != wantHdr && !*flagF {
 		Errorf("%s: linked object header mismatch:\nhave %q\nwant %q\n", pn, line, wantHdr)
 	}
 
@@ -2840,7 +2914,7 @@ func AddGotSym(target *Target, ldr *loader.Loader, syms *ArchSyms, s loader.Sym,
 			// Mach-O relocations are a royal pain to lay out.
 			// They use a compact stateful bytecode representation.
 			// Here we record what are needed and encode them later.
-			MachoAddBind(int64(ldr.SymGot(s)), s)
+			MachoAddBind(syms.GOT, int64(ldr.SymGot(s)), s)
 		}
 	} else {
 		ldr.Errorf(s, "addgotsym: unsupported binary format")
@@ -2917,6 +2991,21 @@ func (ctxt *Link) isMSVC() bool {
 	cmd := exec.Command(name, args...)
 	if out, err := cmd.CombinedOutput(); err == nil {
 		if bytes.Contains(out, []byte("-msvc\n")) || bytes.Contains(out, []byte("-msvc\r")) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLLD reports whether the C toolchain is using LLD as the linker.
+func (ctxt *Link) isLLD() bool {
+	extld := ctxt.extld()
+	name, args := extld[0], extld[1:]
+	args = append(args, trimLinkerArgv(flagExtldflags)...)
+	args = append(args, "-Wl,--version")
+	cmd := exec.Command(name, args...)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		if bytes.Contains(out, []byte("LLD ")) {
 			return true
 		}
 	}

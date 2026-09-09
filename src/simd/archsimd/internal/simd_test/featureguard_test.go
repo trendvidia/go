@@ -424,11 +424,29 @@ var unresolvedFamilies = []struct {
 }{
 	// Reinterprets between vector types of the same width: no instruction.
 	{"As* reinterpret", func(fn *types.Func) bool { return strings.HasPrefix(fn.Name(), "As") }},
+	// The same reinterprets under the names go1.27 gave them. As* is now a
+	// one-line wrapper (ops_amd64.go: AsUint16x8 calls ReshapeToUint16s), so
+	// the bodyless intrinsic moved to these four spellings: ReshapeTo<T>s
+	// between element widths, BitsTo<T> and ToBits across the float/integer
+	// boundary, and ConvertTo<T> between signed and unsigned of one width.
+	// All are pure reinterpretation, so none names an instruction. Real
+	// conversions (Float32x4.ConvertToInt32 and friends) are annotated and
+	// never reach here.
+	{"go1.27 reinterpret primitive", func(fn *types.Func) bool {
+		for _, p := range []string{"ReshapeTo", "BitsTo", "ConvertTo"} {
+			if strings.HasPrefix(fn.Name(), p) {
+				return true
+			}
+		}
+		return fn.Name() == "ToBits"
+	}},
 	// Raw loads and stores, e.g. LoadInt8x64 and Int8x64.Store. VMOVDQU on
 	// an X, Y or Z register: the width decides the feature, which the source
-	// does not state.
+	// does not state. go1.27 added the array-typed forms LoadInt8x64Array
+	// (matched by the Load prefix) and Int8x64.StoreArray.
 	{"raw load/store", func(fn *types.Func) bool {
-		return strings.HasPrefix(fn.Name(), "Load") || fn.Name() == "Store"
+		return strings.HasPrefix(fn.Name(), "Load") ||
+			fn.Name() == "Store" || fn.Name() == "StoreArray"
 	}},
 	// Mask operations and the mask/vector conversions: represented as k
 	// registers on AVX512 and as vectors below it, again unstated.
@@ -686,7 +704,8 @@ func origin(fn *types.Func) *types.Func {
 }
 
 // positiveFeatures returns the features a true cond establishes:
-// archsimd.X86.F() and conjunctions of them.
+// archsimd.X86.F(), conjunctions of them, and the arch-qualified
+// disjunction described at goarchTest.
 func positiveFeatures(cond ast.Expr) []string {
 	switch e := cond.(type) {
 	case *ast.ParenExpr:
@@ -694,6 +713,15 @@ func positiveFeatures(cond ast.Expr) []string {
 	case *ast.BinaryExpr:
 		if e.Op == token.LAND {
 			return append(positiveFeatures(e.X), positiveFeatures(e.Y)...)
+		}
+		if e.Op == token.LOR {
+			// `runtime.GOARCH != "amd64" || archsimd.X86.F()`.
+			if goarchTest(e.X, token.NEQ) {
+				return positiveFeatures(e.Y)
+			}
+			if goarchTest(e.Y, token.NEQ) {
+				return positiveFeatures(e.X)
+			}
 		}
 	case *ast.CallExpr:
 		if f := featureCheck(e); f != "" {
@@ -704,7 +732,8 @@ func positiveFeatures(cond ast.Expr) []string {
 }
 
 // negatedFeatures returns the features a false cond establishes:
-// !archsimd.X86.F() and disjunctions of them.
+// !archsimd.X86.F(), disjunctions of them, and the arch-qualified
+// conjunction described at goarchTest.
 func negatedFeatures(cond ast.Expr) []string {
 	switch e := cond.(type) {
 	case *ast.ParenExpr:
@@ -713,12 +742,55 @@ func negatedFeatures(cond ast.Expr) []string {
 		if e.Op == token.LOR {
 			return append(negatedFeatures(e.X), negatedFeatures(e.Y)...)
 		}
+		if e.Op == token.LAND {
+			// `runtime.GOARCH == "amd64" && !archsimd.X86.F()`.
+			if goarchTest(e.X, token.EQL) {
+				return negatedFeatures(e.Y)
+			}
+			if goarchTest(e.Y, token.EQL) {
+				return negatedFeatures(e.X)
+			}
+		}
 	case *ast.UnaryExpr:
 		if e.Op == token.NOT {
 			return positiveFeatures(e.X)
 		}
 	}
 	return nil
+}
+
+// goarchTest reports whether e is `runtime.GOARCH <op> "amd64"`.
+//
+// The multi-arch test files go1.27 introduced (compare_128_test.go and
+// friends, built for amd64, arm64 and wasm) spell a guard that only
+// applies on amd64 in one of two shapes:
+//
+//	if runtime.GOARCH != "amd64" || archsimd.X86.F() { ...op... }
+//	if runtime.GOARCH == "amd64" && !archsimd.X86.F() { t.Skip(...) }
+//
+// Both admit the op exactly when the target is not amd64, or when F
+// holds. Treating that as establishing F is sound here because every
+// requirement in the map is read from an amd64 declaration -- this
+// checker type-checks archsimd with GOARCH=amd64 -- so off amd64 there
+// is no requirement to establish. Writing the plain guard instead would
+// skip the op on arm64 and wasm, where no AVX feature is ever reported.
+//
+// Only these two shapes are accepted: a disjunction with any other left
+// operand would not establish F on amd64 at all.
+func goarchTest(e ast.Expr, op token.Token) bool {
+	be, ok := e.(*ast.BinaryExpr)
+	if !ok || be.Op != op {
+		return false
+	}
+	se, ok := be.X.(*ast.SelectorExpr)
+	if !ok || se.Sel.Name != "GOARCH" {
+		return false
+	}
+	if id, ok := se.X.(*ast.Ident); !ok || id.Name != "runtime" {
+		return false
+	}
+	lit, ok := be.Y.(*ast.BasicLit)
+	return ok && lit.Kind == token.STRING && lit.Value == `"amd64"`
 }
 
 // featureCheck returns F for a call archsimd.X86.F(), else "".

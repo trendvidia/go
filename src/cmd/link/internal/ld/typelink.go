@@ -12,11 +12,6 @@ import (
 	"strings"
 )
 
-type typelinkSortKey struct {
-	TypeStr string
-	Type    loader.Sym
-}
-
 // staticWordRef identifies one pointer-sized word inside a static data
 // symbol: the word lives at container+off, and its link-time content is
 // the address of target (+add). Collected by staticCanonWords for the
@@ -199,55 +194,21 @@ func (ctxt *Link) staticCanonWords() (typeWords, itabWords, addrWords []staticWo
 	return typeWords, itabWords, addrWords
 }
 
-// typelink generates the typelink table which is used by reflect.typelinks().
-// Types that should be added to the typelinks table are marked with the
-// MakeTypelink attribute by the compiler.
+// typelink emits the fork's per-module canonicalisation tables: the
+// typeptrs/typeptroffs and itabptrs slot tables the runtime rewrites at
+// plugin load, plus the udaddr carrier triplet for static-data words
+// that embed a user-package data address.
+//
+// go1.27 deleted upstream's half of this function — the runtime.typelink
+// and runtime.itablink tables (CL "cmd/link, runtime: remove typelinks"
+// and "runtime, cmd/link: remove itablinks"). reflect.typelinks now
+// walks the type-descriptor range lazily and itabs are walked in place,
+// so nothing here emits them any more. The function and its file keep
+// the upstream name pending the naming decision recorded in
+// trendvidia/go#139.
 func (ctxt *Link) typelink() {
 	ldr := ctxt.loader
-	var typelinks []typelinkSortKey
-	var itabs []loader.Sym
-	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
-		if !ldr.AttrReachable(s) {
-			continue
-		}
-		if ldr.IsTypelink(s) {
-			typelinks = append(typelinks, typelinkSortKey{decodetypeStr(ldr, ctxt.Arch, s), s})
-		} else if ldr.IsItab(s) {
-			itabs = append(itabs, s)
-		}
-	}
-	slices.SortFunc(typelinks, func(a, b typelinkSortKey) int {
-		return strings.Compare(a.TypeStr, b.TypeStr)
-	})
-
-	tl := ldr.CreateSymForUpdate("runtime.typelink", 0)
-	tl.SetType(sym.STYPELINK)
-	ldr.SetAttrLocal(tl.Sym(), true)
-	tl.SetSize(int64(4 * len(typelinks)))
-	tl.Grow(tl.Size())
-	relocs := tl.AddRelocs(len(typelinks))
-	for i, s := range typelinks {
-		r := relocs.At(i)
-		r.SetSym(s.Type)
-		r.SetOff(int32(i * 4))
-		r.SetSiz(4)
-		r.SetType(objabi.R_ADDROFF)
-	}
-
 	ptrsize := ctxt.Arch.PtrSize
-	il := ldr.CreateSymForUpdate("runtime.itablink", 0)
-	il.SetType(sym.SITABLINK)
-	ldr.SetAttrLocal(il.Sym(), true)
-	il.SetSize(int64(ptrsize * len(itabs)))
-	il.Grow(il.Size())
-	relocs = il.AddRelocs(len(itabs))
-	for i, s := range itabs {
-		r := relocs.At(i)
-		r.SetSym(s)
-		r.SetOff(int32(i * ptrsize))
-		r.SetSiz(uint8(ptrsize))
-		r.SetType(objabi.R_ADDR)
-	}
 
 	// Static-data words carrying type/itab/data addresses that no slot
 	// covers (trendvidia/go#25). Type and itab words join the slot
@@ -311,7 +272,7 @@ func (ctxt *Link) typelink() {
 	tp.SetSize(int64(ptrsize * ntypeptrs))
 	tp.Grow(tp.Size())
 	if ntypeptrs > 0 {
-		relocs = tp.AddRelocs(ntypeptrs)
+		relocs := tp.AddRelocs(ntypeptrs)
 		for i, s := range typeptrs {
 			r := relocs.At(i)
 			r.SetSym(s)
@@ -335,7 +296,7 @@ func (ctxt *Link) typelink() {
 	tpo.SetSize(int64(4 * ntypeptrs))
 	tpo.Grow(tpo.Size())
 	if ntypeptrs > 0 {
-		relocs = tpo.AddRelocs(ntypeptrs)
+		relocs := tpo.AddRelocs(ntypeptrs)
 		for i, s := range typeptrs {
 			r := relocs.At(i)
 			r.SetSym(typeptrTypes[s])
@@ -398,7 +359,7 @@ func (ctxt *Link) typelink() {
 	ip.SetSize(int64(ptrsize * nitabptrs))
 	ip.Grow(ip.Size())
 	if nitabptrs > 0 {
-		relocs = ip.AddRelocs(nitabptrs)
+		relocs := ip.AddRelocs(nitabptrs)
 		for i, s := range itabptrs {
 			r := relocs.At(i)
 			r.SetSym(s)

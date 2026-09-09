@@ -351,9 +351,7 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	moduledataverify1(md)
 
 	lock(&itabLock)
-	for _, i := range md.itablinks {
-		itabAdd(i)
-	}
+	addModuleItabs(md)
 	unlock(&itabLock)
 
 	// Redirect go.itabptr.X slots to canonical itabs. Must run AFTER

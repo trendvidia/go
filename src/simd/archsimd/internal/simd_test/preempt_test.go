@@ -152,7 +152,7 @@ func asyncPreemptChildMain() {
 // register the vector lives in.
 func vectorsSurvivePreemption() (string, error) {
 	base := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	delta := archsimd.LoadFloat32x8Slice([]float32{0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5})
+	delta := archsimd.LoadFloat32x8([]float32{0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5})
 
 	var stop atomic.Bool
 	var gcs atomic.Int64
@@ -176,14 +176,14 @@ func vectorsSurvivePreemption() (string, error) {
 		// call boundary, so every stop-the-world lands as an asynchronous
 		// preemption somewhere in the chain, with v live in a vector
 		// register.
-		v := archsimd.LoadFloat32x8Slice(base)
+		v := archsimd.LoadFloat32x8(base)
 		for i := 0; i < 1<<18; i++ {
 			v = v.Add(delta)
 			v = v.Sub(delta)
 			v = v.Add(delta)
 			v = v.Sub(delta)
 		}
-		v.StoreSlice(got)
+		v.Store(got)
 		for i := range base {
 			if got[i] != base[i] {
 				halt()

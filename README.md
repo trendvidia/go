@@ -31,8 +31,8 @@ for source installation instructions.
 ### Building this fork
 
 This is the trendvidia "plus" fork of Go (`go version` reports
-`… (plus <fork release>)`, e.g. `go version go1.26.5 darwin/arm64 (plus
-v1.26.5a)` — the leading version stays canonical upstream Go). When building the toolchain from source, run `make.bash`
+`… (plus <fork release>)`, e.g. `go version go1.27.1 darwin/arm64 (plus
+v1.27.1)` — the leading version stays canonical upstream Go). When building the toolchain from source, run `make.bash`
 with **`CGO_ENABLED` unset** in the environment:
 
 ```
@@ -86,10 +86,19 @@ upstream `cmd/go` `TestScript/repro_build` test passes. See
 
 ### Known limitations of the plugin support
 
-Measured against go1.26.5-plus and still current for go1.26.8-plus: that
-release was a base bump that changed nothing in the plugin path, and the
-plugin suites are green on all five legs at its commit. Each is tracked;
-none prevents loading a plugin on any supported platform.
+Current for **go1.27.1-plus**. Each is tracked; none prevents loading a
+plugin on any supported platform.
+
+The go1.26.5-plus to go1.26.8-plus step could be carried forward by
+argument, because that was a base bump that changed nothing in the plugin
+path. go1.27.1 is not that: it removed typelinks and itablinks, re-laid
+out the type and itab region, and took two linker fixes and a runtime fix
+in the plugin path to land
+([#139](https://github.com/trendvidia/go/issues/139),
+[#150](https://github.com/trendvidia/go/issues/150)). So the numbers below
+were re-measured at this base rather than inherited, per platform, on the
+same hosts CI uses. What rests on the plugin suites being green on all
+five legs, rather than on its own measurement, is said where it applies.
 
 **A plugin cannot link a third-party C or C++ library on windows/arm64.**
 Measured 2026-09-08 on both arches with a static archive built by
@@ -100,17 +109,33 @@ that arch does not work yet
 ([#131](https://github.com/trendvidia/go/issues/131)). Self-contained cgo
 and calls into system DLLs do work on arm64. Keeping native dependencies
 in the host, which has no such restriction, avoids the question on both
-arches.
+arches. That measurement is from the go1.26.8-plus base and was not
+repeated at go1.27.1-plus: #131 is untouched by that base, and the plugin
+suites are green on both arches at it.
 
 **Replacing a plugin at run time requires closing the old one first.**
 The first module carrying a `(package, link-time hash)` owns it, and
 later modules carrying that package depend on the owner, so a newly
 loaded generation pins the one it replaces and only the newest is ever
 closable. An upgrade must quiesce, `Close`, then `Open` the replacement —
-which leaves a window where nothing is serving: 26 ms median on
-windows/arm64, 54 ms on windows/amd64, 141 ms on darwin/arm64, measured
-over 200 cycles. `cmd/cgo/internal/testplugin/testdata/hotswap` is both
-the pin and a worked example of the supervisor
+which leaves a window where nothing is serving. Median, re-measured at
+go1.27.1-plus over runs of 100, 200 and 400 cycles with 4 workers:
+
+| platform | window (p50) |
+|---|---|
+| linux/arm64 | 1.1 ms |
+| windows/arm64 | 25 to 31 ms |
+| windows/amd64 | 32 to 36 ms |
+| darwin/arm64 | 141 ms |
+
+linux/amd64 was not measured. The spread is the platform's dynamic
+loader, not this fork: two orders of magnitude separate `dlopen`/`dlclose`
+on linux from Darwin's. Budget for the platform you ship on rather than
+for the worst row. Each cycle also costs 438 to 611 KiB of reserved
+address space on windows/amd64; the fixture's counter for that reads zero
+on linux and Darwin, so it has only ever been a Windows figure.
+`cmd/cgo/internal/testplugin/testdata/hotswap` is both the pin and a
+worked example of the supervisor
 ([#136](https://github.com/trendvidia/go/issues/136) records why the
 window exists; closing it is not currently planned, so treat the window as
 part of the upgrade contract rather than as a defect awaiting a fix).

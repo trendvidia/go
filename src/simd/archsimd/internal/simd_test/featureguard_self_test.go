@@ -101,6 +101,38 @@ func TestFeatureGuardsChecker(t *testing.T) {
 		want:    []string{"simd_test.helperF needs AVX2"},
 		checked: 1,
 	}, {
+		// A generic helper's body resolves `v.Less(v)` to its constraint's
+		// interface method, which is no archsimd object; the requirement
+		// only exists per instantiation. This is how the StorePart tests
+		// reached VPMASKMOVD with the pin green, trendvidia/go#156.
+		name: "generic helper requirement follows the type argument",
+		body: `func helperG[V interface{ Less(V) archsimd.Mask8x16 }](v V) { sinkFixture = v.Less(v) }
+		func TestF(t *testing.T) { helperG(u8) }`,
+		want:    []string{"simd_test.helperG needs AVX2"},
+		checked: 1,
+	}, {
+		name: "generic helper under a guard",
+		body: `func helperG[V interface{ Less(V) archsimd.Mask8x16 }](v V) { sinkFixture = v.Less(v) }
+		func TestF(t *testing.T) { if archsimd.X86.AVX2() { helperG[archsimd.Uint8x16](u8) } }`,
+		checked: 1,
+	}, {
+		// The same shape instantiated with an AVX-level method must not be
+		// a false violation: the answer is the type argument's, not the
+		// helper's.
+		name: "generic helper instantiated with an AVX op",
+		body: `func helperA[V interface{ Add(V) V }](v V) { sinkFixture = v.Add(v) }
+		func TestF(t *testing.T) { helperA(u8) }`,
+		checked: 1,
+	}, {
+		// Type parameters passed through one generic helper into another
+		// resolve to the outermost call's type arguments.
+		name: "generic helper passes its type parameter on",
+		body: `func helperG[V interface{ Less(V) archsimd.Mask8x16 }](v V) { sinkFixture = v.Less(v) }
+		func outerG[V interface{ Less(V) archsimd.Mask8x16 }](v V) { helperG(v) }
+		func TestF(t *testing.T) { outerG(u8) }`,
+		want:    []string{"simd_test.outerG needs AVX2"},
+		checked: 1,
+	}, {
 		// Benchmarks run in the same binary, under the same AVX-only
 		// TestMain, and SIGILL the same way.
 		name:    "benchmark is checked",

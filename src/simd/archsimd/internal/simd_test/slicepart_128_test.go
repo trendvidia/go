@@ -182,10 +182,15 @@ func TestStorePartReturnValues128(t *testing.T) {
 	testStorePartReturnValue[uint8, archsimd.Uint8x16](t)
 	testStorePartReturnValue[int16, archsimd.Int16x8](t)
 	testStorePartReturnValue[uint16, archsimd.Uint16x8](t)
-	testStorePartReturnValue[int32, archsimd.Int32x4](t)
-	testStorePartReturnValue[uint32, archsimd.Uint32x4](t)
-	testStorePartReturnValue[int64, archsimd.Int64x2](t)
-	testStorePartReturnValue[uint64, archsimd.Uint64x2](t)
-	testStorePartReturnValue[float32, archsimd.Float32x4](t)
-	testStorePartReturnValue[float64, archsimd.Float64x2](t)
+	// The 32- and 64-bit lane StoreParts store a short slice through
+	// StoreArrayMasked, which is VPMASKMOVD/Q: AVX2 even at 128 bits.
+	// Measured on an AVX-only Ivy Bridge, trendvidia/go#156.
+	if archsimd.X86.AVX2() {
+		testStorePartReturnValue[int32, archsimd.Int32x4](t)
+		testStorePartReturnValue[uint32, archsimd.Uint32x4](t)
+		testStorePartReturnValue[int64, archsimd.Int64x2](t)
+		testStorePartReturnValue[uint64, archsimd.Uint64x2](t)
+		testStorePartReturnValue[float32, archsimd.Float32x4](t)
+		testStorePartReturnValue[float64, archsimd.Float64x2](t)
+	}
 }

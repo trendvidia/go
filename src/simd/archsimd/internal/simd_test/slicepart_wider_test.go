@@ -326,16 +326,18 @@ func TestPartInt64(t *testing.T) {
 
 func TestStorePartReturnValuesWider(t *testing.T) {
 	// AVX2 / 256-bit types
-	testStorePartReturnValue[int8, archsimd.Int8x32](t)
-	testStorePartReturnValue[uint8, archsimd.Uint8x32](t)
-	testStorePartReturnValue[int16, archsimd.Int16x16](t)
-	testStorePartReturnValue[uint16, archsimd.Uint16x16](t)
-	testStorePartReturnValue[int32, archsimd.Int32x8](t)
-	testStorePartReturnValue[uint32, archsimd.Uint32x8](t)
-	testStorePartReturnValue[int64, archsimd.Int64x4](t)
-	testStorePartReturnValue[uint64, archsimd.Uint64x4](t)
-	testStorePartReturnValue[float32, archsimd.Float32x8](t)
-	testStorePartReturnValue[float64, archsimd.Float64x4](t)
+	if archsimd.X86.AVX2() {
+		testStorePartReturnValue[int8, archsimd.Int8x32](t)
+		testStorePartReturnValue[uint8, archsimd.Uint8x32](t)
+		testStorePartReturnValue[int16, archsimd.Int16x16](t)
+		testStorePartReturnValue[uint16, archsimd.Uint16x16](t)
+		testStorePartReturnValue[int32, archsimd.Int32x8](t)
+		testStorePartReturnValue[uint32, archsimd.Uint32x8](t)
+		testStorePartReturnValue[int64, archsimd.Int64x4](t)
+		testStorePartReturnValue[uint64, archsimd.Uint64x4](t)
+		testStorePartReturnValue[float32, archsimd.Float32x8](t)
+		testStorePartReturnValue[float64, archsimd.Float64x4](t)
+	}
 
 	// AVX512 / 512-bit types
 	if archsimd.X86.AVX512() {

@@ -104,7 +104,7 @@ func (r *resolver) walk(pkg *checkedPkg) walkResult {
 			if !ok || fd.Body == nil || fd.Recv != nil || !entryPoint(fd.Name.Name) {
 				continue
 			}
-			c := r.check(fd.Body)
+			c := r.check(fd.Body, nil)
 			res.violations = append(res.violations, c.violations...)
 			res.checked += c.checked
 			res.unresolved += c.unresolved
@@ -148,8 +148,10 @@ func typeCheckDir(t *testing.T, fset *token.FileSet, ctx *build.Context, dir, pa
 func typeCheckFiles(t *testing.T, fset *token.FileSet, path string, files []*ast.File, known *types.Package) *checkedPkg {
 	t.Helper()
 	info := &types.Info{
-		Uses: map[*ast.Ident]types.Object{},
-		Defs: map[*ast.Ident]types.Object{},
+		Uses:       map[*ast.Ident]types.Object{},
+		Defs:       map[*ast.Ident]types.Object{},
+		Instances:  map[*ast.Ident]types.Instance{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
 	}
 	conf := types.Config{
 		Importer: &knownImporter{deflt: importer.ForCompiler(fset, "gc", nil), known: known},
@@ -554,6 +556,10 @@ type resolver struct {
 	need    map[types.Object]requirement
 	helpers map[types.Object]*ast.FuncDecl
 	busy    map[types.Object]bool
+	// instantiated generic helpers, keyed by declaration and type arguments
+	instNeed map[string]requirement
+	instBusy map[string]bool
+	pkg      *types.Package
 }
 
 func newResolver(fset *token.FileSet, graph featureGraph, need map[types.Object]requirement, pkg *checkedPkg) *resolver {
@@ -572,11 +578,12 @@ func newResolver(fset *token.FileSet, graph featureGraph, need map[types.Object]
 	for k, v := range need {
 		own[k] = v
 	}
-	return &resolver{fset: fset, graph: graph, info: pkg.info, need: own, helpers: helpers}
+	return &resolver{fset: fset, graph: graph, info: pkg.info, need: own, helpers: helpers,
+		instNeed: map[string]requirement{}, instBusy: map[string]bool{}, pkg: pkg.pkg}
 }
 
-func (r *resolver) check(body *ast.BlockStmt) *guardChecker {
-	c := &guardChecker{r: r, guards: []string{"AVX"}}
+func (r *resolver) check(body *ast.BlockStmt, subst map[*types.TypeParam]types.Type) *guardChecker {
+	c := &guardChecker{r: r, guards: []string{"AVX"}, subst: subst}
 	c.block(body)
 	return c
 }
@@ -597,15 +604,50 @@ func (r *resolver) require(fn types.Object) (requirement, bool) {
 		return requirement{}, false
 	}
 	r.busy[fn] = true
-	c := r.check(fd.Body)
+	c := r.check(fd.Body, nil)
 	delete(r.busy, fn)
 	r.need[fn] = requirement{feats: r.graph.reduce(c.uncovered), unknown: c.unresolved > 0}
 	return r.need[fn], true
 }
 
+// requireInst returns the features one instantiation of a generic helper
+// needs. A generic helper's body says nothing by itself: `v.StorePart(s)` on
+// a type parameter resolves to the constraint's interface method, which is
+// no archsimd object, so the plain require would report the helper as
+// needing nothing however it is instantiated. That is how
+// TestStorePartReturnValues128 reached Int32x4.StorePart (VPMASKMOVD, AVX2)
+// unguarded with the pin green, trendvidia/go#156. Walking the body once per
+// instantiation, with the type arguments substituted for the parameters,
+// lets the selector checker find the concrete method.
+func (r *resolver) requireInst(fn types.Object, subst map[*types.TypeParam]types.Type) (requirement, bool) {
+	fd, ok := r.helpers[fn]
+	if !ok {
+		return requirement{}, false
+	}
+	sig := fn.Type().(*types.Signature)
+	key := fn.Name()
+	for i := 0; i < sig.TypeParams().Len(); i++ {
+		key += "|" + types.TypeString(subst[sig.TypeParams().At(i)], nil)
+	}
+	if req, ok := r.instNeed[key]; ok {
+		return req, true
+	}
+	if r.instBusy[key] {
+		return requirement{}, false
+	}
+	r.instBusy[key] = true
+	c := r.check(fd.Body, subst)
+	delete(r.instBusy, key)
+	r.instNeed[key] = requirement{feats: r.graph.reduce(c.uncovered), unknown: c.unresolved > 0}
+	return r.instNeed[key], true
+}
+
 type guardChecker struct {
-	r          *resolver
-	guards     []string
+	r      *resolver
+	guards []string
+	// subst maps the enclosing generic helper's type parameters to the
+	// arguments of the instantiation being checked; nil outside generics.
+	subst      map[*types.TypeParam]types.Type
 	checked    int
 	unresolved int
 	uncovered  []string
@@ -655,11 +697,39 @@ func (c *guardChecker) stmt(s ast.Node) {
 		case *ast.FuncLit:
 			c.block(n.Body)
 			return false
+		case *ast.SelectorExpr:
+			c.typeParamMethod(n)
 		case *ast.Ident:
 			c.ref(n)
 		}
 		return true
 	})
+}
+
+// typeParamMethod checks a method call on a type-parameter receiver against
+// the concrete method of the substituted type argument. Without it the call
+// is a reference to the constraint's interface method, which ref ignores.
+func (c *guardChecker) typeParamMethod(sel *ast.SelectorExpr) {
+	s, ok := c.r.info.Selections[sel]
+	if !ok || s.Kind() != types.MethodVal {
+		return
+	}
+	recv := s.Recv()
+	if p, ok := recv.(*types.Pointer); ok {
+		recv = p.Elem()
+	}
+	tp, ok := recv.(*types.TypeParam)
+	if !ok {
+		return
+	}
+	concrete, ok := c.subst[tp]
+	if !ok {
+		return
+	}
+	obj, _, _ := types.LookupFieldOrMethod(concrete, true, c.r.pkg, sel.Sel.Name)
+	if fn, ok := obj.(*types.Func); ok {
+		c.refFunc(sel.Sel, fn, nil)
+	}
 }
 
 // ref checks one reference to an archsimd function or method against the
@@ -669,7 +739,36 @@ func (c *guardChecker) ref(id *ast.Ident) {
 	if !ok {
 		return
 	}
-	req, ok := c.r.require(origin(fn))
+	// A call of a generic helper carries its type arguments here; map any
+	// that are themselves parameters of the enclosing helper through subst.
+	var subst map[*types.TypeParam]types.Type
+	if inst, ok := c.r.info.Instances[id]; ok && inst.TypeArgs != nil && inst.TypeArgs.Len() > 0 {
+		if sig, ok := origin(fn).Type().(*types.Signature); ok && sig.TypeParams().Len() == inst.TypeArgs.Len() {
+			subst = map[*types.TypeParam]types.Type{}
+			for i := 0; i < inst.TypeArgs.Len(); i++ {
+				arg := inst.TypeArgs.At(i)
+				if tp, ok := arg.(*types.TypeParam); ok {
+					if outer, ok := c.subst[tp]; ok {
+						arg = outer
+					}
+				}
+				subst[sig.TypeParams().At(i)] = arg
+			}
+		}
+	}
+	c.refFunc(id, fn, subst)
+}
+
+// refFunc checks one reference to fn, made at id, against the guards in
+// force; subst is set for a call of a generic helper.
+func (c *guardChecker) refFunc(id *ast.Ident, fn *types.Func, subst map[*types.TypeParam]types.Type) {
+	var req requirement
+	var ok bool
+	if subst != nil {
+		req, ok = c.r.requireInst(origin(fn), subst)
+	} else {
+		req, ok = c.r.require(origin(fn))
+	}
 	if !ok {
 		return
 	}

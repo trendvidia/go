@@ -1725,11 +1725,14 @@ func (ctxt *Link) hostlink() {
 	}
 
 	if *flagInterpreter != "" {
+		if strings.Contains(*flagInterpreter, ",") {
+			Exitf("invalid dynamic linker path %q", *flagInterpreter)
+		}
 		// Many linkers support both -I and the --dynamic-linker flags
 		// to set the ELF interpreter, but lld only supports
 		// --dynamic-linker so prefer that (ld on very old Solaris only
 		// supports -I but that seems less important).
-		argv = append(argv, fmt.Sprintf("-Wl,--dynamic-linker,%s", *flagInterpreter))
+		argv = append(argv, fmt.Sprintf("-Wl,--dynamic-linker=%s", *flagInterpreter))
 	}
 
 	// Force global symbols to be exported for dlopen, etc. Per-format
@@ -1819,7 +1822,7 @@ func (ctxt *Link) hostlink() {
 	checkStatic := func(arg string) {
 		if ctxt.IsELF && arg == "-static" {
 			for i := range argv {
-				if argv[i] == "-rdynamic" || strings.HasPrefix(argv[i], "-Wl,--dynamic-linker,") {
+				if argv[i] == "-rdynamic" || strings.HasPrefix(argv[i], "-Wl,--dynamic-linker=") {
 					argv[i] = "-static"
 				}
 			}

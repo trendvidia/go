@@ -28,6 +28,17 @@ import (
 // the original function's storage remains the GC root via its module's
 // gcdata bitmap; the slot is only an indirection pointer.
 //
+// The slots are taken on -shared as well as -dynlink, so every PIE
+// build gets them: every default darwin build and linux -buildmode=pie,
+// not only plugins. Most of those binaries never load a plugin, and a
+// host does not need slots to agree with plugins on function identity:
+// linux executable hosts have none and pass the identity suites through
+// the funcval export path (trendvidia/go#106). Restricting the slots to
+// -dynlink was measured to pass every plugin suite on darwin and to save
+// 1.09% of file size in belluikit/gallery (4,092 slots). It was declined
+// to keep what PIE hosts do at load unchanged (trendvidia/go#161).
+// TestPIEBuildsTakeFuncPtrSlots fails if they stop getting slots.
+//
 // (DATA accesses do not use a slot indirection: Bug D found that the
 // 3-deref globalptr-style pattern collides with the IAT semantics on
 // Windows internal-link plugins, and on POSIX the OS dynamic linker's

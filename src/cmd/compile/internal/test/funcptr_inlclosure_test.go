@@ -69,6 +69,46 @@ func main() {
 // The slots are taken under -shared, which cmd/go passes for PIE on
 // darwin and linux. That is every default darwin build.
 func TestInlinedClosureFuncPtrSlots(t *testing.T) {
+	exe, syms := buildInlClosurePIE(t)
+
+	// The test only means something if the build took the slot path.
+	// Look for any go.funcptr slot in the binary, not for one of
+	// Desc.func1's: the fix is that Desc.func1 no longer has one.
+	if !strings.Contains(syms, " go.funcptr.") {
+		t.Skipf("%s/%s pie build has no go.funcptr slots, so it does not take the path this test checks", runtime.GOOS, runtime.GOARCH)
+	}
+
+	out, err := testenv.Command(t, exe).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s: %v:\n%s", exe, err, out)
+	}
+	const want = "map[d:A type:string] map[d:B type:string]\n"
+	if string(out) != want {
+		t.Errorf("program printed %q, want %q", out, want)
+	}
+}
+
+// TestPIEBuildsTakeFuncPtrSlots pins the decision in trendvidia/go#161:
+// the compiler takes the go.funcptr slot path on -shared, so PIE builds
+// on darwin and linux get slots even when they never load a plugin.
+// Restricting the slots to -dynlink was measured and declined, to keep
+// what PIE hosts do at load unchanged. If this fails, the slots were
+// restricted; that reverses the decision, so revisit #161 rather than
+// deleting this test.
+func TestPIEBuildsTakeFuncPtrSlots(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skipf("the decision covers darwin and linux; %s PIE builds do not take the slot path", runtime.GOOS)
+	}
+	_, syms := buildInlClosurePIE(t)
+	if !strings.Contains(syms, " go.funcptr.") {
+		t.Errorf("%s/%s -buildmode=pie build has no go.funcptr slots; trendvidia/go#161 decided PIE builds keep them", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
+// buildInlClosurePIE builds inlClosureSrc with -buildmode=pie and returns
+// the executable's path and its go tool nm output.
+func buildInlClosurePIE(t *testing.T) (exe, syms string) {
+	t.Helper()
 	testenv.MustHaveGoRun(t)
 	if !platform.BuildModeSupported("gc", "pie", runtime.GOOS, runtime.GOARCH) {
 		t.Skipf("-buildmode=pie is not supported on %s/%s", runtime.GOOS, runtime.GOARCH)
@@ -85,32 +125,17 @@ func TestInlinedClosureFuncPtrSlots(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	exe := filepath.Join(dir, "repro.exe")
+	exe = filepath.Join(dir, "repro.exe")
 	build := testenv.Command(t, testenv.GoToolPath(t), "build", "-buildmode=pie", "-o", exe, ".")
 	build.Dir = dir
 	build.Env = append(build.Environ(), "GOFLAGS=", "GO111MODULE=on")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("%v: %v:\n%s", build.Args, err, out)
 	}
-
-	// The test only means something if the build took the slot path.
-	// Look for any go.funcptr slot in the binary, not for one of
-	// Desc.func1's: the fix is that Desc.func1 no longer has one.
 	nm := testenv.Command(t, testenv.GoToolPath(t), "tool", "nm", exe)
-	syms, err := nm.CombinedOutput()
+	out, err := nm.CombinedOutput()
 	if err != nil {
-		t.Fatalf("%v: %v:\n%s", nm.Args, err, syms)
+		t.Fatalf("%v: %v:\n%s", nm.Args, err, out)
 	}
-	if !strings.Contains(string(syms), " go.funcptr.") {
-		t.Skipf("%s/%s pie build has no go.funcptr slots, so it does not take the path this test checks", runtime.GOOS, runtime.GOARCH)
-	}
-
-	out, err := testenv.Command(t, exe).CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s: %v:\n%s", exe, err, out)
-	}
-	const want = "map[d:A type:string] map[d:B type:string]\n"
-	if string(out) != want {
-		t.Errorf("program printed %q, want %q", out, want)
-	}
+	return exe, string(out)
 }

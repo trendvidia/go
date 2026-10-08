@@ -45,7 +45,10 @@ func ldmacho(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 //     with -fembed-bitcode.
 //   - -Wl,-flat_namespace,-bind_at_load forces eager resolution for
 //     plugin support; deprecated on iOS so we skip it there
-//     (golang.org/issue/38824).
+//     (golang.org/issue/38824). With DWARF combining, also
+//     -Wl,-no_fixup_chains: macOS 27's dyld rejects a dlopen'd image
+//     whose chained-fixups segment count misses the added __DWARF
+//     segment (golang.org/issue/81793, trendvidia/go#160).
 //   - -Wl,-S suppresses STAB symbols when DWARF is not combined; -Wl,-x
 //     additionally suppresses local symbols if debug_s is set.
 //   - -Wl,-U,__dyld_get_dyld_header allows the race object's weak import
@@ -58,6 +61,14 @@ func machoArgs(ctxt *Link, argv []string, combineDwarf bool) []string {
 	}
 	if ctxt.DynlinkingGo() && buildcfg.GOOS != "ios" {
 		argv = append(argv, "-Wl,-flat_namespace", "-Wl,-bind_at_load")
+		if combineDwarf && linkerFlagSupported(ctxt.Arch, argv[0], "", "-Wl,-no_fixup_chains") {
+			// As of macOS 27, the dynamic linker checks the number of segments
+			// in recorded in LC_DYLD_CHAINED_FIXUPS and reject the shared object
+			// with a mismatch. When combining DWARF, we add a segment but
+			// currently don't fix up the recorded number. Pass -no_fixup_chains to
+			// the C linker as a workaround. See issue 81793.
+			argv = append(argv, "-Wl,-no_fixup_chains")
+		}
 	}
 	if !combineDwarf {
 		argv = append(argv, "-Wl,-S")

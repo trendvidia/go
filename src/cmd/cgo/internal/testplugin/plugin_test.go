@@ -2193,3 +2193,14 @@ func TestPELoadConfigPresent(t *testing.T) {
 		f.Close()
 	}
 }
+
+func TestIssue81303(t *testing.T) {
+	// Issue 81303: the itab copies of a plugin must not hide the itabs
+	// of the host for the same interface/type pairs.
+	globalSkip(t)
+	goCmd(t, "build", "-o", "issue81303.exe", "./issue81303/main.go")
+	goCmdBuildPluginFor(t, "issue81303", "-o", "issue81303p1"+pluginSuffix, "./issue81303/plugin1.go")
+	goCmdBuildPluginFor(t, "issue81303", "-o", "issue81303p2"+pluginSuffix, "./issue81303/plugin2.go")
+	goCmdBuildPluginFor(t, "issue81303", "-o", "issue81303p3"+pluginSuffix, "./issue81303/plugin3.go")
+	run(t, "./issue81303.exe")
+}

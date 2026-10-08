@@ -107,7 +107,7 @@ func runVersion(ctx context.Context, cmd *base.Command, args []string) {
 		// Bump this on every fork release. Anything matching on the
 		// marker should match the "(plus" prefix, not the whole string,
 		// so it survives the bump.
-		const forkVersionMarker = "(plus v1.27.1a)"
+		const forkVersionMarker = "(plus v1.27.2)"
 		fmt.Printf("go version %s %s/%s %s\n", v, runtime.GOOS, runtime.GOARCH, forkVersionMarker)
 		return
 	}

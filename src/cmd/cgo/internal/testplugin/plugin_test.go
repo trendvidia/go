@@ -1821,6 +1821,14 @@ func TestMethod3(t *testing.T) {
 	run(t, "./method3.exe")
 }
 
+func TestInlinedClosureAcrossPlugins(t *testing.T) {
+	globalSkip(t)
+	goCmd(t, "build", "-o", "inlclosure.exe", "./inlclosure/host")
+	goCmdBuildPluginFor(t, "inlclosure", "-o", "inlclosure-plugA"+pluginSuffix, "./inlclosure/plugA")
+	goCmdBuildPluginFor(t, "inlclosure", "-o", "inlclosure-plugB"+pluginSuffix, "./inlclosure/plugB")
+	run(t, "./inlclosure.exe")
+}
+
 func TestIssue44956(t *testing.T) {
 	globalSkip(t)
 	goCmd(t, "build", "-o", "issue44956.exe", "./issue44956/main.go")

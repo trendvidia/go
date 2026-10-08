@@ -49,6 +49,20 @@ func slotLsym(prefix string, orig *obj.LSym) *obj.LSym {
 		// dwarf_test.go::TestStaticTmp.
 		return nil
 	}
+	if obj.TrimInlineHash(orig.Name) != orig.Name {
+		// A closure created by inlining carries a #hash# suffix that
+		// keeps it apart from its siblings only inside the compiler:
+		// the object writer strips it, so every copy of the closure
+		// reaches the linker and the runtime under one name. Go 1.27
+		// specialises those copies on their constant captures, so
+		// they need not share a body. A DUPOK slot under the trimmed
+		// name would make the linker keep one slot for all of them,
+		// and every copy would call the first body (trendvidia/go#158).
+		// The name does not identify the function across modules
+		// either, so canonicalising by it would be just as wrong.
+		// Address it directly instead.
+		return nil
+	}
 	name := prefix + orig.Name
 	s := base.Ctxt.Lookup(name)
 	// Record the slot for deferred, order-stable emission. We do NOT

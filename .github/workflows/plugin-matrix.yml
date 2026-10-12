@@ -1,14 +1,15 @@
 # Cross-platform plugin validation matrix (ROADMAP A3, issue #4).
 #
-# Replaces the manual over-SSH sweep with CI on self-hosted runners, one
-# per platform. Each runner carries a custom label equal to its machine
-# name; the matrix targets [self-hosted, <machine>]:
+# One GitHub-hosted runner per platform:
 #
-#   darwin/arm64   -> mini
-#   linux/amd64    -> maclin
-#   linux/arm64    -> linux_parallels
-#   windows/amd64  -> windows_omen
-#   windows/arm64  -> windows_parallels
+#   darwin/arm64   -> macos-15
+#   linux/amd64    -> ubuntu-24.04
+#   linux/arm64    -> ubuntu-24.04-arm
+#   windows/amd64  -> windows-2025
+#   windows/arm64  -> windows-11-arm
+#
+# Hosted x64 machines all have AVX2, so no leg covers an AVX-only CPU;
+# that path is checked by hand on such a machine.
 #
 # Each leg builds the toolchain from source and runs the plugin-relevant
 # test packages, catching cross-platform plugin regressions at PR time.
@@ -35,19 +36,27 @@ jobs:
       matrix:
         include:
           - platform: darwin/arm64
-            runner: mini
+            runner: macos-15
           - platform: linux/amd64
-            runner: maclin
+            runner: ubuntu-24.04
           - platform: linux/arm64
-            runner: linux_parallels
+            runner: ubuntu-24.04-arm
           - platform: windows/amd64
-            runner: windows_omen
+            runner: windows-2025
           - platform: windows/arm64
-            runner: windows_parallels
-    runs-on: [self-hosted, "${{ matrix.runner }}"]
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+
+      # Hosted images have no go-plus to bootstrap from; any Go >= 1.24.6
+      # will do (src/cmd/dist/notgo124.go). Its cache is off: the cold
+      # GOCACHE below is the point.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache: false
 
       # trendvidia/go-archive#81: give every run a cold, private build cache.
       #
@@ -109,10 +118,9 @@ jobs:
       # cmd/cgo/internal/testplugin/plugin_test.go and
       # cmd/internal/testplugin/plugin_test.go both set globalSkip on
       # `!testenv.HasCGO() && runtime.GOOS != "windows"` -- and a run that
-      # skips everything still reports success. With dist-test's linux/amd64
-      # row removed (#87/#88) this leg is the only automated linux/amd64
-      # signal left, so assert the precondition instead of trusting a green
-      # tick that a missing C compiler would produce just as readily.
+      # skips everything still reports success. So assert the precondition
+      # instead of trusting a green tick that a missing C compiler would
+      # produce just as readily.
       - name: Assert cgo is available (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -121,10 +129,8 @@ jobs:
 
       # internal/buildcfg is in the list for the reason dist-test.yml gives at
       # its Windows lane: the build above deliberately does NOT unset
-      # CGO_ENABLED, so TestDefaultCGOEnabledUnset (#9, #54) DETECTS a runner
-      # whose service environment exports it. The Unix legs used to get that
-      # pin from all.bash in dist-test; linux/amd64 no longer runs all.bash
-      # anywhere (#87/#88), which left `maclin` with no execution of it at all.
+      # CGO_ENABLED, so TestDefaultCGOEnabledUnset (trendvidia/go-archive#9)
+      # DETECTS a runner whose environment exports it.
       - name: Plugin validation
         if: runner.os != 'Windows'
         run: |
@@ -143,6 +149,15 @@ jobs:
         run: |
           for /f "delims=" %%i in ('go env GOROOT') do set "GOROOT_BOOTSTRAP=%%i"
           call make.bat
+
+      # The cgo fixtures need a C compiler. Print which one this image
+      # provides, so a leg that silently runs without cgo is visible.
+      - name: C toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          bin\go env CGO_ENABLED CC
+          where gcc clang 2>nul || echo no gcc or clang on PATH
 
       - name: Plugin validation (Windows)
         if: runner.os == 'Windows'

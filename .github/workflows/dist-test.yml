@@ -1,20 +1,20 @@
 name: dist-test
 
-# Per-platform validation of the fork, built FROM SOURCE on each box
-# (bootstrapped by the box's own installed go-plus, GOROOT_BOOTSTRAP=$(go env GOROOT);
-# the GitHub-hosted linux/amd64 leg bootstraps from stock Go via setup-go).
+# Per-platform validation of the fork, built FROM SOURCE on a GitHub-hosted
+# runner per platform, bootstrapped from stock Go installed by setup-go.
 #
 # darwin/arm64, linux/arm64, linux/amd64: the FULL Go dist test (src/all.bash)
 # — the rigorous check that the toolchain, runtime and whole stdlib are correct.
 #
 # windows/{amd64,arm64}: build (make.bat) + a core-stdlib smoke, NOT full all.bat.
-# The full Windows dist test fails on OS-integration corners that self-hosted
-# workgroup/VM Windows boxes don't satisfy (symlink privilege, workgroup
-# NETWORK-SERVICE account resolution) — environmental, not fork defects; see #16.
+# The full Windows dist test failed on OS-integration corners of the
+# self-hosted boxes this ran on before (symlink privilege, workgroup
+# NETWORK-SERVICE account resolution; trendvidia/go-archive#16) — environmental, not
+# fork defects.
 # The fork's Windows-specific feature (plugin load/unload) is validated on all 5
 # platforms by plugin-matrix.yml, so here Windows proves it BUILDS + runs core code.
 #
-# Runner labels match release-binaries.yml / plugin-matrix.yml (per-machine labels).
+# Runner labels match release-binaries.yml and plugin-matrix.yml.
 
 on:
   push:
@@ -40,37 +40,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runs-on: [self-hosted, mini], goos: darwin, goarch: arm64 }
-          # linux/amd64 runs on a GitHub-hosted runner. It used to run on
-          # `trader`, a self-hosted VPS whose provider throttled it in 2026-08
-          # into a 7x slowdown and false reds (trendvidia/go-archive#87); the hosted
-          # image takes that host out of the gate.
-          #
-          # What moved with it is CPU coverage. `trader` guaranteed AVX2 and
-          # AVX-512; a hosted runner is whatever Azure machine it lands on, so
-          # the leg logs its CPU features below rather than assuming them.
-          # maclin (pre-Haswell, AVX-only, where #88's SIGILL was found) keeps
-          # plugin-matrix's linux/amd64 leg, which runs the plugin suites, NOT
-          # all.bash -- nothing in CI runs all.bash on an AVX-only host.
+          # GitHub-hosted, one per platform. Hosted x64 machines all have
+          # AVX2, so no leg covers an AVX-only CPU (where trendvidia/go-archive#88
+          # was found); that path is checked by hand on such a machine.
+          - { runs-on: macos-15, goos: darwin, goarch: arm64 }
           - { runs-on: ubuntu-24.04, goos: linux, goarch: amd64 }
-          - { runs-on: [self-hosted, linux_parallels], goos: linux, goarch: arm64 }
-          - { runs-on: [self-hosted, windows_omen], goos: windows, goarch: amd64 }
-          - { runs-on: [self-hosted, windows_parallels], goos: windows, goarch: arm64 }
+          - { runs-on: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
+          - { runs-on: windows-2025, goos: windows, goarch: amd64 }
+          - { runs-on: windows-11-arm, goos: windows, goarch: arm64 }
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
 
-      # A hosted runner has no go-plus installed to bootstrap from; any Go
-      # >= 1.24.6 will do (src/cmd/dist/notgo124.go). Its own cache is off:
-      # the cold GOCACHE below is the point of this workflow.
+      # Hosted images have no go-plus to bootstrap from; any Go >= 1.24.6
+      # will do (src/cmd/dist/notgo124.go). Its own cache is off: the cold
+      # GOCACHE below is the point of this workflow.
       - uses: actions/setup-go@v6
-        if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26.x'
           cache: false
-      - name: CPU features (hosted)
-        if: runner.environment == 'github-hosted' && runner.os == 'Linux'
+      - name: CPU features
+        if: runner.os == 'Linux'
         run: |
           grep -m1 'model name' /proc/cpuinfo
           for f in avx avx2 fma avx512f avx512bw avx512vl; do

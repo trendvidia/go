@@ -1,6 +1,7 @@
 # Builds native toolchain archives for each platform and attaches them
 # to an existing GitHub release. Manually dispatched with the release
-# tag; builds on the self-hosted runners (one per platform), packages
+# tag; builds natively on one runner per platform (self-hosted, except
+# linux/amd64 on a GitHub-hosted image), packages
 # the built go tree as go<version>-plus.<goos>-<goarch>.tar.gz, and
 # uploads it as a release asset.
 name: release-binaries
@@ -27,22 +28,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: mini, goos: darwin, goarch: arm64 }
-          # linux/amd64 is back on `trader` along with dist-test's row
-          # (trendvidia/go#87), which also retires the gap this comment used to
-          # record: the artifact was being built on maclin, a host no full dist
-          # test had ever passed on. It is now built on the same host that runs
-          # all.bash for this arch.
-          - { runner: trader, goos: linux, goarch: amd64 }
-          - { runner: linux_parallels, goos: linux, goarch: arm64 }
-          - { runner: windows_omen, goos: windows, goarch: amd64 }
-          - { runner: windows_parallels, goos: windows, goarch: arm64 }
-    runs-on: [self-hosted, "${{ matrix.runner }}"]
+          - { runs-on: [self-hosted, mini], goos: darwin, goarch: arm64 }
+          # linux/amd64 builds on the same GitHub-hosted image that runs
+          # dist-test's all.bash for this arch, so the artifact comes from a
+          # host a full dist test passes on.
+          - { runs-on: ubuntu-24.04, goos: linux, goarch: amd64 }
+          - { runs-on: [self-hosted, linux_parallels], goos: linux, goarch: arm64 }
+          - { runs-on: [self-hosted, windows_omen], goos: windows, goarch: amd64 }
+          - { runs-on: [self-hosted, windows_parallels], goos: windows, goarch: arm64 }
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag }}
+
+      # A hosted runner has no go-plus installed to bootstrap from; any Go
+      # >= 1.24.6 will do (src/cmd/dist/notgo124.go).
+      - uses: actions/setup-go@v6
+        if: runner.environment == 'github-hosted'
+        with:
+          go-version: '1.26.x'
+          cache: false
 
       # --- Build the toolchain natively ---
       # CGO_ENABLED is unset for make.bash/make.bat on purpose: cmd/dist bakes
@@ -55,7 +62,8 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: src
         run: |
-          export GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          export GOROOT_BOOTSTRAP
           env -u CGO_ENABLED ./make.bash
 
       - name: Build toolchain (Windows)

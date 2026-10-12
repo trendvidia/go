@@ -101,7 +101,8 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: src
         run: |
-          export GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          export GOROOT_BOOTSTRAP
           ./make.bash
 
       # Both POSIX plugin suites skip WHOLESALE when cgo is unavailable --

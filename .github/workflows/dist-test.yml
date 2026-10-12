@@ -1,15 +1,11 @@
 name: dist-test
 
-# Per-platform validation of the fork, built FROM SOURCE on each self-hosted box
-# (bootstrapped by the box's own installed go-plus, GOROOT_BOOTSTRAP=$(go env GOROOT)).
+# Per-platform validation of the fork, built FROM SOURCE on each box
+# (bootstrapped by the box's own installed go-plus, GOROOT_BOOTSTRAP=$(go env GOROOT);
+# the GitHub-hosted linux/amd64 leg bootstraps from stock Go via setup-go).
 #
-# darwin/arm64 + linux/arm64: the FULL Go dist test (src/all.bash) — the
-# rigorous check that the toolchain, runtime and whole stdlib are correct.
-#
-# linux/amd64 ran all.bash here too until its host was lost (#87) and the
-# replacement turned out to SIGILL in it (#88). That row is REMOVED, not
-# repointed, so no leg below runs all.bash on amd64 — the matrix comment
-# where the row used to be states the gap and the condition for restoring it.
+# darwin/arm64, linux/arm64, linux/amd64: the FULL Go dist test (src/all.bash)
+# — the rigorous check that the toolchain, runtime and whole stdlib are correct.
 #
 # windows/{amd64,arm64}: build (make.bat) + a core-stdlib smoke, NOT full all.bat.
 # The full Windows dist test fails on OS-integration corners that self-hosted
@@ -26,8 +22,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    # Nightly 06:00 UTC sweep across every box in the matrix below
-    # (four while linux/amd64's row is out — #87/#88).
+    # Nightly 06:00 UTC sweep across every leg in the matrix below.
     - cron: '0 6 * * *'
 
 # A full all.bash per Unix leg is expensive; supersede in-flight runs for the ref.
@@ -45,34 +40,42 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: mini, goos: darwin, goarch: arm64 }
-          # linux/amd64 is back on `trader`. Its provider throttled that VPS
-          # in 2026-08 -- a 9.3-minute run became 78+ minutes and false-red'd
-          # runtime/pprof's magnitude assertion -- and this row was removed
-          # rather than left red, so PRs gated on checks that could pass
-          # (trendvidia/go#87). Measured 2026-09-08 at 3bf1139668: all.bash
-          # 13.4 min, ALL TESTS PASSED, back inside the 5.5-15.1 min band the
-          # row ran in before.
+          - { runs-on: [self-hosted, mini], goos: darwin, goarch: arm64 }
+          # linux/amd64 runs on a GitHub-hosted runner. It used to run on
+          # `trader`, a self-hosted VPS whose provider throttled it in 2026-08
+          # into a 7x slowdown and false reds (trendvidia/go#87); the hosted
+          # image takes that host out of the gate.
           #
-          # It has to be this host. `trader` is the only amd64 machine here
-          # with AVX2 and AVX-512; maclin is a pre-Haswell AVX-only box, which
-          # is where #88's SIGILL was found. plugin-matrix keeps its
-          # linux/amd64 leg on maclin, so the two hosts cover different CPUs on
-          # purpose -- but that leg runs the plugin suites, NOT all.bash.
-          #
-          # Nothing in CI runs all.bash on an AVX-only host. Measured by hand
-          # 2026-09-08 at 3bf1139668, maclin now passes it (ALL TESTS PASSED),
-          # so #88's fix holds on the box that found it and maclin is a usable
-          # fallback for this row; a regression of #88's class would not be
-          # caught by CI, only by rerunning that.
-          - { runner: trader, goos: linux, goarch: amd64 }
-          - { runner: linux_parallels, goos: linux, goarch: arm64 }
-          - { runner: windows_omen, goos: windows, goarch: amd64 }
-          - { runner: windows_parallels, goos: windows, goarch: arm64 }
-    runs-on: [self-hosted, "${{ matrix.runner }}"]
+          # What moved with it is CPU coverage. `trader` guaranteed AVX2 and
+          # AVX-512; a hosted runner is whatever Azure machine it lands on, so
+          # the leg logs its CPU features below rather than assuming them.
+          # maclin (pre-Haswell, AVX-only, where #88's SIGILL was found) keeps
+          # plugin-matrix's linux/amd64 leg, which runs the plugin suites, NOT
+          # all.bash -- nothing in CI runs all.bash on an AVX-only host.
+          - { runs-on: ubuntu-24.04, goos: linux, goarch: amd64 }
+          - { runs-on: [self-hosted, linux_parallels], goos: linux, goarch: arm64 }
+          - { runs-on: [self-hosted, windows_omen], goos: windows, goarch: amd64 }
+          - { runs-on: [self-hosted, windows_parallels], goos: windows, goarch: arm64 }
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
+
+      # A hosted runner has no go-plus installed to bootstrap from; any Go
+      # >= 1.24.6 will do (src/cmd/dist/notgo124.go). Its own cache is off:
+      # the cold GOCACHE below is the point of this workflow.
+      - uses: actions/setup-go@v6
+        if: runner.environment == 'github-hosted'
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: CPU features (hosted)
+        if: runner.environment == 'github-hosted' && runner.os == 'Linux'
+        run: |
+          grep -m1 'model name' /proc/cpuinfo
+          for f in avx avx2 fma avx512f avx512bw avx512vl; do
+            grep -qw "$f" /proc/cpuinfo && echo "has $f" || echo "lacks $f"
+          done
       # trendvidia/go#81: give every run a cold, private build cache.
       #
       # This fork's VERSION is release-style (go1.26.5), so cmd/go keys
@@ -124,7 +127,8 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: src
         run: |
-          export GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          export GOROOT_BOOTSTRAP
           ./all.bash
 
       # Windows: build the toolchain, then smoke-test a curated set of PURE core

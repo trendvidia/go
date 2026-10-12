@@ -60,6 +60,24 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: false
+
+      # windows/arm64 images put an x64 mingw gcc first on PATH, which cannot
+      # assemble arm64 (runtime/cgo's gcc_arm64.S fails in make.bat). Use
+      # MSYS2's clangarm64 toolchain, which targets arm64 Windows and is what
+      # the self-hosted arm64 box used.
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        with:
+          msystem: CLANGARM64
+          update: false
+          install: mingw-w64-clang-aarch64-clang
+      - name: Use clangarm64 for cgo (Windows arm64)
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        shell: pwsh
+        run: |
+          "${{ steps.msys2.outputs.msys2-location }}\clangarm64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          "CC=clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: CPU features (x64)
         if: runner.os == 'Linux' && runner.arch == 'X64'
         run: |

@@ -56,12 +56,18 @@ func runBug(ctx context.Context, cmd *base.Command, args []string) {
 	buf.WriteString(bugFooter)
 
 	body := buf.String()
-	url := "https://github.com/golang/go/issues/new?body=" + urlpkg.QueryEscape(body)
+	// Reports from this toolchain go to the fork's tracker, not upstream's:
+	// upstream cannot act on a bug in code it does not ship, and a bug that
+	// reproduces with stock Go is redirected there by the fork's template.
+	url := forkIssueURL + "?body=" + urlpkg.QueryEscape(body)
 	if !web.OpenBrowser(url) {
-		fmt.Print("Please file a new issue at golang.org/issue/new using this template:\n\n")
+		fmt.Printf("Please file a new issue at %s using this template:\n\n", forkIssueURL)
 		fmt.Print(body)
 	}
 }
+
+// forkIssueURL is where go bug files reports for this fork.
+const forkIssueURL = "https://github.com/trendvidia/go/issues/new"
 
 const bugHeader = `<!-- Please answer these questions before submitting your issue. Thanks! -->
 

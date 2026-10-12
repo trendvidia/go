@@ -1,32 +1,60 @@
-# The Go Programming Language
+# go-plus: Go with plugins on Windows
 
-Go is an open source programming language that makes it easy to build simple,
-reliable, and efficient software.
+go-plus is a fork of the Go toolchain, maintained by TrendVidia. Its main
+addition is `go build -buildmode=plugin` on Windows, which upstream Go
+does not support.
 
-![Gopher image](https://golang.org/doc/gopher/fiveyears.jpg)
-*Gopher image by [Renee French][rf], licensed under [Creative Commons 4.0 Attribution license][cc4-by].*
+**This is not the official Go distribution.** It is not affiliated with or
+endorsed by Google or the Go project. For stock Go, see https://go.dev and
+https://github.com/golang/go. Go is a trademark of Google LLC.
 
-Our canonical Git repository is located at https://go.googlesource.com/go.
-There is a mirror of the repository at https://github.com/golang/go.
+Each release tracks an upstream Go release and keeps its version number.
+`go version` names both:
 
-Unless otherwise noted, the Go source files are distributed under the
-BSD-style license found in the LICENSE file.
+```
+go version go1.27.2 windows/amd64 (plus v1.27.2)
+```
 
-### Download and Install
+### What the fork adds
 
-#### Binary Distributions
+- **Plugins on Windows.** `-buildmode=plugin` works on windows/amd64 and
+  windows/arm64. Upstream supports plugins only on Linux, FreeBSD and
+  macOS. A plugin is a DLL. The host and its plugins share packages,
+  types and interface tables, so type assertions and type switches work
+  across the boundary.
+- **Unloading plugins.** `(*plugin.Plugin).Close` unloads a plugin, on
+  every platform that supports plugins. Func values that `Lookup`
+  returned panic after `Close` instead of jumping into unmapped code.
+  Upstream plugins can never be unloaded.
+- **Hot-swapping.** A program can replace a plugin with a new build while
+  it runs: quiesce, `Close` the old plugin, `Open` the new one. See
+  "Replacing a plugin at run time" below for the cost and the rules.
+- **Version checks on every shared package.** `plugin.Open` rejects a
+  plugin built against a different version of any package it shares
+  with the host, not only a different toolchain.
 
-Official binary distributions are available at https://go.dev/dl/.
+Everything else is upstream Go. The fork changes the compiler, linker,
+runtime and `plugin` package; see "Binary/object format differences"
+below for what that means for programs that never load a plugin.
 
-After downloading a binary release, visit https://go.dev/doc/install
-for installation instructions.
+### Install
 
-#### Install From Source
+Prebuilt toolchains for darwin/arm64, linux/amd64, linux/arm64,
+windows/amd64 and windows/arm64 are attached to each
+[release](https://github.com/trendvidia/go/releases). Each archive has
+the same layout as an upstream Go archive: unpack it and put `go/bin` on
+your `PATH`.
 
-If a binary distribution is not available for your combination of
-operating system and architecture, visit
-https://go.dev/doc/install/source
-for source installation instructions.
+To build from source, see the next section.
+
+### Reporting problems
+
+- Bugs in the fork: [open an issue](https://github.com/trendvidia/go/issues/new/choose)
+  here, or run `go bug`, which opens one with your environment filled in.
+- Bugs that also reproduce with stock Go belong upstream, at
+  https://github.com/golang/go/issues.
+- Security vulnerabilities: see [SECURITY.md](SECURITY.md). Do not file
+  them as public issues.
 
 ### Building this fork
 
@@ -73,59 +101,34 @@ crashing the host:
 - **Per-package version-lock hashes.** Objects/binaries carry per-package
   build fingerprints so `plugin.Open` can reject a plugin built against a
   divergent version of *any* shared package (runtime, protobuf, etc.),
-  not just a compiler-version mismatch. See the `plugin` package docs and
-  [trendvidia/go#7](https://github.com/trendvidia/go/issues/7).
+  not just a compiler-version mismatch. See the `plugin` package docs.
 
-**Reproducibility.** Because these `go.funcptr` slots are created while
-functions are compiled in parallel, an earlier version emitted them in
-goroutine-scheduling order, which made builds non-reproducible
-(intermittently). This was fixed by emitting the slots sorted by name at
-the end of compilation; builds are now bit-for-bit reproducible and the
-upstream `cmd/go` `TestScript/repro_build` test passes. See
-[trendvidia/go#8](https://github.com/trendvidia/go/issues/8).
+**Reproducibility.** Builds are bit-for-bit reproducible, as upstream's
+are: the `go.funcptr` slots are emitted sorted by name, and the upstream
+`cmd/go` `TestScript/repro_build` test passes.
 
 ### Known limitations of the plugin support
 
-Current for **go1.27.2-plus**. Each is tracked; none prevents loading a
-plugin on any supported platform.
-
-The go1.26.5-plus to go1.26.8-plus step could be carried forward by
-argument, because that was a base bump that changed nothing in the plugin
-path. go1.27.1 is not that: it removed typelinks and itablinks, re-laid
-out the type and itab region, and took two linker fixes and a runtime fix
-in the plugin path to land
-([#139](https://github.com/trendvidia/go/issues/139),
-[#150](https://github.com/trendvidia/go/issues/150)). So the numbers below
-were re-measured at this base rather than inherited, per platform, on the
-same hosts CI uses. What rests on the plugin suites being green on all
-five legs, rather than on its own measurement, is said where it applies.
-
-go1.27.2 changed the plugin path again, in one place: upstream's
-`itabTableType.add` now skips an itab whose interface/type pair is
-already registered (golang/go#81324). The swap-window numbers below were
-re-measured at go1.27.2-plus for that reason.
+None of these prevents loading a plugin on any supported platform. The
+measurements below were taken per platform on the hosts CI uses.
 
 **A plugin cannot link a third-party C or C++ library on windows/arm64.**
-Measured 2026-09-08 on both arches with a static archive built by
-clang/gcc: windows/amd64 links and runs it (C and C++ alike, STL
-included), windows/arm64 fails. Plugins there are linked internally,
-which resolves no `-l` archive, and external linking of a cgo plugin on
-that arch does not work yet
-([#131](https://github.com/trendvidia/go/issues/131)). Self-contained cgo
-and calls into system DLLs do work on arm64. Keeping native dependencies
-in the host, which has no such restriction, avoids the question on both
-arches. That measurement is from the go1.26.8-plus base and was not
-repeated at go1.27.1-plus or go1.27.2-plus: #131 is untouched by either
-base, and the plugin suites are green on both arches at both.
+Measured on both arches with a static archive built by clang/gcc:
+windows/amd64 links and runs it (C and C++ alike, STL included),
+windows/arm64 fails. Plugins there are linked internally, which resolves
+no `-l` archive, and external linking of a cgo plugin on that arch does
+not work yet. Self-contained cgo and calls into system DLLs do work on
+arm64. Keeping native dependencies in the host, which has no such
+restriction, avoids the question on both arches.
 
 **Replacing a plugin at run time requires closing the old one first.**
 The first module carrying a `(package, link-time hash)` owns it, and
 later modules carrying that package depend on the owner, so a newly
 loaded generation pins the one it replaces and only the newest is ever
 closable. An upgrade must quiesce, `Close`, then `Open` the replacement —
-which leaves a window where nothing is serving. Median, re-measured at
-go1.27.2-plus over runs of 100, 200 and 400 cycles with 4 workers (the
-Windows fixtures built with `CGO_ENABLED=0`):
+which leaves a window where nothing is serving. Median over runs of 100,
+200 and 400 cycles with 4 workers (the Windows fixtures built with
+`CGO_ENABLED=0`):
 
 | platform | window (p50) |
 |---|---|
@@ -140,16 +143,14 @@ on linux from Darwin's. Budget for the platform you ship on rather than
 for the worst row. Each cycle also costs 439 to 678 KiB of reserved
 address space on windows/amd64; the fixture's counter for that reads zero
 on linux and Darwin, so it has only ever been a Windows figure.
-`cmd/cgo/internal/testplugin/testdata/hotswap` is both the pin and a
-worked example of the supervisor
-([#136](https://github.com/trendvidia/go/issues/136) records why the
-window exists; closing it is not currently planned, so treat the window as
-part of the upgrade contract rather than as a defect awaiting a fix).
+`cmd/cgo/internal/testplugin/testdata/hotswap` is both the test and a
+worked example of the supervisor. Closing the window is not currently
+planned, so treat it as part of the upgrade contract rather than as a
+defect awaiting a fix.
 
 **`plugin.Open` keys its cache on the path as given**, so the same DLL
 opened under two spellings of a Windows drive letter (`C:\` vs `c:\`)
-loads twice ([#100](https://github.com/trendvidia/go/issues/100)).
-Canonicalise paths before calling `Open`.
+loads twice. Canonicalise paths before calling `Open`.
 
 **The upgrade contract is the caller's to keep.** `Plugin.Close`
 neutralises the func values `Lookup` returned and the static `·f`
@@ -159,13 +160,12 @@ plugin-defined type, or an interface whose dynamic type lives there. See
 
 ### Contributing
 
-Go is the work of thousands of contributors. We appreciate your help!
+See [CONTRIBUTING.md](CONTRIBUTING.md). Changes to Go itself, as opposed
+to the fork's additions, belong upstream: https://go.dev/doc/contribute.
 
-To contribute, please read the contribution guidelines at https://go.dev/doc/contribute.
+### License
 
-Note that the Go project uses the issue tracker for bug reports and
-proposals only. See https://go.dev/wiki/Questions for a list of
-places to ask questions about the Go language.
-
-[rf]: https://reneefrench.blogspot.com/
-[cc4-by]: https://creativecommons.org/licenses/by/4.0/
+Unless otherwise noted, the source files are distributed under the
+BSD-style license found in the LICENSE file, the same license as
+upstream Go. PATENTS is upstream Go's patent grant for the code that
+came from it.

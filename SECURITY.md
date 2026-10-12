@@ -1,13 +1,23 @@
 # Security Policy
 
-## Supported Versions
+go-plus is a fork of Go. This policy covers the fork. Upstream Go has its
+own: https://go.dev/security/policy.
 
-We support the past two Go releases (for example, Go 1.17.x and Go 1.18.x when Go 1.18.x is the latest stable release).
+## Supported versions
 
-See https://go.dev/wiki/Go-Release-Cycle and in particular the
-[Release Maintenance](https://go.dev/wiki/Go-Release-Cycle#release-maintenance)
-part of that page.
+Security fixes go into the latest go-plus release. Each release tracks an
+upstream Go point release, so upstream security fixes arrive when the fork
+moves to the upstream release that carries them.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-See https://go.dev/security/policy for how to report a vulnerability.
+Report it privately through GitHub:
+[open a security advisory](https://github.com/trendvidia/go/security/advisories/new).
+Do not file a public issue.
+
+Please include the `go version` output, the platform, and a way to
+reproduce it.
+
+**If it also reproduces with stock Go**, it is an upstream vulnerability.
+Report it to the Go team as their policy describes, and tell us here as
+well so the fork can pick up the fix.

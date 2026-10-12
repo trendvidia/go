@@ -1,5 +1,11 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Questions
-    about: Please use one of the forums for questions or general discussions
-    url:  https://go.dev/wiki/Questions
+  - name: Security vulnerability
+    about: Report it privately, not as a public issue
+    url: https://github.com/trendvidia/go/security/advisories/new
+  - name: Bug that also happens with stock Go
+    about: Upstream Go bugs belong in the Go project's tracker
+    url: https://github.com/golang/go/issues
+  - name: Questions about Go
+    about: The Go community's forums
+    url: https://go.dev/wiki/Questions

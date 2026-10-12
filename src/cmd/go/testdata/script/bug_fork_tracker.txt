@@ -1,0 +1,32 @@
+# go bug in this fork opens an issue on the fork's tracker, not upstream's.
+
+go install
+env BROWSER=$GOPATH/bin/browser
+go bug
+exists $TMPDIR/browser
+grep '^https://github.com/trendvidia/go/issues/new$' $TMPDIR/browser
+! grep 'golang/go' $TMPDIR/browser
+
+-- go.mod --
+module browser
+
+-- main.go --
+package main
+
+import (
+	"net/url"
+	"os"
+	"path/filepath"
+)
+
+func main() {
+	u, err := url.Parse(os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	u.RawQuery = ""
+	out := filepath.Join(os.TempDir(), "browser")
+	if err := os.WriteFile(out, []byte(u.String()+"\n"), 0o666); err != nil {
+		panic(err)
+	}
+}

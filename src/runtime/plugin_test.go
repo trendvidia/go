@@ -57,7 +57,7 @@ func TestPkgFromInitName(t *testing.T) {
 // non-empty and lies wholly inside [types, etypes), after the descriptor
 // prefix. If this test fails, the layout moved -- go re-read
 // canonicalizeTypeInModule before concluding a range test is safe again
-// (trendvidia/go#139, port item 4).
+// (trendvidia/go-archive#139, port item 4).
 func TestModuleItabsSitInsideTypesRange(t *testing.T) {
 	types, typedesclen, itaboffset, itabsize, etypes := runtime.FirstModuleTypeRegion()
 

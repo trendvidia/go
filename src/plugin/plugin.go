@@ -87,7 +87,7 @@
 //	func main() {} // ignored by -buildmode=plugin; keeps `go build ./...` and go vet green
 //
 // is a supported, canonical pattern; you do not need a `//go:build`
-// stub to drop `func main` out of the plugin build. See trendvidia/go#6.
+// stub to drop `func main` out of the plugin build. See trendvidia/go-archive#6.
 //
 // # Version locking spans all shared packages (fork note)
 //
@@ -95,7 +95,7 @@
 // the host and the plugin differs from the host's build of that same
 // package — not merely a single toolchain/compiler version. The same
 // comparison runs against every already-loaded plugin for packages the
-// host does not link (trendvidia/go#24), so two plugins built from
+// host does not link (trendvidia/go-archive#24), so two plugins built from
 // different sources of one dependency cannot coexist silently: the
 // first loader owns the package and later divergent builds are
 // refused. The lock surface is every shared package: the runtime,
@@ -118,7 +118,7 @@
 //
 // so the diverging package — and which loaded module holds the stale
 // build — is identifiable without decoding the raw loader message. See
-// trendvidia/go#7.
+// trendvidia/go-archive#7.
 //
 // # Toolchain ABI fence (fork note)
 //
@@ -216,7 +216,7 @@ type Plugin struct {
 // rather than returning the open plugin. Case is deliberately not
 // folded, because a directory with the NTFS per-directory
 // case-sensitivity flag really can hold two files whose names differ
-// only in case (trendvidia/go#100). A program that may spell a path
+// only in case (trendvidia/go-archive#100). A program that may spell a path
 // more than one way should canonicalise it once and open it by that
 // spelling.
 func Open(path string) (*Plugin, error) {
@@ -241,7 +241,7 @@ func Open(path string) (*Plugin, error) {
 // Once the plugin has been closed, Lookup returns an error on the
 // copy just as it does on the original; it never reads the copy's
 // stale symbol table, nor a path that Close has unmapped
-// (trendvidia/go#64). The error names the plugin only when the value
+// (trendvidia/go-archive#64). The error names the plugin only when the value
 // records a completed Close, which is exactly when its path has been
 // cloned into host memory; a copy taken before the original's Close
 // still holds a path into the unmapped image, so its error names no
@@ -359,7 +359,7 @@ func (p *Plugin) Dependents() []string {
 //
 // closePlugin rewrites the field under the mutex (it clones the
 // bytes out of the plugin's RODATA before dlclose unmaps them), so
-// an unlocked read races the write (trendvidia/go#36). Locking the
+// an unlocked read races the write (trendvidia/go-archive#36). Locking the
 // read alone is not enough: the caller runs the runtime hook after
 // the mutex is dropped, so a Close completing in that window leaves
 // the returned header pointing into RODATA that dlclose has since
@@ -406,7 +406,7 @@ func pluginDependents(pluginpath string) []string
 
 // pluginClose also reports the address range the module occupied, so
 // unloadPlugin can reserve it once the image is unmapped and the loader
-// cannot hand it to the next plugin (trendvidia/go#122, #123). Zero on
+// cannot hand it to the next plugin (trendvidia/go-archive#122, #123). Zero on
 // any path that returns an error.
 //
 //go:linkname pluginClose
@@ -441,7 +441,7 @@ func syncBeforeUnmap()
 //     no protection and faults unrecoverably if used from here on.
 //
 //  3. Marker: clear syms/funcDescriptors and set err to closedErr so
-//     repeated Close calls are no-ops. Since trendvidia/go#64 the
+//     repeated Close calls are no-ops. Since trendvidia/go-archive#64 the
 //     marker that makes a subsequent Lookup fail is err, never the
 //     nil syms map: lookup reads syms off the CACHED entry, and
 //     phase 2's cache cleanup has already evicted this one, so
@@ -489,7 +489,7 @@ func closePlugin(p *Plugin) error {
 	// handing "" to pluginClose would select the HOST module, mark it
 	// bad and empty activeModules() — the next GC then has no roots and
 	// no way to resolve PCs, and the process dies silently with exit
-	// status 0 (trendvidia/go#35). The runtime refuses pluginpath == ""
+	// status 0 (trendvidia/go-archive#35). The runtime refuses pluginpath == ""
 	// independently; this check turns the misuse into an error before
 	// the runtime is involved.
 	//
@@ -524,7 +524,7 @@ func closePlugin(p *Plugin) error {
 	p.pluginpath = cloneString(p.pluginpath)
 	// pluginClose reports the range the module occupied as it tears
 	// it down; unloadPlugin reserves it after the unmap so the loader
-	// cannot reuse it (trendvidia/go#122, #123).
+	// cannot reuse it (trendvidia/go-archive#122, #123).
 	errstr, imgBase, imgSize := pluginClose(p.pluginpath, p.funcDescriptors)
 	if errstr != "" {
 		return pluginErr("Close", p.pluginpath, errstr)

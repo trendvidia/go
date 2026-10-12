@@ -21,8 +21,8 @@ import (
 // Slots are recorded (slot sym → target sym) while functions are
 // compiled in parallel but NOT emitted there: emitting inline appends
 // each slot to the object in goroutine-scheduling order, making the
-// compiled object non-reproducible (trendvidia/go#8 for go.funcptr,
-// trendvidia/go#27 for go.typeptr/go.itabptr). Write emits the
+// compiled object non-reproducible (trendvidia/go-archive#8 for go.funcptr,
+// trendvidia/go-archive#27 for go.typeptr/go.itabptr). Write emits the
 // recorded slots sorted by name instead.
 //
 // Emission order affects only object layout, not semantics: the slots

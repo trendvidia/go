@@ -109,7 +109,7 @@ func TestIssue38068(t *testing.T) {
 // functions are compiled in parallel and emitted once at dumpdata
 // time. Emitting them inline made object layout follow goroutine
 // scheduling, so consecutive compiles differed byte-for-byte
-// (trendvidia/go#27).
+// (trendvidia/go-archive#27).
 func TestTypetabSlotsReproducible(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	t.Parallel()

@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # trendvidia/go#81: give every run a cold, private build cache.
+      # trendvidia/go-archive#81: give every run a cold, private build cache.
       #
       # This fork's VERSION is release-style (go1.26.5), so cmd/go keys
       # the build cache on the compiler's version STRING alone --
@@ -80,7 +80,7 @@ jobs:
         run: |
           cache="$RUNNER_TEMP/gocache-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           if [ -e "$cache" ]; then
-            echo "::error::$cache already exists: this run is not starting cold (trendvidia/go#81)"
+            echo "::error::$cache already exists: this run is not starting cold (trendvidia/go-archive#81)"
             exit 1
           fi
           echo "cold: $cache does not exist yet"
@@ -91,7 +91,7 @@ jobs:
         shell: cmd
         run: |
           set "cache=%RUNNER_TEMP%\gocache-%GITHUB_RUN_ID%-%GITHUB_RUN_ATTEMPT%"
-          if exist "%cache%" echo ::error::%cache% already exists - this run is not starting cold, see trendvidia/go#81
+          if exist "%cache%" echo ::error::%cache% already exists - this run is not starting cold, see trendvidia/go-archive#81
           if exist "%cache%" exit /b 1
           echo cold: %cache% does not exist yet
           echo GOCACHE=%cache%>>"%GITHUB_ENV%"

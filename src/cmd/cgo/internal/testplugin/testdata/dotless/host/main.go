@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Tests cross-module canonicalisation for symbol names with NO SLASH
-// (trendvidia/go#115). isUserPackageName used to reject those, reading
+// (trendvidia/go-archive#115). isUserPackageName used to reject those, reading
 // a missing slash as "stdlib top-level package". Nothing can tell the
 // two apart from the name — `cmd/link` carries no std-package list and
 // sym.Library has no GOROOT marker — so that heuristic cost correctness

@@ -10,7 +10,7 @@ package main
 // The host links internal/poll (through os), so that init already ran
 // host-side and the plugin drops it from its schedule; unless the
 // package's DATA is host-shared too, the plugin's copy of InitWSA is
-// nil and the call faults (trendvidia/go#74).
+// nil and the call faults (trendvidia/go-archive#74).
 //
 // No network traffic: loading the plugin is what runs the init, and
 // that is the test.

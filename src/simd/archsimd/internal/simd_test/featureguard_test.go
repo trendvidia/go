@@ -616,7 +616,7 @@ func (r *resolver) require(fn types.Object) (requirement, bool) {
 // no archsimd object, so the plain require would report the helper as
 // needing nothing however it is instantiated. That is how
 // TestStorePartReturnValues128 reached Int32x4.StorePart (VPMASKMOVD, AVX2)
-// unguarded with the pin green, trendvidia/go#156. Walking the body once per
+// unguarded with the pin green, trendvidia/go-archive#156. Walking the body once per
 // instantiation, with the type arguments substituted for the parameters,
 // lets the selector checker find the concrete method.
 func (r *resolver) requireInst(fn types.Object, subst map[*types.TypeParam]types.Type) (requirement, bool) {

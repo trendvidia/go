@@ -54,7 +54,7 @@ func TestPEHostExportRank(t *testing.T) {
 		// Init tasks: evicting one re-runs that package's init from the
 		// plugin, which re-registers host-shared runtime hooks with
 		// plugin-resident funcvals that dangle after Close
-		// (trendvidia/go#61).
+		// (trendvidia/go-archive#61).
 		"sync..inittask",
 		"testplugin/common..inittask",
 	} {
@@ -104,7 +104,7 @@ func TestPEInittaskOutranksItsInits(t *testing.T) {
 // layout-specific and stay local — except `pkg..inittask`, which has to
 // reach the host's exports and import library so peLoadImportLibrary can
 // convert the plugin's copy and the plugin never re-runs an init the
-// host already ran (trendvidia/go#61).
+// host already ran (trendvidia/go-archive#61).
 func TestPESkipSymName(t *testing.T) {
 	for _, name := range []string{
 		"sync..inittask",
@@ -140,7 +140,7 @@ func TestPESkipSymName(t *testing.T) {
 	// The slot-family filter must not swallow go.*-domain package
 	// symbols: go.uber.org-style module paths share the `go.` prefix
 	// with the slot families but their globals have to reach the host's
-	// export table for host-plugin sharing (trendvidia/go#108).
+	// export table for host-plugin sharing (trendvidia/go-archive#108).
 	for _, name := range []string{
 		"go.uber.org/zap.Global",
 		"go.example.org/fakemod/lib.Counter",
@@ -210,7 +210,7 @@ func TestPEHostExportsMatchImportLibrary(t *testing.T) {
 		"runtime.addmoduledata", "runtime.lastmoduledatap", "runtime.writeBarrier",
 		// Init tasks of host-linked packages: a plugin binding these gets
 		// its copies converted and never re-runs an init the host already
-		// ran (trendvidia/go#61). sync's is the load-bearing one — its
+		// ran (trendvidia/go-archive#61). sync's is the load-bearing one — its
 		// init registers runtime.poolcleanup, which is host-shared, and a
 		// plugin-resident registration dangles after Close.
 		"sync..inittask", "runtime..inittask",
@@ -243,7 +243,7 @@ func TestPEHostExportsMatchImportLibrary(t *testing.T) {
 // copies. A local copy re-runs the package's init at plugin load; sync's
 // init re-registers runtime.poolcleanup — a host-shared runtime global —
 // with a funcval in the plugin's image, and the first GC after Close
-// faults on it (trendvidia/go#61). Packages only the plugin links keep
+// faults on it (trendvidia/go-archive#61). Packages only the plugin links keep
 // their tasks and still initialize.
 func TestPEPluginSharesHostInittasks(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
@@ -340,7 +340,7 @@ func main() {}
 	// `go:plugin.inittasks`, the list plugin_lastmoduleinit hands the
 	// runtime. A regression that imported the task and still scheduled
 	// it would satisfy every assertion above and re-run sync's init at
-	// Open, which is the whole defect (trendvidia/go#61). Read the
+	// Open, which is the whole defect (trendvidia/go-archive#61). Read the
 	// schedule itself.
 	scheduled := peScheduledInittasks(t, filepath.Join(dir, "plug.dll"))
 	for _, name := range []string{"sync..inittask", "runtime..inittask"} {
@@ -362,7 +362,7 @@ func main() {}
 	// library, and `pkg..inittask` is not a Go identifier so
 	// plugin.Lookup cannot name one) that still spend the plugin's own
 	// peExportLimit budget, which the link hard-errors past
-	// (trendvidia/go#39).
+	// (trendvidia/go-archive#39).
 	for _, name := range peExportedNames(t, filepath.Join(dir, "plug.dll")) {
 		if strings.HasSuffix(name, "..inittask") {
 			t.Errorf("plugin exports %s; a plugin's init tasks are unbindable and only consume its export budget", name)
@@ -533,7 +533,7 @@ func peScheduledInittasks(t *testing.T, path string) map[string]bool {
 }
 
 // TestPEImpWrapperTargetsIATSlot pins what a `__imp_`-named GOT target
-// resolves to in an internal-linked Windows plugin (trendvidia/go#117).
+// resolves to in an internal-linked Windows plugin (trendvidia/go-archive#117).
 //
 // cmd/internal/obj/x86 rewrites the g-reload that follows an ABI0 call
 // in a Windows plugin into a load from a symbol NAMED
@@ -617,7 +617,7 @@ func main() {}
 	}
 	if word == 0 {
 		t.Errorf("%s holds 0: the wrapper points at an undefined symbol, so at load it holds the "+
-			"rebasing delta and the g-reload after an ABI0 call faults inside plugin.Open (trendvidia/go#117)", wrapper)
+			"rebasing delta and the g-reload after an ABI0 call faults inside plugin.Open (trendvidia/go-archive#117)", wrapper)
 	}
 }
 
@@ -665,7 +665,7 @@ func peSymbolWord(t *testing.T, path, name string) (uint64, bool) {
 }
 
 // TestPEInittaskSharesWithItsData pins the invariant peShareHostData
-// exists to hold (trendvidia/go#74): a package's DATA is host-shared
+// exists to hold (trendvidia/go-archive#74): a package's DATA is host-shared
 // exactly when that package's `..inittask` is.
 //
 // The two disagreeing is not a cosmetic asymmetry. Sharing the task
@@ -702,7 +702,7 @@ func TestPEInittaskSharesWithItsData(t *testing.T) {
 		data := peShareHostData(pkg + ".SomeGlobal")
 		if task != data {
 			t.Errorf("%s: inittask shared = %v but data shared = %v; the init runs in exactly one module, "+
-				"so the other module's copy of what it assigns is never initialized (trendvidia/go#74)", pkg, task, data)
+				"so the other module's copy of what it assigns is never initialized (trendvidia/go-archive#74)", pkg, task, data)
 		}
 		if !task {
 			t.Errorf("%s..inittask is not host-shared: the plugin re-runs an init the host already ran", pkg)
@@ -742,7 +742,7 @@ func TestPEInittaskSharesWithItsData(t *testing.T) {
 // answering false there converts the ABIInternal body at v=1 and
 // orphans the type descriptor's R_METHODOFF — the plugin link then
 // fails with "missing section for relocation target ..."
-// (trendvidia/go#139).
+// (trendvidia/go-archive#139).
 //
 // Measured on a plugin host built from this tree: go1.26.8's import
 // library carried 0 names of this shape and go1.27.1's carries 13.

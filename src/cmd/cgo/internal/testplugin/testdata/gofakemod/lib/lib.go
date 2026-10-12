@@ -8,7 +8,7 @@
 // table entry to fall back on. Its import path lives under a
 // go.*-style module domain: isUserPackageName's old blanket `go.`
 // prefix arm excluded every such package from registration, so each
-// plugin kept its own Counter (trendvidia/go#108).
+// plugin kept its own Counter (trendvidia/go-archive#108).
 package lib
 
 // Counter is the shared global. First-loader-wins canonicalisation

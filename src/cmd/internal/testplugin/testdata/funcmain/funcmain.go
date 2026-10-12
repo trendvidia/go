@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Plugin whose main package declares `func main`. The fork's
-// -buildmode=plugin must accept-and-ignore it (trendvidia/go#6) so a
+// -buildmode=plugin must accept-and-ignore it (trendvidia/go-archive#6) so a
 // single package can satisfy both `go build ./...` (stock default
 // mode, which requires func main to link) and a real plugin build,
 // without a per-plugin build-tag stub. The exported symbol lets a

@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Races Plugin.HasDependents and Plugin.Dependents against
-// Plugin.Close (trendvidia/go#36). Both accessors read p.pluginpath,
+// Plugin.Close (trendvidia/go-archive#36). Both accessors read p.pluginpath,
 // which closePlugin rewrites under pluginsMu (it clones the bytes
 // out of the plugin's RODATA before dlclose unmaps them). Before
 // the fix the accessors read the field with no synchronisation: a

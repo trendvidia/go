@@ -21,7 +21,7 @@ var typetabStatsRe = regexp.MustCompile(`(?m)^typetabstats: workers=(\d+) typept
 // reflectdata.itabptrLsym: walk never reaches it while the parallel
 // backend phase (base.Ctxt.InParallel) is in effect, because walk runs
 // in gc.prepareFunc off the enqueue loop, which only resumes after
-// compileFunctions' wg.Wait (trendvidia/go#33, #55).
+// compileFunctions' wg.Wait (trendvidia/go-archive#33, #55).
 //
 // The pin is a counter, not an assert, so a stale comment fails this
 // test on the measured configuration instead of ICEing the compiler on
@@ -41,7 +41,7 @@ var typetabStatsRe = regexp.MustCompile(`(?m)^typetabstats: workers=(\d+) typept
 // count must be non-zero — ssagen.reflectType records typeptr slots
 // from backend workers, so a zero there would mean the run never
 // observed the parallel phase and the itabptr zero proves nothing.
-// Verified to fire (trendvidia/go#55): moving prepareFunc's walk.Walk
+// Verified to fire (trendvidia/go-archive#55): moving prepareFunc's walk.Walk
 // call into compileFunctions' worker closure ICEs before any slot is
 // recorded (walk needs serial-only state: staticValues, CalcSize), so
 // the check was exercised by setting base.Ctxt.InParallel around the

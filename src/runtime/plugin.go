@@ -22,7 +22,7 @@ import (
 // for hosts that import the plugin package) and compare linktimehash;
 // a difference names the host as the stale side. If the host does not
 // link the package at all, the entry is compared against every other
-// loaded module's own pkghashes (trendvidia/go#24): two plugins built
+// loaded module's own pkghashes (trendvidia/go-archive#24): two plugins built
 // from different sources of a host-absent package must not both load,
 // because the cross-module binding machinery (canonicalSyms /
 // userDataInit, keyed by bare symbol name) would silently converge the
@@ -83,7 +83,7 @@ func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 		if hostHas {
 			continue
 		}
-		// Host-absent: compare against loaded peers (trendvidia/go#24).
+		// Host-absent: compare against loaded peers (trendvidia/go-archive#24).
 		for pmd := firstmoduledata.next; pmd != nil; pmd = pmd.next {
 			if pmd.bad || pmd == cand {
 				continue
@@ -119,7 +119,7 @@ func plugin_validatePkghashes(addr uintptr) (errstr, pluginpath string) {
 	// runtime/type.go skip bad modules so the half-initialized typemap
 	// of a rejected plugin doesn't poison subsequent reflect
 	// operations; detaching goes further so the caller can FreeLibrary
-	// the rejected DLL (trendvidia/go#26) without leaving dangling
+	// the rejected DLL (trendvidia/go-archive#26) without leaving dangling
 	// chain entries — the moduledata lives inside the DLL's image.
 	// Nothing registered this module under canonicalSyms/pkgOwners
 	// (validation precedes plugin_lastmoduleinit), so there is nothing
@@ -219,11 +219,11 @@ func plugin_chainGrew(prevTail uintptr) bool {
 // package and both build fingerprints so a standalone plugin build
 // that resolved a package differently from an already-loaded module is
 // diagnosable without decoding the raw plugin.Open message or
-// re-deriving hashes by hand. See trendvidia/go#7 and trendvidia/go#24.
+// re-deriving hashes by hand. See trendvidia/go-archive#7 and trendvidia/go-archive#24.
 //
 // side names the already-loaded holder of the divergent build:
 // "host" for the host carrier, "peer <pluginpath>" when a previously-
-// loaded plugin owns it (trendvidia/go#24), or "loaded" where the
+// loaded plugin owns it (trendvidia/go-archive#24), or "loaded" where the
 // check cannot tell which module a rebound runtimehash pointer
 // resolved against (the POSIX path in plugin_lastmoduleinit).
 //
@@ -299,7 +299,7 @@ func plugin_lastmoduleinit() (path string, syms map[string]any, initTasks []*ini
 	}
 
 	// Register the HOST's data exports before anything canonicalises
-	// the new module's slots (trendvidia/go#106). userDataInit only
+	// the new module's slots (trendvidia/go-archive#106). userDataInit only
 	// ever runs for a freshly loaded plugin, so the host's udexports
 	// carrier — which the linker has always emitted — was never read,
 	// and the host could not own a canonical name. That is invisible
@@ -435,7 +435,7 @@ func pluginSkipInitPkg(pkg string) bool {
 //     symbol, so it has no pclntab entry at all. A Go init function
 //     always has one, so an unresolvable first PC means the body
 //     lives in the host and the task must not re-run
-//     (trendvidia/go#61). The linker normally drops such tasks from
+//     (trendvidia/go-archive#61). The linker normally drops such tasks from
 //     the plugin's schedule entirely (host-shared `pkg..inittask`
 //     converts to an import and inittaskSym skips it), so this
 //     branch is defence in depth rather than a path the current
@@ -461,7 +461,7 @@ func pluginSkipInitPkg(pkg string) bool {
 //     It is deliberately a silent skip rather than a throw, because
 //     the condition is indistinguishable from a genuinely corrupt
 //     ftab; narrowing it to a confirmed IAT-thunk range is
-//     trendvidia/go#75.
+//     trendvidia/go-archive#75.
 //
 //  3. Its package name matches pluginSkipInitPkg's allowlist. Used
 //     for cases where the inittask's first PC is plugin-local but
@@ -588,7 +588,7 @@ type ptabEntry struct {
 // moduledata has pluginpath == "" (only -buildmode=plugin links
 // emit go:link.thispluginpath), and selecting the host here would
 // let plugin_close mark it bad and empty activeModules(), which
-// kills the next GC silently (trendvidia/go#35). Every linkname
+// kills the next GC silently (trendvidia/go-archive#35). Every linkname
 // caller — not only package plugin — gets this guard.
 func findPluginModule(pluginpath string) *moduledata {
 	if pluginpath == "" {
@@ -748,7 +748,7 @@ func neutraliseStaticDescriptors(md *moduledata, stubPC uintptr) {
 // can hold a pointer into. package plugin reserves that range once the
 // image is unmapped, so the loader cannot place the NEXT plugin over it
 // and a stale pointer faults instead of silently addressing the new
-// image (trendvidia/go#122, #123). They are (0, 0) on any path that
+// image (trendvidia/go-archive#122, #123). They are (0, 0) on any path that
 // does not unlink a module, and reading them is only meaningful when
 // errstr is "".
 //
@@ -757,14 +757,14 @@ func neutraliseStaticDescriptors(md *moduledata, stubPC uintptr) {
 // there is no window in which the two could disagree — and so the set
 // of runtime symbols pushed into package plugin's namespace does not
 // grow (pinned by TestRuntimePushesIntoPluginNamespace, and open on
-// trendvidia/go#86).
+// trendvidia/go-archive#86).
 //
 //go:linkname plugin_close plugin.pluginClose
 func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string, base, size uintptr) {
 	if pluginpath == "" {
 		// Belt and braces with findPluginModule: "" names the host
 		// executable's moduledata, which must never be closed
-		// (trendvidia/go#35).
+		// (trendvidia/go-archive#35).
 		return "empty pluginpath names the host program, not a plugin", 0, 0
 	}
 	lock(&canonicalSymsLock)
@@ -780,7 +780,7 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string,
 
 	// Capture the module's extent before the teardown below unlinks
 	// it; package plugin reserves this range after the image is
-	// unmapped (trendvidia/go#122, #123).
+	// unmapped (trendvidia/go-archive#122, #123).
 	if md.end > md.text {
 		base, size = md.text, md.end-md.text
 	}
@@ -868,7 +868,7 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string,
 	// not reachable through any plugin API, but find() dereferences
 	// every non-nil entry it probes, so leaving them makes an
 	// unrelated interface lookup anywhere in the process fault once
-	// the image is unmapped (trendvidia/go#150). Nothing else removes
+	// the image is unmapped (trendvidia/go-archive#150). Nothing else removes
 	// them: upstream never unloads a module, so addModuleItabs only
 	// ever grows the table.
 	//
@@ -936,7 +936,7 @@ func detachModule(md *moduledata) {
 // exclude the true owner, silently passing a divergent build, or a
 // host-carrier mismatch would mark and detach the WRONG moduledata
 // while the offender's image is unmapped. Observed in CI while building
-// the trendvidia/go#24 peer-lock fixture (trendvidia/go#31).
+// the trendvidia/go-archive#24 peer-lock fixture (trendvidia/go-archive#31).
 //
 // Caller holds pluginsMu (as open does), which serialises chain
 // mutation against concurrent loads and closes.
@@ -952,7 +952,7 @@ func plugin_chainTail() uintptr {
 
 // pluginDependentsMsg formats the Close-refusal error. It names each
 // dependent pluginpath so the caller can act on the refusal without a
-// separate Plugin.Dependents round-trip (trendvidia/go#26).
+// separate Plugin.Dependents round-trip (trendvidia/go-archive#26).
 //
 // Keys with an empty pluginpath would be host-class edges. No code
 // path records one today — recordDependency's referencer is always a

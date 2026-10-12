@@ -9,7 +9,7 @@
 // on nor x_cgo_notify_runtime_init_done to publish.
 //
 // This is the shape that broke when cmd/link exported the notify from
-// every cgo plugin (trendvidia/go#130): on the internal-link path an
+// every cgo plugin (trendvidia/go-archive#130): on the internal-link path an
 // unreachable symbol has no address, so the export published a
 // placeholder and plugin.Open called into the PE headers.
 package main

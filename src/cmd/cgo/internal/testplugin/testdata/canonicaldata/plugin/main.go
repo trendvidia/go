@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // The canonicaldata plugin embeds type descriptors, itabs, and data
-// addresses in static data through each of trendvidia/go#25's edges,
+// addresses in static data through each of trendvidia/go-archive#25's edges,
 // then hands the resulting values to the host, which checks them
 // against its own canonical copies.
 package main
@@ -66,7 +66,7 @@ func ReadGlobal() int { return shared.Global }
 // itself is ordinary user-package data, so the scan looks inside it.
 //
 // CallFn only exercises the call; the func value's ADDRESS identity
-// across the two modules is trendvidia/go#106 and is deliberately not
+// across the two modules is trendvidia/go-archive#106 and is deliberately not
 // asserted here.
 var FnPtr = shared.Fn
 

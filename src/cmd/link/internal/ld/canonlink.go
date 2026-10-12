@@ -62,7 +62,7 @@ func skipStaticCanonContainer(name string) bool {
 // staticCanonWords scans reachable static data for pointer-sized R_ADDR
 // words that embed a type descriptor, an itab, or a user-package data
 // address — the words the -typetab slot machinery cannot reach, because
-// no slot-routed code access ever rewrites them (trendvidia/go#25):
+// no slot-routed code access ever rewrites them (trendvidia/go-archive#25):
 // rtype/itab entries inside generic dictionaries, statically-initialized
 // interface globals, type-assert descriptors, and `&pkg.Global` baked
 // into initialized data. Each such word gets an entry in the same
@@ -168,7 +168,7 @@ func (ctxt *Link) staticCanonWords() (typeWords, itabWords, addrWords []staticWo
 				// data.go's stub loop uses to decide which SWINDOWS
 				// symbols get a JMP thunk. Canonicalising static func
 				// VALUES belongs to the funcptr carrier, not this one
-				// (trendvidia/go#106).
+				// (trendvidia/go-archive#106).
 				if fi := ldr.FuncInfo(t); fi.Valid() {
 					continue
 				}
@@ -205,13 +205,13 @@ func (ctxt *Link) staticCanonWords() (typeWords, itabWords, addrWords []staticWo
 // runtime: remove typelinks" and "runtime, cmd/link: remove itablinks")
 // — leaving nothing here that emits a typelink. reflect.typelinks now
 // walks the type-descriptor range lazily and itabs are walked in place.
-// The name went with the deleted half (trendvidia/go#139).
+// The name went with the deleted half (trendvidia/go-archive#139).
 func (ctxt *Link) canonlink() {
 	ldr := ctxt.loader
 	ptrsize := ctxt.Arch.PtrSize
 
 	// Static-data words carrying type/itab/data addresses that no slot
-	// covers (trendvidia/go#25). Type and itab words join the slot
+	// covers (trendvidia/go-archive#25). Type and itab words join the slot
 	// tables below as container+offset entries; data-address words get
 	// the udaddr carrier triplet. Non-empty only for Windows plugins.
 	staticTypeWords, staticItabWords, staticAddrWords := ctxt.staticCanonWords()
@@ -379,7 +379,7 @@ func (ctxt *Link) canonlink() {
 }
 
 // emitAddrCarriers emits the udaddr carrier triplet for static-data
-// words that embed a user-package data address (trendvidia/go#25, the
+// words that embed a user-package data address (trendvidia/go-archive#25, the
 // `var P = &pkg.Global` shape):
 //
 //   - runtime.udaddrwords — address of each word to rewrite
@@ -515,7 +515,7 @@ var moduleSlotPrefixes = []string{typeptrSlotPrefix, itabptrSlotPrefix, funcptrS
 // domain (go.uber.org, go.opentelemetry.io, go.etcd.io, ...), so gates
 // must match these families exactly and never the bare `go.` prefix —
 // a blanket prefix test would exclude every package hosted under such
-// a domain from cross-module data canonicalisation (trendvidia/go#108).
+// a domain from cross-module data canonicalisation (trendvidia/go-archive#108).
 // A domain only survives into a symbol name unescaped when it is not
 // the last path element: objabi.PathToPrefix escapes dots after the
 // final slash, so package go.uber.org/zap's globals are
@@ -539,7 +539,7 @@ func isModuleSlotName(name string) bool {
 // strings.HasPrefix(name, "internal/"), which catches only the
 // top-level tree and admits every nested one, so the whole
 // crypto/internal/... subtree was treated as user code and entered
-// cross-module canonicalisation (trendvidia/go#111).
+// cross-module canonicalisation (trendvidia/go-archive#111).
 //
 // The three arms are the three positions the element can occupy: first
 // ("internal/abi.Kind"), middle ("crypto/internal/fips140/bigmod.X")
@@ -563,7 +563,7 @@ func isInternalPkgName(name string) bool {
 // module-local.
 //
 // One definition, because this scoping rule existed in copies and had
-// been wrong in a different direction in each (trendvidia/go#111, and
+// been wrong in a different direction in each (trendvidia/go-archive#111, and
 // #108/#110/#115 before it). isUserPackageName gates what gets
 // REGISTERED for canonicalisation and skipStaticCanonContainer gates
 // which static containers get SCANNED for words to rewrite: the two ask
@@ -573,7 +573,7 @@ func isInternalPkgName(name string) bool {
 //
 // Distinct from peShareHostData in pe_implib.go, which deliberately does
 // NOT exclude internal packages: PE symbol sharing gives host and plugin
-// one instance of a symbol at link time (trendvidia/go#74), while this
+// one instance of a symbol at link time (trendvidia/go-archive#74), while this
 // governs a runtime rewrite over data the runtime may itself be reading
 // while the rewrite runs.
 func isToolchainOwnedName(name string) bool {
@@ -596,7 +596,7 @@ func isToolchainOwnedName(name string) bool {
 //   - runtime.*, whose singletons are shared through the curated
 //     peSharedRuntimeData list instead, because some must stay local;
 //   - internal/*, likewise shared by peLoadImportLibrary's gate when
-//     the host links the package (trendvidia/go#74);
+//     the host links the package (trendvidia/go-archive#74);
 //   - go:* and type:*, linker-internal carriers and type descriptors,
 //     per-module by design;
 //   - the three go.<kind>. slot families, which the runtime rewrites
@@ -615,7 +615,7 @@ func isToolchainOwnedName(name string) bool {
 // fact the linker does not have — nothing here can tell `os.Args` from
 // `extensions.Counter`, the root package of a module named without a
 // domain, and `sym.Library` carries no GOROOT marker to ask. It cost
-// correctness in both directions (trendvidia/go#115): a package at a
+// correctness in both directions (trendvidia/go-archive#115): a package at a
 // dotless module root kept one instance per module, and so did every
 // slashless STDLIB package that plugins link and the host does not —
 // two plugins importing net measured different `net.DefaultResolver`
@@ -626,7 +626,7 @@ func isToolchainOwnedName(name string) bool {
 //
 // peSkipSymName, pe_implib.go's share-gate, is still the wider of the
 // two: it carves `pkg..inittask` out of its `..` filter so a host can
-// publish init tasks for peLoadImportLibrary to bind (trendvidia/go#61),
+// publish init tasks for peLoadImportLibrary to bind (trendvidia/go-archive#61),
 // while an inittask is per-module layout and must never be registered
 // for canonicalisation. TestModuleSlotNameLockstep pins where the two
 // must agree; TestGateAsymmetryOutsideSlotFamilies pins what is left of
@@ -652,7 +652,7 @@ func isUserPackageName(name string) bool {
 		//
 		// The old "must contain a slash" arm hid this: requiring a
 		// module-path prefix also required a package prefix. Dropping
-		// it for trendvidia/go#115 separated the two, so the part that
+		// it for trendvidia/go-archive#115 separated the two, so the part that
 		// was doing real work is stated here on its own.
 		return false
 	}
@@ -676,7 +676,7 @@ func isFuncValName(name string) bool {
 // global lives in one of them, and canonicalisation exists to give
 // every module one instance of it.
 //
-// SRODATA is admitted for funcval symbols ONLY (trendvidia/go#106).
+// SRODATA is admitted for funcval symbols ONLY (trendvidia/go-archive#106).
 // A funcval is read-only in an exe and writable under -dynlink
 // (WriteFuncSyms marks it NOPTR there so Plugin.Close can overwrite the
 // code pointer), and that symbol-KIND asymmetry is exactly what used to

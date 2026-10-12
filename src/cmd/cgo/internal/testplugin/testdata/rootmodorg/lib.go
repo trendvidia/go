@@ -6,7 +6,7 @@
 // symbols are named `example%2eorg.X`. It is imported by the rootmod
 // host AND by plugin plugA, so on Windows the plugin's copy of Value
 // must be host-shared through the import library — the other half of
-// the trendvidia/go#110 surface, exercising peSkipSymName rather than
+// the trendvidia/go-archive#110 surface, exercising peSkipSymName rather than
 // the canonicalisation registry.
 package rootorg
 

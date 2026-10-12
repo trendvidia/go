@@ -70,7 +70,7 @@ func main() {
 	//     readability. We assert that.
 	//
 	//   - Windows: FreeLibrary releases the mapping. The region then
-	//     reports MEM_FREE, or — since trendvidia/go#122 reserves the
+	//     reports MEM_FREE, or — since trendvidia/go-archive#122 reserves the
 	//     range so the loader cannot reuse it — MEM_RESERVE over
 	//     non-image memory. Both mean the image is gone and an access
 	//     faults; isUnmapped accepts either and still rejects a

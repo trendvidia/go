@@ -7,7 +7,7 @@
 // It is imported by both rootmod plugins (plugA, plugB) but NOT by the
 // host, so sharing Counter depends entirely on the runtime
 // canonicalisation registry (userDataLink): there is no host export
-// table entry to fall back on. See trendvidia/go#110.
+// table entry to fall back on. See trendvidia/go-archive#110.
 package rootcom
 
 // Counter is the shared global. First-loader-wins canonicalisation

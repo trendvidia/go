@@ -8,7 +8,7 @@
 // that lookup actually routes through liveOrigin, reads syms and
 // pluginpath off the entry it returns rather than off its argument,
 // and hands back lookupClosedErr's error when it resolves nothing
-// (trendvidia/go#64). TestLiveOrigin and TestLookupClosedErr each pin
+// (trendvidia/go-archive#64). TestLiveOrigin and TestLookupClosedErr each pin
 // one half; nothing until now pinned that lookup wires them together.
 //
 // Constrained to the platforms that have a real lookup: the build tag

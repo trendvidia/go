@@ -36,7 +36,7 @@ static void* pluginLookup(uintptr_t h, const char* name, char** err) {
 // pluginReserveRange takes the address range a just-unloaded plugin
 // occupied, so the dynamic linker cannot place the NEXT plugin over it
 // and a stale host pointer faults instead of silently addressing the
-// new image (trendvidia/go#123).
+// new image (trendvidia/go-archive#123).
 //
 // Deliberately WITHOUT MAP_FIXED. MAP_FIXED would succeed by unmapping
 // whatever is already there, and "already there" is exactly the case
@@ -249,7 +249,7 @@ func open(name string) (*Plugin, error) {
 // syms/pluginpath off THAT entry, never off p: p may be a struct
 // copy whose fields outlived the original's Close, where the syms
 // map's keys and the pluginpath header both point into the unmapped
-// image (trendvidia/go#64). On the resolving path the only field
+// image (trendvidia/go-archive#64). On the resolving path the only field
 // lookup reads off p is p.loaded, a channel header that Close never
 // rewrites. The non-resolving path reads two more, both inside
 // lookupClosedErr: p.err, and — only when that err records a
@@ -284,7 +284,7 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 	defer pluginsMu.Unlock()
 	// Read syms and pluginpath off the cached live entry, never off
 	// p itself: p may be a struct copy whose fields outlived the
-	// original's Close (trendvidia/go#64). See liveOrigin.
+	// original's Close (trendvidia/go-archive#64). See liveOrigin.
 	origin := liveOrigin(p)
 	if origin == nil {
 		return nil, lookupClosedErr(p)
@@ -320,7 +320,7 @@ func unloadPlugin(p *Plugin, base, size uintptr) error {
 		return errors.New(C.GoString(cErr))
 	}
 	// Reserve what the image occupied so the loader cannot reuse it
-	// for the next plugin (trendvidia/go#123). base/size are the
+	// for the next plugin (trendvidia/go-archive#123). base/size are the
 	// module's own bounds, captured before the runtime unlinked it.
 	C.pluginReserveRange(C.uintptr_t(base), C.uintptr_t(size))
 	for path, q := range plugins {

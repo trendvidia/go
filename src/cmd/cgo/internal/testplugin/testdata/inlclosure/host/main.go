@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Tests that two plugins' inlined copies of one closure keep their own
-// bodies (trendvidia/go#158).
+// bodies (trendvidia/go-archive#158).
 //
 // Each plugin inlines lib.Desc with a different constant, so each holds
 // a copy of Desc's closure specialised on that constant, and both copies

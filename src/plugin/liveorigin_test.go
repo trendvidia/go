@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // White-box pins for the *Plugin resolution lookup does before it
-// touches any symbol table (trendvidia/go#64).
+// touches any symbol table (trendvidia/go-archive#64).
 //
 // The end-to-end proof lives in cmd/cgo/internal/testplugin's
 // lookupcopy fixture, but that test is globalSkip'd under -short —

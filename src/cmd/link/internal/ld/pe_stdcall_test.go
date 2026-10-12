@@ -7,7 +7,7 @@ package ld
 import "testing"
 
 // TestStdcallDecoration pins the boundary between the two meanings a
-// '%' can have in a PE symbol name (trendvidia/go#116).
+// '%' can have in a PE symbol name (trendvidia/go-archive#116).
 //
 // initdynimport reads the `%n` stdcall decoration off every reachable
 // SDYNIMPORT extname, and does two irreversible things with what it

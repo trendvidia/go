@@ -37,7 +37,7 @@ var grantedFeatures = map[int][]string{
 
 // TestBridgeFeatures pins that every archsimd operation this package reaches
 // at a vector width needs no CPU feature beyond grantedFeatures[width]. It is
-// the static half of trendvidia/go#154: archMaxVectorSize used to grant 128
+// the static half of trendvidia/go-archive#154: archMaxVectorSize used to grant 128
 // bits on bare AVX while the 128-bit bridge went through VPBROADCAST (AVX2)
 // and VFMADD (FMA), and nothing in the tree said so until an Ivy Bridge ran
 // all.bash. An upstream sync that adds a bridged operation needing more than

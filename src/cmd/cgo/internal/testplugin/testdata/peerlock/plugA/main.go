@@ -5,7 +5,7 @@
 // pm-plugA: first loader of testplugin/peerlock/peerlib (main-tree
 // build). Loads before pm-plugB, so it owns peerlib's canonical
 // instance; pm-plugB must be REJECTED by the version lock because its
-// peerlib build hash differs (trendvidia/go#24).
+// peerlib build hash differs (trendvidia/go-archive#24).
 package main
 
 import "testplugin/peerlock/peerlib"

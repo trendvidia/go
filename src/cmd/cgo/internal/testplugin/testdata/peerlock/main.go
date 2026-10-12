@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Host for TestPeerVersionLock (trendvidia/go#24): the version lock
+// Host for TestPeerVersionLock (trendvidia/go-archive#24): the version lock
 // must compare candidate plugins against LOADED PEERS, not just the
 // host. peerlock/peerlib is linked into the plugins but not into this
 // host, so host-side validation never sees it:

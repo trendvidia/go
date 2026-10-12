@@ -44,7 +44,7 @@ static int cIsReadable(uintptr_t addr) {
 
 // cIsUnmapped reports whether the plugin's IMAGE is gone from addr —
 // which stopped being the same question as "is anything mapped there"
-// when unload began reserving the range it freed (trendvidia/go#123).
+// when unload began reserving the range it freed (trendvidia/go-archive#123).
 //
 // mincore answers the narrow question: -1/ENOMEM when the address is
 // part of no mapping at all. That still means the image is gone.

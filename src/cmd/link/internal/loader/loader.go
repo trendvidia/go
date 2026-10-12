@@ -2546,7 +2546,7 @@ var blockedLinknames = map[string][]string{
 	"plugin.syncBeforeUnmap":     {"plugin"},
 	// The other three -- chainTail, chainGrew and rejectChainedModule --
 	// are deliberately NOT confined. That is a known gap rather than an
-	// oversight (trendvidia/go#86), and it is the sharper half of the nine,
+	// oversight (trendvidia/go-archive#86), and it is the sharper half of the nine,
 	// so the options below are unfinished business and not housekeeping:
 	// plugin_rejectChainedModule (src/runtime/plugin.go:180) is the only
 	// one of the nine that writes through a caller-supplied address -- it

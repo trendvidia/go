@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Drives trendvidia/go#62: a cgo plugin's runtime-init handshake.
+// Drives trendvidia/go-archive#62: a cgo plugin's runtime-init handshake.
 //
 // The plugin is built with -extldflags=-Wl,--exclude-all-symbols, which
 // makes the .def authoritative and so removes every export the linker

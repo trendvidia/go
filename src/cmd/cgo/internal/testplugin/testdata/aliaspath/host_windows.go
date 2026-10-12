@@ -4,7 +4,7 @@
 
 //go:build windows
 
-// Command aliaspath drives trendvidia/go#46 end to end: a path the
+// Command aliaspath drives trendvidia/go-archive#46 end to end: a path the
 // loader resolves onto an already-loaded module is rejected by
 // plugin.Open, but that rejection is process state, not a property of
 // the file — so once the blocking module is closed, the same Open must

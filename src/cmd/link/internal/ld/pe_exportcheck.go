@@ -124,7 +124,7 @@ func peImageExportDir(path string) (peImageExports, error) {
 // image actually publishes. Called after hostlink, for Windows plugins
 // built with an external linker.
 //
-// The check inside pePluginExportFile cannot do this job (trendvidia/go#59).
+// The check inside pePluginExportFile cannot do this job (trendvidia/go-archive#59).
 // It counts the names written into the .def, and handing mingw ld an EXPORTS
 // list does not switch its auto-export off: measured on windows_omen at
 // 60fd56dbc4, a plugin whose .def named 6 symbols published 2195. So that

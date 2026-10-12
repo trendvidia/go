@@ -492,7 +492,7 @@ type moduledata struct {
 	udimportnames    []byte
 
 	// Static-data words that embed the address of a user-package
-	// global (trendvidia/go#25: `var P = &pkg.Global` and friends).
+	// global (trendvidia/go-archive#25: `var P = &pkg.Global` and friends).
 	// udaddrwords[i] is the address of the word to rewrite;
 	// udaddrslots[i] is the address of the matching `__imp_X` slot
 	// (IAT entry for host-shared X, SNOPTRDATA wrapper for peer-owned

@@ -4,7 +4,7 @@
 
 // Runs a garbage collection after a plugin has genuinely been
 // unloaded, with the collector left ON the whole time
-// (trendvidia/go#61).
+// (trendvidia/go-archive#61).
 //
 // Every GC cycle starts with clearpools, which calls through
 // runtime.poolcleanup — a funcval registered by package sync's init.

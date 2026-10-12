@@ -5,7 +5,7 @@
 //
 //	module example.com  ->  example%2ecom.Counter
 //
-// That is the shape trendvidia/go#110 is about — isUserPackageName's
+// That is the shape trendvidia/go-archive#110 is about — isUserPackageName's
 // "no slash means stdlib" arm rejected it, so the global never reached
 // userDataExports and each module kept its own instance on Windows.
 //

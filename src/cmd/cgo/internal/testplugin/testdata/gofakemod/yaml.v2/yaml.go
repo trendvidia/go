@@ -9,7 +9,7 @@
 // gopkg.in path in the wild (yaml.v2, yaml.v3, check.v1, mgo.v2), and
 // a '%' in the name used to be read as a stdcall `%n` decoration when
 // the plugin bound the symbol from the host's import library, failing
-// the link (trendvidia/go#116).
+// the link (trendvidia/go-archive#116).
 package yaml
 
 // DefaultMapType is the host-shared global.

@@ -48,7 +48,7 @@ func ldmacho(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 //     (golang.org/issue/38824). With DWARF combining, also
 //     -Wl,-no_fixup_chains: macOS 27's dyld rejects a dlopen'd image
 //     whose chained-fixups segment count misses the added __DWARF
-//     segment (golang.org/issue/81793, trendvidia/go#160).
+//     segment (golang.org/issue/81793, trendvidia/go-archive#160).
 //   - -Wl,-S suppresses STAB symbols when DWARF is not combined; -Wl,-x
 //     additionally suppresses local symbols if debug_s is set.
 //   - -Wl,-U,__dyld_get_dyld_header allows the race object's weak import

@@ -4,7 +4,7 @@
 
 // Tests that a package whose init task is host-shared also has its data
 // host-shared, so a plugin never reads a global the host's init was the
-// only one to assign (trendvidia/go#74).
+// only one to assign (trendvidia/go-archive#74).
 //
 // The host links internal/poll (through os) but NOT net. So
 // internal/poll's init task is published to the plugin and dropped from

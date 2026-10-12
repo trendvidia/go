@@ -5,7 +5,7 @@
 // Package peerlib is the shared dependency that neither the peerlock
 // host nor any validator links: it exists only inside pm-plugA/pm-plugC
 // (this copy) and pm-plugB (the divergent copy in altpath/testdata).
-// Its whole purpose is trendvidia/go#24: two plugins linking different
+// Its whole purpose is trendvidia/go-archive#24: two plugins linking different
 // BUILD HASHES of the same import path that the host never sees. Any
 // source difference changes the linktimehash, so the exact content is
 // unimportant — but keep it dependency-free so nothing else enters the

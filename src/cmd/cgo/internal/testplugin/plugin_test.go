@@ -97,13 +97,13 @@ func testMain(m *testing.M) int {
 	modRoot := filepath.Join(GOPATH, "src", "testplugin")
 	altRoot := filepath.Join(GOPATH, "alt", "src", "testplugin")
 	// The godomain fixture needs a shared package whose import path
-	// lives under a go.*-style module domain (trendvidia/go#108), which
+	// lives under a go.*-style module domain (trendvidia/go-archive#108), which
 	// no path inside module testplugin can spell. The gofakemod
 	// directory carries its own go.mod (module go.example.org/fakemod);
 	// point the main module at it. The rootmod fixture needs the
 	// neighbouring shape — a package at the ROOT of a single-element
 	// dotted module path, whose symbols carry no slash at all
-	// (trendvidia/go#110) — and a module root holds exactly one
+	// (trendvidia/go-archive#110) — and a module root holds exactly one
 	// package, so its two halves (plugin-only and host-shared) need one
 	// module each: rootmodcom is `module example.com`, rootmodorg is
 	// `module example.org`. Only modRoot gets the requires — altRoot
@@ -242,14 +242,14 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "refcount", "-o=plugA"+pluginSuffix, "./refcount/plugA")
 	goCmdBuildPluginFor(nil, "refcount", "-o=plugB"+pluginSuffix, "./refcount/plugB")
 
-	// go.*-domain module fixture (trendvidia/go#108): the shared
+	// go.*-domain module fixture (trendvidia/go-archive#108): the shared
 	// packages live under go.example.org/fakemod, which the blanket
 	// `go.` prefix arm used to exclude from data canonicalisation.
 	goCmd(nil, "build", "-o", "godomain.exe", "./godomain/host")
 	goCmdBuildPluginFor(nil, "godomain", "-o=godomain-plugA"+pluginSuffix, "./godomain/plugA")
 	goCmdBuildPluginFor(nil, "godomain", "-o=godomain-plugB"+pluginSuffix, "./godomain/plugB")
 
-	// Cross-module func VALUE identity fixture (trendvidia/go#106):
+	// Cross-module func VALUE identity fixture (trendvidia/go-archive#106):
 	// the host links funcident/shared so Fn's body is host-shared,
 	// while each plugin emits its own `shared.Fn·f` and a plugin-only
 	// package statically initializes a word pointing at it.
@@ -257,7 +257,7 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "funcident", "-o=funcident-plugA"+pluginSuffix, "./funcident/plugA")
 	goCmdBuildPluginFor(nil, "funcident", "-o=funcident-plugB"+pluginSuffix, "./funcident/plugB")
 
-	// Root-of-dotted-module-path fixture (trendvidia/go#110): the
+	// Root-of-dotted-module-path fixture (trendvidia/go-archive#110): the
 	// shared packages sit at the roots of `module example.com` and
 	// `module example.org`, so PathToPrefix escapes their dots whole
 	// and the globals are named `example%2ecom.Counter` /
@@ -267,7 +267,7 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "rootmod", "-o=rootmod-plugA"+pluginSuffix, "./rootmod/plugA")
 	goCmdBuildPluginFor(nil, "rootmod", "-o=rootmod-plugB"+pluginSuffix, "./rootmod/plugB")
 
-	// Slashless-name fixture (trendvidia/go#115): `module extensions`
+	// Slashless-name fixture (trendvidia/go-archive#115): `module extensions`
 	// has no dot to escape and no slash, so its root package is spelled
 	// exactly like a stdlib top-level name. The same fixture covers the
 	// other half of that gate — a slashless STDLIB package the plugins
@@ -276,7 +276,7 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "dotless", "-o=dotless-plugA"+pluginSuffix, "./dotless/plugA")
 	goCmdBuildPluginFor(nil, "dotless", "-o=dotless-plugB"+pluginSuffix, "./dotless/plugB")
 
-	// Escaped-symbol-name fixture (trendvidia/go#116): host and plugin
+	// Escaped-symbol-name fixture (trendvidia/go-archive#116): host and plugin
 	// share go.example.org/fakemod/yaml.v2, whose final path element
 	// carries a dot, so PathToPrefix escapes it and every symbol of the
 	// package is spelled `...yaml%2ev2.X`. Reading that '%' as a
@@ -284,7 +284,7 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "escname.exe", "./escname/host")
 	goCmdBuildPluginFor(nil, "escname", "-o=escname-plugin"+pluginSuffix, "./escname/plug")
 
-	// Plugin-local ABI0 assembly fixture (trendvidia/go#117): the host
+	// Plugin-local ABI0 assembly fixture (trendvidia/go-archive#117): the host
 	// links no crypto, so the plugin's own text makes the ABI0 calls
 	// and carries the g-reload the windows/amd64 rewrite turns into a
 	// load through __imp_runtime.tls_g.
@@ -292,16 +292,16 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "asmplugin", "-o=asmplugin-plugin"+pluginSuffix, "./asmplugin/plug")
 
 	// Host-shared inittask / plugin-local data fixture
-	// (trendvidia/go#74): the host links internal/poll through os but
+	// (trendvidia/go-archive#74): the host links internal/poll through os but
 	// not net, so internal/poll's task is published while net's init
 	// stays plugin-local and calls into what that task assigned.
 	goCmd(nil, "build", "-o", "internalinit.exe", "./internalinit/host")
 	goCmdBuildPluginFor(nil, "internalinit", "-o=internalinit-plugin"+pluginSuffix, "./internalinit/plug")
 
-	// Post-Close hazard-envelope fixture (trendvidia/go#26): one host
+	// Post-Close hazard-envelope fixture (trendvidia/go-archive#26): one host
 	// with subcommand-selected probes over an unprotected closure, an
 	// exported-variable pointer, and the reopen-aliasing cell.
-	// Extension-upgrade fixture (trendvidia/go#122): v1 and v2 lay
+	// Extension-upgrade fixture (trendvidia/go-archive#122): v1 and v2 lay
 	// their exported fields out differently on purpose, so a pointer
 	// held across the upgrade lands on the WRONG field of the new
 	// image unless the freed range is reserved.
@@ -309,7 +309,7 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "upgrade", "-o=upgrade-v1"+pluginSuffix, "./upgrade/v1")
 	goCmdBuildPluginFor(nil, "upgrade", "-o=upgrade-v2"+pluginSuffix, "./upgrade/v2")
 
-	// The other half of the upgrade story (trendvidia/go#122): an
+	// The other half of the upgrade story (trendvidia/go-archive#122): an
 	// extension that follows the contract Plugin.Close documents,
 	// upgraded with nothing unsafe to release first.
 	goCmd(nil, "build", "-o", "upgradesafe.exe", "./upgradesafe/host")
@@ -319,7 +319,7 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "hazards.exe", "./hazards")
 	goCmdBuildPluginFor(nil, "hazards", "-o=hazards-plugin"+pluginSuffix, "./hazards/hazard")
 
-	// Peer-plugin version-lock fixture (trendvidia/go#24). plugA and
+	// Peer-plugin version-lock fixture (trendvidia/go-archive#24). plugA and
 	// plugC come from the main tree; plugB is built below from the
 	// alternate root carrying a divergent build of the same
 	// peerlock/peerlib import path that the host never links.
@@ -351,7 +351,7 @@ func testMain(m *testing.M) int {
 	}
 	os.Setenv("PWD", modRoot)
 
-	// Same-base-name fixture (trendvidia/go#40): two different plugins
+	// Same-base-name fixture (trendvidia/go-archive#40): two different plugins
 	// installed under ONE base file name in two directories, plus the
 	// host that opens both. go build -o does not create directories,
 	// so make them first.
@@ -364,14 +364,14 @@ func testMain(m *testing.M) int {
 	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-a", "p"+pluginSuffix), "./samename/dira")
 	goCmdBuildPluginFor(nil, "samename", "-o="+filepath.Join("same-b", "p"+pluginSuffix), "./samename/dirb")
 
-	// Alias-path fixture (trendvidia/go#46): one plugin plus a hardlink
+	// Alias-path fixture (trendvidia/go-archive#46): one plugin plus a hardlink
 	// spelling of it, so the loader resolves the second Open onto the
 	// already-loaded module. The plugin reuses samename/dira — the
 	// fixture's only observable is that the reopened alias answers.
 	goCmd(nil, "build", "-o", "aliaspath.exe", "./aliaspath")
 	goCmdBuildPluginFor(nil, "aliaspath", "-o=aliaspath-plugin"+pluginSuffix, "./samename/dira")
 
-	// Static-data canonicalization fixture (trendvidia/go#25): host and
+	// Static-data canonicalization fixture (trendvidia/go-archive#25): host and
 	// plugin both link testplugin/canonicaldata/shared; the plugin
 	// embeds descriptors, itabs, and data addresses in static data
 	// through each of the issue's four edges, and the host checks the
@@ -735,7 +735,7 @@ func unnamedPluginPath(t *testing.T, image string, table map[string]bool) string
 }
 
 // TestExportTableCompleteness pins the export mechanism's wire contract
-// (trendvidia/go#44): every symbol a plugin main package declares for
+// (trendvidia/go-archive#44): every symbol a plugin main package declares for
 // export must appear in the linked image's dynamic export table — the
 // PE export directory on Windows, .dynsym on ELF.
 //
@@ -764,11 +764,11 @@ func unnamedPluginPath(t *testing.T, image string, table map[string]bool) string
 // that on both.
 //
 // Darwin is skipped: Mach-O carries exports in the dyld export trie,
-// which these parsers do not cover (gap noted on trendvidia/go#44).
+// which these parsers do not cover (gap noted on trendvidia/go-archive#44).
 func TestExportTableCompleteness(t *testing.T) {
 	globalSkip(t)
 	if runtime.GOOS == "darwin" {
-		t.Skip("Mach-O dyld export trie not parsed; see trendvidia/go#44")
+		t.Skip("Mach-O dyld export trie not parsed; see trendvidia/go-archive#44")
 	}
 
 	goCmd(t, "build", "-o", "exporttab.exe", "./exporttab")
@@ -899,7 +899,7 @@ func TestCloseAPI(t *testing.T) {
 }
 
 // TestPluginABIMarker pins the cross-toolchain ABI fence
-// (trendvidia/go#24 part 2): on Windows, plugin.Open must reject a
+// (trendvidia/go-archive#24 part 2): on Windows, plugin.Open must reject a
 // candidate DLL whose go:plugin.abi export is absent or names another
 // ABI generation. The check reads static file bytes before LoadLibrary
 // maps anything, so both negative cases are exercised in-process — no
@@ -966,7 +966,7 @@ func TestPluginABIMarker(t *testing.T) {
 }
 
 // TestSameBaseNameDistinctDirs pins the post-load half of the ABI
-// fence (trendvidia/go#40): two DIFFERENT plugins sharing one base
+// fence (trendvidia/go-archive#40): two DIFFERENT plugins sharing one base
 // file name must never collapse onto one OS module. The platform
 // loader's matching rule decides which good outcome occurs — B loads
 // as its own module (measured on Windows 11 arm64 and on POSIX), or
@@ -978,7 +978,7 @@ func TestSameBaseNameDistinctDirs(t *testing.T) {
 	run(t, "./samename.exe")
 }
 
-// TestAliasPathRejectionNotCached pins trendvidia/go#46: the alias
+// TestAliasPathRejectionNotCached pins trendvidia/go-archive#46: the alias
 // rejection (a requested path resolving onto an already-loaded module)
 // is process state, not a property of the file, so plugin.Open must
 // not cache it. The fixture opens a plugin, opens a hardlink spelling
@@ -999,7 +999,7 @@ func TestAliasPathRejectionNotCached(t *testing.T) {
 	}
 }
 
-// The TestCanonical* quartet pins trendvidia/go#25: type descriptors,
+// The TestCanonical* quartet pins trendvidia/go-archive#25: type descriptors,
 // itabs, and data addresses that the PLUGIN embedded in static data —
 // where no slot-routed code access can canonicalize them — must still
 // resolve onto the host's canonical copies at plugin load. One edge of
@@ -1040,7 +1040,7 @@ func TestCanonicalStaticFuncValue(t *testing.T) {
 }
 
 // TestRejectChainedModule drives the stage-2 ABI rejection end to end
-// and pins its residue handling (trendvidia/go#48). The host swaps the
+// and pins its residue handling (trendvidia/go-archive#48). The host swaps the
 // plugin file between the fence's two reads through package plugin's
 // test hook, so plugin.Open maps a marker from a foreign generation
 // whose DllMain chains a REAL moduledata; it asserts the stage-2
@@ -1070,7 +1070,7 @@ func TestPanicOnCallStub(t *testing.T) {
 }
 
 // TestLookupDuringClose races concurrent Lookup calls against Close
-// (trendvidia/go#23). lookup() must serialise p.syms/p.pluginpath
+// (trendvidia/go-archive#23). lookup() must serialise p.syms/p.pluginpath
 // access on pluginsMu; the fixture hammers Lookup from four goroutines
 // while the main goroutine closes, then checks every outcome: results
 // are successes or clean errors only and each goroutine sees the
@@ -1086,7 +1086,7 @@ func TestLookupDuringClose(t *testing.T) {
 }
 
 // TestOpenSymbolFailure drives open()'s could-not-find-symbol path
-// twice (trendvidia/go#37). That mid-load failure must mark the
+// twice (trendvidia/go-archive#37). That mid-load failure must mark the
 // cached *Plugin failed and close its loaded channel; it used to
 // return with both unset, leaving a placeholder every later Open of
 // the same path blocked on forever. The fixture asserts that every
@@ -1099,7 +1099,7 @@ func TestOpenSymbolFailure(t *testing.T) {
 }
 
 // TestDependentsDuringClose races HasDependents/Dependents against
-// Close (trendvidia/go#36). Both accessors must snapshot
+// Close (trendvidia/go-archive#36). Both accessors must snapshot
 // p.pluginpath under pluginsMu AND copy it into host memory there,
 // since closePlugin rewrites the field and then unmaps the bytes it
 // pointed at, all under the same mutex. The fixture and its plugins
@@ -1116,7 +1116,7 @@ func TestDependentsDuringClose(t *testing.T) {
 }
 
 // TestCloseZeroValue closes Plugin values that Open did not hand
-// out (trendvidia/go#35). Close must return an error for both
+// out (trendvidia/go-archive#35). Close must return an error for both
 // spellings, and must be able to format that error even when the
 // value's pluginpath points into an image that is already unmapped: the zero value, whose empty pluginpath used to select
 // the HOST module in the runtime, mark it bad and empty
@@ -1142,7 +1142,7 @@ func TestCloseZeroValue(t *testing.T) {
 }
 
 // TestLookupOnCopy pins the Lookup half of the struct-copy contract
-// (trendvidia/go#64): Lookup accepts a copy of an Open-returned
+// (trendvidia/go-archive#64): Lookup accepts a copy of an Open-returned
 // Plugin while the plugin is live, and returns an error — rather than
 // hashing symName against a syms map whose keys live in the unmapped
 // symbol table, or formatting a pluginpath header into unmapped
@@ -1177,7 +1177,7 @@ func TestCloseUnloadsMemory(t *testing.T) {
 // on Windows a host-shared global that the plugin's copy of package
 // sync used to overwrite at Open with a funcval inside the plugin's
 // image, so the first GC after Close faulted dereferencing unmapped
-// memory (trendvidia/go#61). The fixture churns sync.Pool around the
+// memory (trendvidia/go-archive#61). The fixture churns sync.Pool around the
 // unload so the hook demonstrably still runs.
 func TestGCAfterClose(t *testing.T) {
 	globalSkip(t)
@@ -1235,7 +1235,7 @@ func runExpectFault(t *testing.T, bin string, args ...string) {
 }
 
 // TestCloseHazardEnvelope pins the documented post-Close reference
-// envelope (trendvidia/go#26). Func values from Lookup panic
+// envelope (trendvidia/go-archive#26). Func values from Lookup panic
 // recoverably after Close — that class is covered by
 // TestPanicOnCallStub. The three unprotected classes must behave as
 // documented:
@@ -1260,13 +1260,13 @@ func runExpectFault(t *testing.T, bin string, args ...string) {
 // The aliasing assertions themselves are then conditional: the
 // loader does not promise to reuse the base (on Windows it was
 // measured moving about 1 in 6 runs on arm64,
-// trendvidia/go#47), and a stale pointer into a moved-away range is
+// trendvidia/go-archive#47), and a stale pointer into a moved-away range is
 // unmapped or aliases something unrelated, so the probe compares the
 // two Lookup addresses first and only asserts aliasing when they
 // match. Either outcome is a pass; the parent requires the probe to
 // say which it took so a silently non-asserting fixture cannot hide.
 // TestUpgradeStalePointer pins what a pointer held across an extension
-// UPGRADE does (trendvidia/go#122). Upgrading is close(v1) then
+// UPGRADE does (trendvidia/go-archive#122). Upgrading is close(v1) then
 // open(v2) — the flow unloading exists to serve — and the loader reuses
 // a freed image's base despite ASLR, so a stale pointer used to address
 // whatever the NEW image put at that offset. The fixture's v2 moves its
@@ -1275,7 +1275,7 @@ func runExpectFault(t *testing.T, bin string, args ...string) {
 // with no error anywhere.
 //
 // Every platform reserves the freed range on unload now, so the stale
-// write faults: Windows via VirtualAlloc (trendvidia/go#122), POSIX via
+// write faults: Windows via VirtualAlloc (trendvidia/go-archive#122), POSIX via
 // a hint-only mmap (#123). The fixture's own "corrupted Budget" branch
 // is what this asserts against — reaching it means a reservation
 // silently stopped happening and the upgrade path is quietly wrong
@@ -1310,7 +1310,7 @@ func TestCloseHazardEnvelope(t *testing.T) {
 	// The alias cell no longer tolerates a "skipped" outcome. It used
 	// to, because whether the loader reused a freed base was its
 	// decision and it varied (measured at about 1 in 6 on windows/arm64,
-	// trendvidia/go#47). Unload now reserves the range (#122, #123), so
+	// trendvidia/go-archive#47). Unload now reserves the range (#122, #123), so
 	// reusing the base is not a loader coin-flip any more — it is the
 	// reservation having failed to happen, which is exactly what this
 	// must catch.
@@ -1321,7 +1321,7 @@ func TestCloseHazardEnvelope(t *testing.T) {
 }
 
 // TestPeerVersionLock exercises the peer-plugin half of the version
-// lock (trendvidia/go#24). peerlock/peerlib is linked into the plugins
+// lock (trendvidia/go-archive#24). peerlock/peerlib is linked into the plugins
 // but not into the host, so host-side validation never sees it:
 // pm-plugA loads first and owns the package; pm-plugB carries a
 // divergent build of the same import path and must be REJECTED with
@@ -1350,7 +1350,7 @@ func TestRefcountUnload(t *testing.T) {
 
 // TestGoDomainModuleCanonicalData exercises cross-module data
 // canonicalisation for packages hosted under a go.*-style module
-// domain (trendvidia/go#108). isUserPackageName's old blanket `go.`
+// domain (trendvidia/go-archive#108). isUserPackageName's old blanket `go.`
 // prefix arm — meant for the go.typeptr./go.itabptr./go.funcptr. slot
 // families — also matched module domains like go.uber.org, so such a
 // package's globals were never registered in userDataExports/Imports
@@ -1365,7 +1365,7 @@ func TestGoDomainModuleCanonicalData(t *testing.T) {
 }
 
 // TestCrossModuleFuncValueIdentity pins that a func value means the
-// same object in every module (trendvidia/go#106). A func value points
+// same object in every module (trendvidia/go-archive#106). A func value points
 // at a one-word funcval, and each module emits its own `pkg.Fn·f`; when
 // Fn's body is the host's, a plugin's copy holds the address of the
 // plugin's IAT thunk. Calls worked through that thunk, so the symptom
@@ -1383,7 +1383,7 @@ func TestCrossModuleFuncValueIdentity(t *testing.T) {
 }
 
 // TestRootModuleCanonicalData exercises the neighbouring arm of the
-// same gate (trendvidia/go#110): a package at the ROOT of a dotted
+// same gate (trendvidia/go-archive#110): a package at the ROOT of a dotted
 // module path. objabi.PathToPrefix escapes every dot after the final
 // slash, so when the whole import path is the last element the symbol
 // name carries no slash — `module example.com` gives
@@ -1400,7 +1400,7 @@ func TestRootModuleCanonicalData(t *testing.T) {
 
 // TestEscapedSymbolNameSharing pins that a plugin can bind a host-shared
 // package whose symbol names carry a PathToPrefix %-escape
-// (trendvidia/go#116). objabi.PathToPrefix escapes every '.' after the
+// (trendvidia/go-archive#116). objabi.PathToPrefix escapes every '.' after the
 // final slash, so a package whose import path ends in a dotted element
 // — every gopkg.in path in the wild: yaml.v2, yaml.v3, check.v1 — has a
 // `%2e` in all of its symbol names. On Windows those names become
@@ -1412,7 +1412,7 @@ func TestRootModuleCanonicalData(t *testing.T) {
 // global really is one instance.
 // TestSlashlessNameCanonicalData pins both halves of the gate that
 // isUserPackageName's "no slash means stdlib" arm used to close
-// (trendvidia/go#115): a package at the root of a module named without
+// (trendvidia/go-archive#115): a package at the root of a module named without
 // a domain — `go mod init extensions`, which is how first-party
 // extension code is laid out — and a slashless STDLIB package that the
 // plugins link and the host does not, where the host's import library
@@ -1433,7 +1433,7 @@ func TestEscapedSymbolNameSharing(t *testing.T) {
 }
 
 // TestPluginLocalAsmCall pins that a plugin whose OWN text calls ABI0
-// assembly loads and runs (trendvidia/go#117). On windows/amd64 the
+// assembly loads and runs (trendvidia/go-archive#117). On windows/amd64 the
 // compiler rewrites the g-register reload after such a call into a load
 // through a symbol named `__imp_runtime.tls_g`; internal linking used to
 // wrap that into a slot holding the image's rebasing delta, so the
@@ -1453,7 +1453,7 @@ func TestPluginLocalAsmCall(t *testing.T) {
 }
 
 // TestInternalPackageInitData pins that a package whose `..inittask` is
-// host-shared has its DATA host-shared too (trendvidia/go#74). The
+// host-shared has its DATA host-shared too (trendvidia/go-archive#74). The
 // host links internal/poll through os but not net, so internal/poll's
 // init ran host-side and the plugin dropped it from its schedule, while
 // net's init stays plugin-local and runs at Open — and net.init.0 calls
@@ -1920,7 +1920,7 @@ func TestIssue75102(t *testing.T) {
 }
 
 // TestCgoPluginNotifyExport pins the cgo runtime-init handshake
-// (trendvidia/go#62, trendvidia/go#130).
+// (trendvidia/go-archive#62, trendvidia/go-archive#130).
 //
 // A plugin containing runtime/cgo carries its own libcgo, whose
 // runtime_init_done starts clear. Every C->Go entry point cgo emits
@@ -1966,7 +1966,7 @@ func TestCgoPluginNotifyExport(t *testing.T) {
 	// cmd/link writes the export table itself, an unreachable symbol has
 	// no address yet, and the export went out as RVA 0xc00003e8, so
 	// plugin.Open called base+0x3e8 and died inside the PE headers
-	// (trendvidia/go#130).
+	// (trendvidia/go-archive#130).
 	t.Run("import C only", func(t *testing.T) {
 		goCmd(t, "build", "-o", "cgonotify-bare.exe", "./cgonotify/barehost")
 		goCmdBuildPluginFor(t, "cgonotify-bare",
@@ -2048,7 +2048,7 @@ func TestHotSwapUpgrade(t *testing.T) {
 	// per Close rather than breaking on the first one.
 	//
 	// The cycle count is measured, not chosen for roundness.
-	// trendvidia/go#150 was a stale entry left in the global itab table
+	// trendvidia/go-archive#150 was a stale entry left in the global itab table
 	// by every Close: it does not fault until the table has grown enough
 	// for a probe to reach one, so 12 cycles never saw it while an
 	// unrelated interface lookup in the host faulted reliably above the

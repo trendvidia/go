@@ -5,7 +5,7 @@
 // A cgo plugin that calls back from C into Go — the direction whose
 // entry point cgo guards with _cgo_wait_runtime_init_done, and so the
 // direction that needs this image's own libcgo to have been notified
-// that the runtime is up. See trendvidia/go#62.
+// that the runtime is up. See trendvidia/go-archive#62.
 package main
 
 /*

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Host for TestCloseHazardEnvelope (trendvidia/go#26). Each
+// Host for TestCloseHazardEnvelope (trendvidia/go-archive#26). Each
 // subcommand loads hazards-plugin, takes one reference class into
 // the plugin, closes it, then uses the stale reference:
 //
@@ -28,7 +28,7 @@
 //     moved, the stale references point at unmapped memory (a fatal
 //     fault) or at whatever now occupies that range (silent
 //     corruption), neither of which this probe can assert safely, so
-//     it reports both bases and skips (trendvidia/go#47).
+//     it reports both bases and skips (trendvidia/go-archive#47).
 //
 // The fatal probes never return on success; the parent test requires
 // a nonzero exit whose output mentions "fatal error: fault". If a
@@ -164,7 +164,7 @@ func aliasProbe() {
 	// That USED to be the common outcome, and this cell existed to
 	// document it: the loader reused a freed base despite ASLR, so a
 	// stale pointer silently addressed the new instance. Unload now
-	// reserves the range the image occupied (trendvidia/go#122 on
+	// reserves the range the image occupied (trendvidia/go-archive#122 on
 	// Windows, #123 on POSIX), so the reopen cannot land there and the
 	// aliasing is gone by construction.
 	//

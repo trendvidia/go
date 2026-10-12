@@ -6,7 +6,7 @@
 
 // Command rejectchained drives the stage-2 half of the cross-toolchain
 // ABI fence end to end, and pins how its rejection treats the chained
-// residue (trendvidia/go#48):
+// residue (trendvidia/go-archive#48):
 //
 //  1. plugin.Open on a file whose bytes are swapped between the fence's
 //     two reads. Stage 1 judges the file at the path and stage 2 judges

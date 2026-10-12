@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Tests what a pointer held across an extension UPGRADE does
-// (trendvidia/go#122). Upgrading is close(v1) then open(v2), which is
+// (trendvidia/go-archive#122). Upgrading is close(v1) then open(v2), which is
 // the flow unloading exists to serve, so it is the flow that has to be
 // safe.
 //
@@ -15,7 +15,7 @@
 // live state, with no error anywhere.
 //
 // Both halves now reserve the freed range on unload — Windows with
-// VirtualAlloc(MEM_RESERVE) (trendvidia/go#122), POSIX with a hint-only
+// VirtualAlloc(MEM_RESERVE) (trendvidia/go-archive#122), POSIX with a hint-only
 // mmap that never uses MAP_FIXED (#123) — so the stale write faults and
 // the process dies. Reaching the "corrupted Budget" branch below means
 // a reservation stopped happening.

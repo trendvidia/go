@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Tests that a plugin whose OWN text calls ABI0 assembly loads and runs
-// (trendvidia/go#117). On windows/amd64 the compiler rewrites the
+// (trendvidia/go-archive#117). On windows/amd64 the compiler rewrites the
 // g-register reload that follows such a call into a load through
 // `__imp_runtime.tls_g`; under internal linking the linker used to
 // wrap that into a slot holding the image's rebasing delta, so the

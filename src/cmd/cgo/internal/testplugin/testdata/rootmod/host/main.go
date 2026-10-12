@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Tests cross-module data canonicalisation for a package sitting at the
-// ROOT of a dotted module path (trendvidia/go#110). objabi.PathToPrefix
+// ROOT of a dotted module path (trendvidia/go-archive#110). objabi.PathToPrefix
 // escapes the dots after the final slash, so a root package's symbols
 // carry no slash at all — `module example.com` gives
 // `example%2ecom.Counter` — and isUserPackageName's "no slash means

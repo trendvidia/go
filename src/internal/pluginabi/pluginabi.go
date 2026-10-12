@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Package pluginabi defines the cross-binary ABI marker carried by
-// every Windows plugin DLL (trendvidia/go#24, part 2).
+// every Windows plugin DLL (trendvidia/go-archive#24, part 2).
 //
 // The linker embeds [Marker] followed by [Version] into each
 // -buildmode=plugin DLL as the go:plugin.abi export. Package plugin on
@@ -12,13 +12,13 @@
 // marker is absent or whose Version differs never executes its DllMain
 // — and re-read from the mapped module via GetProcAddress, so what is
 // judged after the load is the image actually mapped, not whatever the
-// file held when it was read (trendvidia/go#40). Without this fence, a
+// file held when it was read (trendvidia/go-archive#40). Without this fence, a
 // DLL built by a different fork/toolchain generation appends its
 // moduledata fine (it touches only its own image), and the fatal fault
 // comes later, when the host walks that foreign memory at its own
 // field offsets.
 //
-// This is the decision recorded on trendvidia/go#24: no ABI pin inside
+// This is the decision recorded on trendvidia/go-archive#24: no ABI pin inside
 // moduledata/pcHeader; the marker's only consumer is package plugin,
 // so revising it costs a revert rather than a migration.
 //
@@ -49,6 +49,6 @@ const Marker uint32 = 0x41424950 // "ABIP" little-endian
 // History:
 //
 //	2: moduledata grew the udaddrwords/udaddrslots/udaddradds triplet
-//	   (static-data address canonicalisation, trendvidia/go#25).
-//	1: initial marker generation (trendvidia/go#24).
+//	   (static-data address canonicalisation, trendvidia/go-archive#25).
+//	1: initial marker generation (trendvidia/go-archive#24).
 const Version uint32 = 2

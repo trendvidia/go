@@ -12,7 +12,7 @@
 //
 // They live apart from pe.go, which is upstream's PE writer, so that upstream
 // changes to it merge without touching fork-authored code. See
-// trendvidia/go#140.
+// trendvidia/go-archive#140.
 
 package ld
 
@@ -192,13 +192,13 @@ func peNoTimestampArgs(ctxt *Link, argv []string, altLinker string) []string {
 // convention: the decoration is at the END and is decimal digits.
 //
 // Matching the FIRST '%' anywhere in the name instead — as this did
-// until trendvidia/go#116 — collides with objabi.PathToPrefix, which
+// until trendvidia/go-archive#116 — collides with objabi.PathToPrefix, which
 // escapes '.' after the final slash (plus '%', '"', and every byte
 // outside printable ASCII) as %xx. Every symbol of a package whose
 // import path has a dot in its last element therefore carries a `%2e`:
 // `gopkg.in/yaml.v2` becomes `gopkg.in/yaml%2ev2`, and a package at the
 // root of a dotted module path is escaped whole (`module example.com`
-// -> `example%2ecom`, trendvidia/go#110). Those names reach here as
+// -> `example%2ecom`, trendvidia/go-archive#110). Those names reach here as
 // SDYNIMPORT the moment a Windows plugin binds one from its host's
 // import library, and the old scan then failed the link outright:
 // "failed to parse stdcall decoration: parsing \"2ev2.Set\": invalid

@@ -93,7 +93,7 @@ var hostExportsRegistered bool
 
 // registerHostExports enters the host's user-package data exports in
 // canonicalSyms, so the host owns those names under first-loader-wins
-// (trendvidia/go#106).
+// (trendvidia/go-archive#106).
 //
 // The host is firstmoduledata: the main program's module is always the
 // first in the list, and a plugin is only ever appended. Its exports
@@ -176,7 +176,7 @@ func userDataInit(md *moduledata) {
 }
 
 // userDataAddrsInit rewrites static-data words that embed the address
-// of a user-package global (trendvidia/go#25: `var P = &pkg.Global`
+// of a user-package global (trendvidia/go-archive#25: `var P = &pkg.Global`
 // compiled into initialized data, where no slot-routed code access can
 // canonicalise the value). The linker paired each word with the
 // `__imp_X` slot for its target: for host-shared X that is the IAT
@@ -213,7 +213,7 @@ func userDataAddrsInit(md *moduledata) {
 	// Do not delete this as dead weight. Removing it was measured to
 	// take a GOFIPS140=v1.26.0 linux/arm64 link from 0 to 9 "ABI0-only
 	// symbol referenced as ABIInternal" errors in crypto/internal/
-	// fips140 (trendvidia/go#111 carries that measurement). The
+	// fips140 (trendvidia/go-archive#111 carries that measurement). The
 	// mechanism is NOT the one this comment originally claimed --
 	// deadcode is symbol-granular, and a length test that emits no
 	// relocations can neither add nor remove a reachability edge, so

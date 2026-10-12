@@ -19,7 +19,7 @@ import (
 
 // kernel32!GetModuleFileNameW resolves a loaded module handle back to
 // the path the loader recorded for it; open uses it to detect the
-// base-name aliasing described on trendvidia/go#40. A LazyDLL keeps
+// base-name aliasing described on trendvidia/go-archive#40. A LazyDLL keeps
 // package plugin off internal/syscall/windows, whose import would put
 // it in cmd/dist's bootstrap copy set (buildtool.go).
 var (
@@ -52,7 +52,7 @@ func open(name string) (*Plugin, error) {
 	// keeps loading. Spellings longPathName cannot expand (a file that
 	// does not exist yet) key by themselves, as before.
 	//
-	// LIMITATION, deliberate (trendvidia/go#100): the key is NOT
+	// LIMITATION, deliberate (trendvidia/go-archive#100): the key is NOT
 	// case-folded. GetLongPathNameW canonicalises the case of every
 	// component it resolves, but not the drive letter, so
 	// Open(`c:\dir\p.dll`) after Open(`C:\dir\p.dll`) still misses the
@@ -106,7 +106,7 @@ func open(name string) (*Plugin, error) {
 		return p, nil
 	}
 
-	// Cross-toolchain ABI fence, stage 1 (trendvidia/go#24, part 2):
+	// Cross-toolchain ABI fence, stage 1 (trendvidia/go-archive#24, part 2):
 	// reject a binary from an incompatible toolchain generation by
 	// reading its go:plugin.abi marker straight from the file — before
 	// LoadLibrary maps anything, so the candidate's DllMain (which
@@ -117,7 +117,7 @@ func open(name string) (*Plugin, error) {
 	// Judging file bytes alone cannot tell WHICH module the loader will
 	// return: the file may be swapped between this read and the load,
 	// and a request can resolve to an already-mapped module elsewhere
-	// on disk (trendvidia/go#40). The two post-load checks below — the
+	// on disk (trendvidia/go-archive#40). The two post-load checks below — the
 	// handle's recorded path against the request, and the marker
 	// re-read from the mapped image — are the authority on what was
 	// actually loaded; this stage remains the gate that keeps any
@@ -164,7 +164,7 @@ func open(name string) (*Plugin, error) {
 	//     requested — an already-mapped DLL handed back instead of a
 	//     fresh map (the behaviour Microsoft documents for same-named
 	//     modules), leaving the process one DllMain short of what the
-	//     caller asked for (trendvidia/go#40). Rejecting with both
+	//     caller asked for (trendvidia/go-archive#40). Rejecting with both
 	//     paths named beats the silent wrong-path→module association a
 	//     success would cache — and beats misreporting it as the
 	//     no-module-data case below. The FreeLibrary is still taken: an
@@ -215,7 +215,7 @@ func open(name string) (*Plugin, error) {
 			// rejection is process state that changes the moment the
 			// blocking module is closed. Caching it would leave the
 			// path unloadable for the life of the process, naming a
-			// module that is no longer loaded (trendvidia/go#46). The
+			// module that is no longer loaded (trendvidia/go-archive#46). The
 			// cost of re-evaluating is one LoadLibrary/FreeLibrary
 			// refcount bump on an already-mapped image per retry.
 			syscall.FreeLibrary(h)
@@ -234,7 +234,7 @@ func open(name string) (*Plugin, error) {
 	// module the loader ACTUALLY mapped, through its live export table.
 	// This closes what judging file bytes cannot: a file swapped in
 	// between the stage-1 read and LoadLibrary has its replacement
-	// mapped and judged here by its real contents (trendvidia/go#40).
+	// mapped and judged here by its real contents (trendvidia/go-archive#40).
 	// Reaching this point means the chain grew above, i.e. the module's
 	// DllMain ran and appended its moduledata. Unmapping such an image
 	// safely needs the stop-the-world barrier Close takes
@@ -371,7 +371,7 @@ func open(name string) (*Plugin, error) {
 // syms/pluginpath off THAT entry, never off p: p may be a struct
 // copy whose fields outlived the original's Close, where the syms
 // map's keys and the pluginpath header both point into the unmapped
-// image (trendvidia/go#64). On the resolving path the only field
+// image (trendvidia/go-archive#64). On the resolving path the only field
 // lookup reads off p is p.loaded, a channel header that Close never
 // rewrites. The non-resolving path reads two more, both inside
 // lookupClosedErr: p.err, and — only when that err records a
@@ -406,7 +406,7 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 	defer pluginsMu.Unlock()
 	// Read syms and pluginpath off the cached live entry, never off
 	// p itself: p may be a struct copy whose fields outlived the
-	// original's Close (trendvidia/go#64). See liveOrigin.
+	// original's Close (trendvidia/go-archive#64). See liveOrigin.
 	origin := liveOrigin(p)
 	if origin == nil {
 		return nil, lookupClosedErr(p)
@@ -477,7 +477,7 @@ func imageExtent(handle uintptr) (base, size uintptr) {
 
 // reserveUnmapped reserves the address range a just-unloaded plugin
 // occupied, so the loader cannot hand it to the NEXT plugin
-// (trendvidia/go#122).
+// (trendvidia/go-archive#122).
 //
 // Without it, a host pointer held across Close does not dangle in any
 // detectable way: Windows reuses the freed base for the next image
@@ -517,7 +517,7 @@ func unloadPlugin(p *Plugin, _, _ uintptr) error {
 		return nil
 	}
 	// Read the image extent while it is still mapped; after
-	// FreeLibrary the headers are gone (trendvidia/go#122).
+	// FreeLibrary the headers are gone (trendvidia/go-archive#122).
 	base, size := imageExtent(p.handle)
 	if err := syscall.FreeLibrary(syscall.Handle(p.handle)); err != nil {
 		return err
@@ -558,7 +558,7 @@ func validatePkghashes(addr uintptr) (errstr string, rejectedPath string)
 // cmd/link/internal/loader.blockedLinknames, so any package linked into
 // a host may pull it: the rejectchained fixture pulls it from a main
 // package, whose recorded path the linker cannot name. The reasoning
-// and the ways out are at those entries (trendvidia/go#86).
+// and the ways out are at those entries (trendvidia/go-archive#86).
 //
 //go:linkname chainTail
 func chainTail() uintptr
@@ -570,7 +570,7 @@ func chainTail() uintptr
 // the appended node itself is inspected.
 //
 // Deliberately unconfined in blockedLinknames, as chainTail is
-// (trendvidia/go#86): this is the arbitrary-address read that pairs
+// (trendvidia/go-archive#86): this is the arbitrary-address read that pairs
 // with rejectChainedModule's write.
 //
 //go:linkname chainGrew
@@ -583,11 +583,11 @@ func chainGrew(prevTail uintptr) bool
 // 1 read is the only way stage 2 can reject without a second
 // toolchain generation, so without the hook open's post-load
 // rejection — its rejectChainedModule call, negative-cache write and
-// error text — is unreachable by any test (trendvidia/go#48). The
+// error text — is unreachable by any test (trendvidia/go-archive#48). The
 // cmd/cgo/internal/testplugin rejectchained fixture sets it via
 // go:linkname; production code never does.
 //
-// DECISION (trendvidia/go#78, 2026-08-27): the push linkname stays, and
+// DECISION (trendvidia/go-archive#78, 2026-08-27): the push linkname stays, and
 // this comment is the written rule it establishes.
 //
 // A //go:linkname on a definition is a PUSH -- either form of the
@@ -623,7 +623,7 @@ func chainGrew(prevTail uintptr) bool
 // the rest of it: package runtime pushes nine of its own definitions in
 // under plugin.* names, none of them confined by
 // cmd/link/internal/loader.blockedLinknames, so those are reachable from
-// any package too. trendvidia/go#86 is open on whether they should be;
+// any package too. trendvidia/go-archive#86 is open on whether they should be;
 // TestRuntimePushesIntoPluginNamespace pins that set meanwhile.
 //
 //go:linkname testHookBetweenFenceStages
@@ -658,7 +658,7 @@ func callFenceHook(hook func(string), pluginPath string) {
 // generation mismatch says may have moved.
 //
 // Deliberately unconfined in blockedLinknames, as chainTail is
-// (trendvidia/go#86), and the sharpest of the three: it writes through
+// (trendvidia/go-archive#86), and the sharpest of the three: it writes through
 // the address it is handed. Any package linked into a host may pull it
 // and call it with an address of its own choosing until that gap is
 // closed.
@@ -1025,7 +1025,7 @@ type initTask struct {
 // it: measured on windows/arm64 as an execute violation (0xc0000005,
 // info[0] 0x8) inside x_cgo_notify_runtime_init_done's first
 // EnterCriticalSection, at `MOVD 488(R8), R8; CALL (R8)`
-// (trendvidia/go#130). The external-link path did not show this because
+// (trendvidia/go-archive#130). The external-link path did not show this because
 // there the same calls go through the real PE import table, which the OS
 // fills at LoadLibrary time — which is the whole reason the old placement
 // survived on windows/amd64.

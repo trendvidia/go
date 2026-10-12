@@ -192,7 +192,7 @@ func TestPEOutputDisplayName(t *testing.T) {
 	}
 }
 
-// TestPEPluginOverLimitLink is the end-to-end pin for trendvidia/go#39's
+// TestPEPluginOverLimitLink is the end-to-end pin for trendvidia/go-archive#39's
 // chosen policy: a -buildmode=plugin windows link whose reachable
 // CgoExportDynamic count exceeds peExportLimit fails at link time with an
 // error naming the limit, and leaves no DLL behind. It cross-builds for
@@ -324,7 +324,7 @@ func main() {}
 // process below exercises.
 const peExportLimitChildEnv = "GO_TEST_PE_EXPORT_LIMIT_ABORT"
 
-// TestPEExportLimitAborts pins the policy trendvidia/go#39 chose at both
+// TestPEExportLimitAborts pins the policy trendvidia/go-archive#39 chose at both
 // sites that implement it: over the cap, a plugin link reports the limit
 // and ends the process with a failing status.
 //
@@ -350,7 +350,7 @@ func TestPEExportLimitAborts(t *testing.T) {
 			}
 			// Both messages name the requested DLL and the limit, but
 			// they deliberately say different things, because the two
-			// sites bound different sets (trendvidia/go#59).
+			// sites bound different sets (trendvidia/go-archive#59).
 			//
 			// initdynexport counts the export table it is about to
 			// emit, so "exports N symbols" is literally true there.
@@ -470,7 +470,7 @@ func defNames(t *testing.T, path string) []string {
 }
 
 // TestPluginExportFileABIPairs pins the naming and de-duplication of the
-// .def handed to an external linker (trendvidia/go#53).
+// .def handed to an external linker (trendvidia/go-archive#53).
 //
 // A function carrying both ABI versions must appear as "X" and "X.abi0",
 // each exactly once. Keyed on the raw symbol name it appeared as "X"

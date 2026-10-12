@@ -83,7 +83,7 @@ func main() {
 
 	// Close on plugA must fail while plugB still depends on it, and
 	// the refusal must name plugB so the caller can act without a
-	// separate Dependents round-trip (trendvidia/go#26).
+	// separate Dependents round-trip (trendvidia/go-archive#26).
 	if err := a.Close(); err == nil {
 		fail("a.Close() returned nil while plugB still depends on plugA; want refused")
 	} else if !strings.Contains(err.Error(), "testplugin/refcount/plugB") {

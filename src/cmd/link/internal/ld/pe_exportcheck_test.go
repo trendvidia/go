@@ -64,7 +64,7 @@ func buildWindowsPE(t *testing.T, src string) string {
 }
 
 // TestPEImageExportOverLimit pins that the export cap is measured against
-// the linked image (trendvidia/go#59).
+// the linked image (trendvidia/go-archive#59).
 //
 // The check this replaces counted the names written into the plugin's
 // .def, which on the external-link path is not the export table: mingw's

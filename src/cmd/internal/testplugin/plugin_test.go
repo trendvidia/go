@@ -215,7 +215,7 @@ func TestBasic(t *testing.T) {
 	runHost(t, "host.exe")
 }
 
-// TestFuncMainAccepted locks in trendvidia/go#6: -buildmode=plugin
+// TestFuncMainAccepted locks in trendvidia/go-archive#6: -buildmode=plugin
 // must accept-and-ignore a `func main` in the plugin's main package.
 // Stock default `go build` requires func main to link, so a package
 // that declares it can satisfy both stock builds and a fork plugin
@@ -258,7 +258,7 @@ func main() {}
 `
 
 // TestStress exercises the multi-plugin lifecycle under concurrency
-// (ROADMAP A2, https://github.com/trendvidia/go/issues/3): rounds of
+// (ROADMAP A2, https://github.com/trendvidia/go-archive/issues/3): rounds of
 // parallel Opens (including duplicate Opens of already-loaded paths,
 // which must dedup), concurrent calls through looked-up functions
 // into a shared package, Close of a random subset, GC churn, reopen.

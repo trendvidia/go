@@ -13,7 +13,7 @@
 //
 // They live apart from pe.go, which is upstream's PE writer, so that upstream
 // changes to it merge without touching fork-authored code. See
-// trendvidia/go#140.
+// trendvidia/go-archive#140.
 
 package ld
 
@@ -153,7 +153,7 @@ func pePluginExportFile(ctxt *Link) string {
 	// named the ABI0 body not at all, though initdynexport's comment
 	// explains why external-link plugins are the case that needs the
 	// ABI0 export by name. No plugin export set observed at 60fd56dbc4
-	// contains such a pair (measured: trendvidia/go#53), so this is
+	// contains such a pair (measured: trendvidia/go-archive#53), so this is
 	// latent rather than a live defect -- which is exactly why it ships
 	// with the pin in TestPluginExportFileABIPairs rather than waiting
 	// for a plugin that trips it.
@@ -190,7 +190,7 @@ func pePluginExportFile(ctxt *Link) string {
 	// An early guard on the PINNED list only -- not the cap on the image.
 	// Handing mingw ld an EXPORTS list does not switch its auto-export
 	// off, so what this file names and what the image publishes are
-	// different numbers (measured 6 vs 2195, trendvidia/go#59). The cap
+	// different numbers (measured 6 vs 2195, trendvidia/go-archive#59). The cap
 	// that binds is peVerifyImageExportCount, which reads the finished
 	// image after hostlink. This one only catches a pinned set so large
 	// it cannot fit, and it is worth keeping because it fails before the
@@ -338,7 +338,7 @@ func addPluginPkghashesExport(ctxt *Link) {
 // toolchain generation that built this DLL. package plugin on Windows
 // reads it from the candidate FILE's export table before LoadLibrary
 // and rejects binaries from an incompatible generation before their
-// DllMain runs (trendvidia/go#24, part 2; the bump rules live in
+// DllMain runs (trendvidia/go-archive#24, part 2; the bump rules live in
 // internal/pluginabi). Same routing as go:plugin.pkghashes: reachable
 // + CgoExportDynamic so every export-table writer (internal linking
 // here, .def for external) picks it up.
@@ -371,7 +371,7 @@ func addPluginAbiExport(ctxt *Link) {
 // becomes authoritative under -Wl,--exclude-all-symbols — and the export
 // goes with it. The same plugin then published 6 names, loaded, ran a
 // Go->C call fine (that direction carries no handshake) and hung forever
-// on its first C->Go callback (trendvidia/go#62).
+// on its first C->Go callback (trendvidia/go-archive#62).
 //
 // Both link modes, deliberately. windows/arm64 links plugins internally
 // (external linking of a cgo plugin there fails outright, #131) and

@@ -6,7 +6,7 @@
 // go.*-style module domain (go.uber.org, go.opentelemetry.io, ...).
 // isUserPackageName's old blanket `go.` prefix arm excluded every such
 // package from userDataLink registration, so host and plugins each kept
-// their own instance of the package's globals (trendvidia/go#108).
+// their own instance of the package's globals (trendvidia/go-archive#108).
 //
 // Two globals, two mechanisms:
 //

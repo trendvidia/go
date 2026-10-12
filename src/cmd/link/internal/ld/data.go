@@ -1202,7 +1202,7 @@ func writeBlocks(ctxt *Link, out *OutBuf, sem chan int, ldr *loader.Loader, syms
 			if length < 0 {
 				// syms is not sorted by address: a negative length
 				// would drive written/addr backwards and the next
-				// OutBuf.View offset would wrap (trendvidia/go#49).
+				// OutBuf.View offset would wrap (trendvidia/go-archive#49).
 				// Name the symbol and stop instead.
 				ldr.Errorf(next, "phase error: writeBlocks: next symbol has val=%#x before current addr=%#x type=%v", ldr.SymValue(next), addr, ldr.SymType(next))
 				errorexit()
@@ -1260,7 +1260,7 @@ func writeBlock(ctxt *Link, out *OutBuf, ldr *loader.Loader, syms []loader.Sym, 
 			// the block list below the write cursor. Such a symbol is
 			// typically one that never got a section (SymSect is nil until
 			// address() assigns one, and never does for TLS BSS), so the
-			// diagnostic must not dereference it (trendvidia/go#49).
+			// diagnostic must not dereference it (trendvidia/go-archive#49).
 			sectName, sectAddr := "<nil>", uint64(0)
 			if sect := ldr.SymSect(s); sect != nil {
 				sectName, sectAddr = sect.Name, sect.Vaddr
@@ -2449,7 +2449,7 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 // Windows plugin — whose .bss/.noptrbss are empty because the runtime's
 // data lives in the host — a block boundary inside the last .data symbol
 // then made runtime.tlsg the next block's start and drove the write offset
-// negative by the image base (trendvidia/go#49).
+// negative by the image base (trendvidia/go-archive#49).
 func (state *dodataState) buildDatap(ctxt *Link) {
 	siz := 0
 	for symn := sym.SELFRXSECT; symn < sym.SFirstUnallocated; symn++ {

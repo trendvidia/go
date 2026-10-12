@@ -48,7 +48,7 @@ import (
 // rejects it for containing a slash, and answers false for what is a
 // method body. The plugin then converts the ABIInternal entry at v=1,
 // which orphans the type descriptor's R_METHODOFF and fails the link
-// with "missing section for relocation target ..." (trendvidia/go#139).
+// with "missing section for relocation target ..." (trendvidia/go-archive#139).
 // go1.26 had no such name in a plugin host's import library and go1.27
 // has 13; the `descriptorSizes` family is reachable from every plugin
 // that touches reflect.
@@ -87,7 +87,7 @@ func isMethodBodyName(name string) bool {
 	// `pkg.Recv.Method` shape as method-body when recv is a single
 	// identifier — false positives at worst keep things plugin-local.
 	//
-	// Measured false positive (trendvidia/go#61): `pkg.init.N` reads as
+	// Measured false positive (trendvidia/go-archive#61): `pkg.init.N` reads as
 	// recv=init, method=N, so external link tries only the ABI0 version
 	// of an init function, finds none, and the plugin keeps a local
 	// body. Harmless while the pkg..inittask that would call it is
@@ -125,7 +125,7 @@ func peSkipSymName(name string) bool {
 	// through a PE/IAT indirection that returns the slot's IAT-entry
 	// address instead of the slot's content. Only these exact families
 	// stay local — `go.` alone also prefixes module domains like
-	// go.uber.org whose symbols must be shareable (trendvidia/go#108);
+	// go.uber.org whose symbols must be shareable (trendvidia/go-archive#108);
 	// isModuleSlotName is the lockstep predicate isUserPackageName's
 	// registration gate uses for the same three families.
 	//
@@ -148,7 +148,7 @@ func peSkipSymName(name string) bool {
 	// identifier), and a host binds only what its import library lists —
 	// which peLoadImportLibrary gates with this same predicate. Each
 	// dropped entry also gives a slot of the plugin's peExportLimit
-	// budget back (trendvidia/go#39).
+	// budget back (trendvidia/go-archive#39).
 	if isModuleSlotName(name) {
 		return true
 	}
@@ -165,7 +165,7 @@ func peSkipSymName(name string) bool {
 	// re-runs that package's init — the host already ran it, and
 	// re-running it from the plugin registers plugin-resident funcvals
 	// into host-shared runtime hooks (runtime.poolcleanup via sync's
-	// init) that dangle after the plugin is unloaded (trendvidia/go#61).
+	// init) that dangle after the plugin is unloaded (trendvidia/go-archive#61).
 	// Sharing requires the name in the host's exports and import
 	// library, so let it through here.
 	if i := strings.Index(name, ".."); i > 0 && i < len(name)-2 {
@@ -380,7 +380,7 @@ var peSharedRuntimeData = map[string]bool{
 	"runtime.isWaitingForSuspendG":      true,
 	"runtime.didothers":                 true,
 	// Host-shared, and NOT guarded against a plugin-only registration
-	// dangling after Close (trendvidia/go#68).
+	// dangling after Close (trendvidia/go-archive#68).
 	//
 	// crypto/rsa and crypto/ecdsa register pointers to their package
 	// globals into this slice from init, through
@@ -495,7 +495,7 @@ func peGotRedirect(arch *sys.Arch, ldr *loader.Loader, targ loader.Sym) loader.S
 
 	// A target that is ALREADY an `__imp_` name needs the wrapper to
 	// point at the IAT SLOT, not at the undefined `__imp_X` symbol
-	// (trendvidia/go#117). One symbol arrives here that way:
+	// (trendvidia/go-archive#117). One symbol arrives here that way:
 	// cmd/internal/obj/x86's Windows plugin TLS sequence names
 	// `__imp_runtime.tls_g` deliberately, because an EXTERNAL link
 	// resolves that from the host's import library and so avoids the
@@ -637,7 +637,7 @@ const peExportLimit = 65500
 // Init tasks (pkg..inittask) also rank 0: evicting one leaves the
 // plugin's copy of that package's init task scheduled, so the init
 // re-runs at plugin load and can register plugin-resident funcvals into
-// host-shared runtime hooks that dangle after Close (trendvidia/go#61).
+// host-shared runtime hooks that dangle after Close (trendvidia/go-archive#61).
 // That is an integrity loss, not a convenience loss, and there is only
 // one per linked package.
 //
@@ -814,7 +814,7 @@ func peSnapshotHostExports(ctxt *Link) {
 			"Package-level symbols that were dropped (for example %s) stay module-local instead of resolving "+
 			"to the host's instance, so a plugin sharing one of those globals with the host will see its own copy \u2014 "+
 			"and an uninitialized one, since that package's rank-0 `..inittask` survived the cut and the plugin "+
-			"therefore does not re-run the init that would have set it (trendvidia/go#61).\n",
+			"therefore does not re-run the init that would have set it (trendvidia/go-archive#61).\n",
 			peOutputDisplayName(), len(symbols)+len(dropped), peExportLimit, len(dropped), dropped[0].name)
 	}
 
@@ -1529,7 +1529,7 @@ func writeBfdMember(w io.Writer, name string, data []byte) {
 //
 // The invariant, and the reason this is a named predicate rather than
 // an inline condition: a package's DATA is shared exactly when that
-// package's `..inittask` is (trendvidia/go#74). Sharing the task means
+// package's `..inittask` is (trendvidia/go-archive#74). Sharing the task means
 // the host already ran that init and the plugin drops it from its
 // schedule (inittaskSym's SymSize > 8 filter), so whatever that init
 // assigns is only ever assigned in the HOST's copy. Leaving the data
@@ -1837,7 +1837,7 @@ func peLoadImportLibrary(ctxt *Link, implib string) {
 			// peShareHostData carries the rest of the rule, and
 			// TestPEInittaskSharesWithItsData pins the invariant it
 			// exists to hold: a package's DATA is shared exactly when
-			// its `..inittask` is (trendvidia/go#74).
+			// its `..inittask` is (trendvidia/go-archive#74).
 			if !st.IsText() && !peShareHostData(lookupName) {
 				continue
 			}
@@ -1923,12 +1923,12 @@ func peExportAllSymbols(ctxt *Link) {
 		}
 		// peSkipSymName lets `pkg..inittask` through so a plugin HOST
 		// can publish its tasks for peLoadImportLibrary to bind
-		// (trendvidia/go#61). A plugin publishing its own is cost with
+		// (trendvidia/go-archive#61). A plugin publishing its own is cost with
 		// no buyer: nothing can bind them — plugins generate no import
 		// library, and `pkg..inittask` is not a Go identifier, so
 		// plugin.Lookup cannot name one — while every entry spends a
 		// slot of the plugin's own peExportLimit budget, which the
-		// export-limit check hard-errors past (trendvidia/go#39).
+		// export-limit check hard-errors past (trendvidia/go-archive#39).
 		// Measured on a cross-built windows/amd64 plugin: 5 such names
 		// appeared where there had been none.
 		if strings.HasSuffix(name, "..inittask") {

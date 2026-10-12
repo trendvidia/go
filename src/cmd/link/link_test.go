@@ -1747,7 +1747,7 @@ func TestCheckLinkname(t *testing.T) {
 // pushes into package plugin's namespace (src/runtime/plugin.go) really
 // are confined to package plugin by blockedLinknames: a pull from any
 // other package must fail the link, and must fail for that reason
-// rather than because the symbol is missing. See trendvidia/go#86.
+// rather than because the symbol is missing. See trendvidia/go-archive#86.
 func TestCheckLinknamePluginPushes(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	t.Parallel()

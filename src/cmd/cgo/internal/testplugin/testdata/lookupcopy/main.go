@@ -4,7 +4,7 @@
 
 // Looks up symbols through a struct copy of an opened Plugin
 // (q := *p), before and after the original's Close
-// (trendvidia/go#64).
+// (trendvidia/go-archive#64).
 //
 // Plugin.Lookup deliberately accepts such a copy while the plugin is
 // live: reading a live plugin through a copy is well-defined, and
@@ -33,7 +33,7 @@
 // absent. Asserting only the message would let a regression that
 // always formats pluginpath pass here on darwin, where a post-Close
 // dangling read returns garbage silently instead of faulting
-// (trendvidia/go#64). It prints "lookup on copy: done" as its last
+// (trendvidia/go-archive#64). It prints "lookup on copy: done" as its last
 // line so the harness can tell a silent fault from a finished run.
 package main
 

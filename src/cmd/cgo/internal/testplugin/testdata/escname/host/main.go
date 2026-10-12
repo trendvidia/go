@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Tests that a plugin can bind a host-shared package whose symbol names
-// carry a PathToPrefix %-escape (trendvidia/go#116).
+// carry a PathToPrefix %-escape (trendvidia/go-archive#116).
 //
 // PathToPrefix escapes every '.' after the final slash, so a package
 // whose import path ends in a dotted element — every gopkg.in path:

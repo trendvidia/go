@@ -829,7 +829,7 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 	emitSlotSlice("runtime.userDataImportsnames", 1)
 
 	// Static-data address words and their __imp_ slots — emitted by
-	// emitAddrCarriers() in canonlink.go (trendvidia/go#25). Empty
+	// emitAddrCarriers() in canonlink.go (trendvidia/go-archive#25). Empty
 	// except for Windows plugins.
 	emitSlotSlice("runtime.udaddrwords", ptrSz)
 	emitSlotSlice("runtime.udaddrslots", ptrSz)

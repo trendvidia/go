@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// TestAliasRejectionNotCached pins trendvidia/go#46: open()'s alias
+// TestAliasRejectionNotCached pins trendvidia/go-archive#46: open()'s alias
 // rejection — the requested path resolved to a module already loaded
 // from somewhere else — must NOT be written into the plugins failure
 // cache. Every other cached failure is a property of the file; the

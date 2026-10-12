@@ -758,7 +758,7 @@ func (c *typetabPhaseCounts) count() {
 // slot recorder ran, split by compiler phase. It exists to pin the
 // itabptrLsym comment above — the claim that walk never reaches it
 // from a backend worker — against the tree rather than against a
-// one-off instrumented build (trendvidia/go#33, #55). It is a counter
+// one-off instrumented build (trendvidia/go-archive#33, #55). It is a counter
 // reported at dumpdata time, deliberately not an assert: the claim was
 // measured on a darwin/arm64 std build and the mechanism stays correct
 // under signatmu even if it were false elsewhere, so a stale comment
@@ -793,7 +793,7 @@ var typetabSlots staticdata.SlotRegistry
 // staticdata.WriteFuncPtrSlots — see staticdata.SlotRegistry for why
 // emission is deferred and sorted (inline emission made plugin archives
 // non-reproducible: goroutine scheduling decided the object layout,
-// trendvidia/go#27).
+// trendvidia/go-archive#27).
 func WriteTypetabSlots() {
 	typetabSlots.Write()
 	if base.Debug.TypetabStats != 0 {

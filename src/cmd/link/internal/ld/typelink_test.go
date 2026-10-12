@@ -17,7 +17,7 @@ import (
 // domain (go.uber.org, go.opentelemetry.io, ...), and a blanket prefix
 // test silently excluded every package hosted under one from
 // canonicalisation — host and plugin each kept their own instance of
-// such a package's globals (trendvidia/go#108).
+// such a package's globals (trendvidia/go-archive#108).
 //
 // Names here are spelled the way the toolchain emits them. In
 // particular the package part is objabi.PathToPrefix output, which
@@ -35,7 +35,7 @@ func TestIsUserPackageName(t *testing.T) {
 		"go.example.org/fakemod/lib.Counter",
 		"gopkg.in/yaml%2ev2.DefaultMapType",
 		// Packages at the ROOT of a dotted module path
-		// (trendvidia/go#110). PathToPrefix escapes dots after the
+		// (trendvidia/go-archive#110). PathToPrefix escapes dots after the
 		// final slash, so when the whole import path is the last
 		// element the name carries no slash at all and the "no slash
 		// means stdlib" arm used to reject it — host and plugin then
@@ -49,7 +49,7 @@ func TestIsUserPackageName(t *testing.T) {
 		// funcval or method-value symbol of the same root package is
 		// still that package's.
 		"example%2ecom.Fn·f",
-		// Slashless names (trendvidia/go#115). The gate used to read a
+		// Slashless names (trendvidia/go-archive#115). The gate used to read a
 		// missing slash as "stdlib top-level package" and reject it,
 		// which cost correctness in both directions: a package at the
 		// root of a module named without a domain (`go mod init
@@ -65,7 +65,7 @@ func TestIsUserPackageName(t *testing.T) {
 		"net.DefaultResolver",
 		"main.someGlobal",
 		"os.Exit·f", // a stdlib funcval, for the same reason
-		// Near-misses for the nested-internal arm (trendvidia/go#111):
+		// Near-misses for the nested-internal arm (trendvidia/go-archive#111):
 		// "internal" has to be a whole path element, so a package
 		// merely SPELLED with it is ordinary user code.
 		"mypkg/notinternal/x.Y",
@@ -80,7 +80,7 @@ func TestIsUserPackageName(t *testing.T) {
 	for _, name := range []string{
 		"runtime.writeBarrier",
 		"internal/bytealg.MaxLen",
-		// Nested internal packages (trendvidia/go#111). "internal" is
+		// Nested internal packages (trendvidia/go-archive#111). "internal" is
 		// a path ELEMENT in Go's rule, not a prefix, and the gate used
 		// to test only the top-level tree — so the whole
 		// crypto/internal/... subtree was admitted as user code.
@@ -175,7 +175,7 @@ func TestModuleSlotNameLockstep(t *testing.T) {
 	for _, name := range []string{
 		"go.uber.org/zap.Global",
 		"go.example.org/fakemod/lib.Counter",
-		// Root package of a dotted module path (trendvidia/go#110):
+		// Root package of a dotted module path (trendvidia/go-archive#110):
 		// both gates must admit it, and for the same reason as the
 		// go.*-domain names above — the rootmod fixture's host-shared
 		// half (rootorg.Value) needs the export table AND the
@@ -205,7 +205,7 @@ func TestModuleSlotNameLockstep(t *testing.T) {
 //   - `pkg..inittask`: peSkipSymName carves it out of the `..` filter so
 //     a plugin HOST can publish its init tasks and peLoadImportLibrary
 //     can bind them, keeping a plugin from re-running an init the host
-//     already ran (trendvidia/go#61). Registering one for cross-module
+//     already ran (trendvidia/go-archive#61). Registering one for cross-module
 //     canonicalisation would be wrong — an inittask is a layout-specific
 //     per-module structure — so isUserPackageName rejects it. Adding the
 //     inittask exemption to isUserPackageName is the mistake this case
@@ -216,7 +216,7 @@ func TestModuleSlotNameLockstep(t *testing.T) {
 // packages of dotless module paths, which peSkipSymName admitted and
 // isUserPackageName rejected — and that asymmetry was a heuristic, not
 // a decision: nothing separates `os.Args` from `extensions.Counter` by
-// name. Dropping it (trendvidia/go#115) made both gates agree, so those
+// name. Dropping it (trendvidia/go-archive#115) made both gates agree, so those
 // cases moved to TestIsUserPackageName's admit loop.
 func TestGateAsymmetryOutsideSlotFamilies(t *testing.T) {
 	for _, name := range []string{
@@ -272,13 +272,13 @@ func TestModuleSlotPrefixesCoverGates(t *testing.T) {
 	// "go.u" (which would swallow go.uber.org).
 	for _, domain := range []string{"go.uber.org/zap.Global", "go.opentelemetry.io/otel.Tracer"} {
 		if isModuleSlotName(domain) {
-			t.Errorf("isModuleSlotName(%q) = true: a slot family prefix now swallows a module domain (trendvidia/go#108)", domain)
+			t.Errorf("isModuleSlotName(%q) = true: a slot family prefix now swallows a module domain (trendvidia/go-archive#108)", domain)
 		}
 	}
 }
 
 // TestSkipStaticCanonContainer pins the container exclusion list of the
-// staticCanonWords scan (trendvidia/go#25). The scan is Windows-plugin
+// staticCanonWords scan (trendvidia/go-archive#25). The scan is Windows-plugin
 // only, so no fixture on any other platform reaches it; this exercises
 // the predicate directly.
 //
@@ -305,7 +305,7 @@ func TestSkipStaticCanonContainer(t *testing.T) {
 		{"runtime.udaddrwords", true},
 		{"internal/abi.Kind", true},
 		// Nested internal packages, the second copy of the rule
-		// (trendvidia/go#111). Both predicates now share one
+		// (trendvidia/go-archive#111). Both predicates now share one
 		// definition, so these move in lockstep with the
 		// isUserPackageName cases above.
 		{"crypto/internal/fips140/bigmod.table", true},
@@ -339,7 +339,7 @@ func TestSkipStaticCanonContainer(t *testing.T) {
 	}
 }
 
-// TestInternalPkgScopingShared pins the thing trendvidia/go#111 is
+// TestInternalPkgScopingShared pins the thing trendvidia/go-archive#111 is
 // actually about: the internal-package scoping rule has ONE definition,
 // and the two gates that consume it cannot drift apart again.
 //
@@ -390,7 +390,7 @@ func TestInternalPkgScopingShared(t *testing.T) {
 // TestUserDataExportable pins both halves of userDataLink's export
 // gate: which NAMES may be registered for cross-module canonicalisation
 // (isUserPackageName, covered above) and which symbol KINDS
-// (trendvidia/go#106).
+// (trendvidia/go-archive#106).
 //
 // The kind half exists because of an asymmetry nothing else notices:
 // staticdata.WriteFuncSyms emits a funcval as RODATA in an ordinary
@@ -450,7 +450,7 @@ func TestUserDataExportable(t *testing.T) {
 		}
 	}
 
-	// A STDLIB funcval is exportable too, since trendvidia/go#115
+	// A STDLIB funcval is exportable too, since trendvidia/go-archive#115
 	// dropped the slashless arm. That closes the residual #106 left
 	// open: host and plugin now agree on the identity of a stdlib
 	// function value, not just a user-package one.

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Tests cross-module FUNC VALUE identity (trendvidia/go#106).
+// Tests cross-module FUNC VALUE identity (trendvidia/go-archive#106).
 //
 // A func value is a pointer to a one-word funcval object; the compiler
 // emits one `pkg.Fn·f` per module that uses Fn as a value. When Fn's

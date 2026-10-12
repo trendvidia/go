@@ -8,7 +8,7 @@
 // slot-family filter in peSkipSymName matches only the three
 // go.<kind>. families, never the bare `go.` prefix — a blanket filter
 // would drop Value from the host's export table and leave the plugin
-// its own instance (trendvidia/go#108).
+// its own instance (trendvidia/go-archive#108).
 package hostlib
 
 // Value is the host-shared global.

@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Closes Plugin values that plugin.Open never handed out
-// (trendvidia/go#35). plugin.Plugin is an exported struct, so both
+// (trendvidia/go-archive#35). plugin.Plugin is an exported struct, so both
 // spellings of the misuse compile anywhere:
 //
 //   - the zero value. Before the fix closePlugin passed

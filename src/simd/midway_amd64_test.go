@@ -31,7 +31,7 @@ var modeRE = regexp.MustCompile(`simdmode emulated=(true|false) size=(\d+)`)
 // emulated SIMD, not hardware SIMD at 128 bits. The bridge's 128-bit
 // Broadcast* go through VPBROADCAST (AVX2) and MulAdd through VFMADD (FMA), so
 // hardware SIMD on such a CPU is a SIGILL in TestMulAdd and TestBroadcast --
-// measured on an Ivy Bridge i7-3720QM, trendvidia/go#154.
+// measured on an Ivy Bridge i7-3720QM, trendvidia/go-archive#154.
 //
 // The CPU is shaped by GODEBUG cpu.* masks in a child process, so the pin
 // fails on every amd64 host that lacks the check, not only on the hardware

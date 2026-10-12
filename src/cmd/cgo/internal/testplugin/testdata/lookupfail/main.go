@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Exercises open()'s could-not-find-symbol failure path, twice
-// (trendvidia/go#37). The plugin is built with
+// (trendvidia/go-archive#37). The plugin is built with
 // -ldflags=-pluginpath=lookupfail.mismatch but WITHOUT the matching
 // -gcflags=-p, so its exported symbols keep their compile-time
 // package prefix while moduledata.pluginpath carries the override;

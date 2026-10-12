@@ -1342,7 +1342,7 @@ func Peinit(ctxt *Link) {
 		// NOT an option -- the same image without it is rejected outright
 		// with "%1 is not a valid Win32 application" (ERROR_BAD_EXE_FORMAT).
 		// arm64 wants a valid one, so emit one the linker owns
-		// (trendvidia/go#139).
+		// (trendvidia/go-archive#139).
 		sb := ctxt.loader.CreateSymForUpdate(peLoadConfigSym, 0)
 		sb.SetType(sym.SRODATA)
 		sb.SetAlign(int32(ctxt.Arch.PtrSize))
@@ -1660,7 +1660,7 @@ func initdynexport(ctxt *Link) {
 		if ctxt.BuildMode == BuildModePlugin {
 			// A plugin over the cap cannot be published usefully:
 			// dropping symbols in loader-index order silently removes
-			// arbitrary exports (trendvidia/go#39), and since the ABI
+			// arbitrary exports (trendvidia/go-archive#39), and since the ABI
 			// fence the dropped go:plugin.abi marker would have
 			// plugin.Open reject the DLL as "not built by this fork's
 			// toolchain" — a false statement about a DLL this link just

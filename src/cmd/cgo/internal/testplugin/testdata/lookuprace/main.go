@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Races concurrent Plugin.Lookup calls against Plugin.Close
-// (trendvidia/go#23). Before the fix, lookup read p.syms and
+// (trendvidia/go-archive#23). Before the fix, lookup read p.syms and
 // p.pluginpath without pluginsMu while closePlugin mutated both
 // under it — a data race detectable by -race, and in principle a
 // torn map read or a dangling pluginpath string. The fixture
@@ -119,7 +119,7 @@ func main() {
 				if err != nil {
 					// Two documented shapes: "not found" while the
 					// plugin is live, "plugin is closed" once Close
-					// has retired it (trendvidia/go#64). "F" can only
+					// has retired it (trendvidia/go-archive#64). "F" can only
 					// fail the second way, so that is the post-Close
 					// signal; NoSuchSymbol may fail either way.
 					closed := strings.Contains(err.Error(), "plugin is closed")

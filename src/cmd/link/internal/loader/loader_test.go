@@ -472,7 +472,7 @@ func TestOuterSub(t *testing.T) {
 // TestBlockedLinknamesCoverPluginPushes checks that every symbol the
 // runtime pushes into package plugin's namespace is accounted for in
 // blockedLinknames: confined to a package list, or named below as a
-// deliberately unconfined exception (trendvidia/go#86).
+// deliberately unconfined exception (trendvidia/go-archive#86).
 //
 // The keys of blockedLinknames are plain strings that nothing resolves
 // against a real symbol, so a renamed push -- or an entry dropped by a
@@ -512,7 +512,7 @@ func TestBlockedLinknamesCoverPluginPushes(t *testing.T) {
 		case confined && unconfined[name]:
 			t.Errorf("%s is both confined in blockedLinknames and listed here as unconfined; update this test and the comment at the entries", name)
 		case !confined && !unconfined[name]:
-			t.Errorf("%s: %s pushes this into package plugin's namespace, so any package may pull it, but it is neither confined in blockedLinknames nor a recorded exception (trendvidia/go#86)", name, src)
+			t.Errorf("%s: %s pushes this into package plugin's namespace, so any package may pull it, but it is neither confined in blockedLinknames nor a recorded exception (trendvidia/go-archive#86)", name, src)
 		}
 	}
 	for name := range blockedLinknames {

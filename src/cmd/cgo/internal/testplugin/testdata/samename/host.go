@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Command samename pins trendvidia/go#40's done-when: two DIFFERENT
+// Command samename pins trendvidia/go-archive#40's done-when: two DIFFERENT
 // plugins installed under one base file name (same-a/p.ext and
 // same-b/p.ext) must never collapse onto one OS module. Depending on
 // the platform loader's matching rule the second Open either loads B

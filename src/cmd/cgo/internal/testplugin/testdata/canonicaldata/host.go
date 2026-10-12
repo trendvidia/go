@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Command canonicaldata checks that type descriptors, itabs, and data
-// addresses the plugin embedded in STATIC data (trendvidia/go#25) were
+// addresses the plugin embedded in STATIC data (trendvidia/go-archive#25) were
 // canonicalized onto this host's copies at plugin load. One edge per
 // invocation, selected by the argument, so each has its own named test:
 //

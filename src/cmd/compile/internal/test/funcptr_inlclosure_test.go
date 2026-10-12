@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// The reproduction from trendvidia/go#158. Inlining Desc("A") and
+// The reproduction from trendvidia/go-archive#158. Inlining Desc("A") and
 // Desc("B") into main makes two copies of Desc's closure, each
 // specialised on its constant capture. Inside the compiler they are
 // told apart by an inline hash (lib.Desc.func1#<hash>#), which the
@@ -64,7 +64,7 @@ func main() {
 // go.funcptr slots. A slot was named after the closure, and the closure's
 // name loses its inline hash in the object file, so all copies shared
 // one DUPOK slot and called the first copy's body: the program printed
-// "A" twice (trendvidia/go#158).
+// "A" twice (trendvidia/go-archive#158).
 //
 // The slots are taken under -shared, which cmd/go passes for PIE on
 // darwin and linux. That is every default darwin build.
@@ -88,7 +88,7 @@ func TestInlinedClosureFuncPtrSlots(t *testing.T) {
 	}
 }
 
-// TestPIEBuildsTakeFuncPtrSlots pins the decision in trendvidia/go#161:
+// TestPIEBuildsTakeFuncPtrSlots pins the decision in trendvidia/go-archive#161:
 // the compiler takes the go.funcptr slot path on -shared, so PIE builds
 // on darwin and linux get slots even when they never load a plugin.
 // Restricting the slots to -dynlink was measured and declined, to keep
@@ -101,7 +101,7 @@ func TestPIEBuildsTakeFuncPtrSlots(t *testing.T) {
 	}
 	_, syms := buildInlClosurePIE(t)
 	if !strings.Contains(syms, " go.funcptr.") {
-		t.Errorf("%s/%s -buildmode=pie build has no go.funcptr slots; trendvidia/go#161 decided PIE builds keep them", runtime.GOOS, runtime.GOARCH)
+		t.Errorf("%s/%s -buildmode=pie build has no go.funcptr slots; trendvidia/go-archive#161 decided PIE builds keep them", runtime.GOOS, runtime.GOARCH)
 	}
 }
 

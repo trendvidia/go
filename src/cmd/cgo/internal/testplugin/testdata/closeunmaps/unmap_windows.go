@@ -43,7 +43,7 @@ var (
 // this fixture asks is whether the IMAGE is gone — not whether the
 // address range went back to the free list.
 //
-// Those stopped being the same thing with trendvidia/go#122:
+// Those stopped being the same thing with trendvidia/go-archive#122:
 // unloadPlugin now reserves the range the image occupied, so the
 // loader cannot reuse it and a stale pointer faults instead of
 // silently addressing the next plugin. A reserved region reports

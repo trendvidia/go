@@ -72,7 +72,7 @@ func newAbortContext(t *testing.T) *Link {
 	return ctxt
 }
 
-// TestWriteBlocksUnsortedAborts pins the boundary where trendvidia/go#49's
+// TestWriteBlocksUnsortedAborts pins the boundary where trendvidia/go-archive#49's
 // layout accounting first broke: writeBlocks trusts its symbol list to be
 // sorted by address, and a symbol whose value lies below the write cursor
 // used to drive the block length negative, wrap the output offset by the
@@ -217,7 +217,7 @@ func TestDatapExcludesTLSBSS(t *testing.T) {
 	check("with no TLS BSS symbol", []string{"p.data", "p.bss"})
 }
 
-// TestPEPluginLargeDataLinks pins trendvidia/go#49's real-world geometry:
+// TestPEPluginLargeDataLinks pins trendvidia/go-archive#49's real-world geometry:
 // a windows plugin whose .bss and .noptrbss are empty (its runtime data
 // lives in the host) and whose largest .data symbol spans a blockSize
 // boundary. Before excluding STLSBSS from datap, this link panicked in

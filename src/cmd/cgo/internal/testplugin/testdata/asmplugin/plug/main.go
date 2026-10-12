@@ -9,7 +9,7 @@ package main
 // feSquare and friends — is PLUGIN-local, and so is the g-reload the
 // compiler emits after each ABI0 call to it. edwards25519's own init
 // calls into that path, so a broken reload faults during plugin.Open,
-// before any Lookup could guard against it (trendvidia/go#117).
+// before any Lookup could guard against it (trendvidia/go-archive#117).
 import "crypto/ed25519"
 
 // KeyLen exercises the same assembly again after load.

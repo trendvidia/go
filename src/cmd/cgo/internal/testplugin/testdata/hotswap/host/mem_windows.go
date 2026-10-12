@@ -28,7 +28,7 @@ const (
 )
 
 // sampleMem walks the process address space. The reservation Close
-// leaves behind on unload (trendvidia/go#122/#123) shows up as
+// leaves behind on unload (trendvidia/go-archive#122/#123) shows up as
 // MEM_RESERVE that is not MEM_IMAGE, which is exactly what accumulates
 // per upgrade cycle and what a long-running trading process has to
 // budget for.

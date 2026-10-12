@@ -21,7 +21,7 @@ func SharedVarPtr() uintptr { return reflect.ValueOf(shared.FuncVar).Pointer() }
 func MaterializedPtr() uintptr { return reflect.ValueOf(shared.Fn).Pointer() }
 
 // WrapPtr is the code pointer of the statically initialized word in a
-// plugin-only package (trendvidia/go#106's literal shape).
+// plugin-only package (trendvidia/go-archive#106's literal shape).
 func WrapPtr() uintptr { return reflect.ValueOf(wrap.FuncVar).Pointer() }
 
 // FnName asks the runtime to name the materialized value. Before the

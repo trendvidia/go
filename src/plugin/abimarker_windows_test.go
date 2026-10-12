@@ -508,7 +508,7 @@ func TestCheckLoadedABIMarker(t *testing.T) {
 	// architectures this fork supports (see loadablePE), so a refusal
 	// here is a failure and not a skip — skipping used to leave
 	// checkLoadedABIMarker's accept/reject matrix entirely unexercised
-	// on windows/arm64 with the suite green (trendvidia/go#48).
+	// on windows/arm64 with the suite green (trendvidia/go-archive#48).
 	probe, err := loadablePE(t, nil)
 	if err != nil {
 		t.Fatalf("running loader refused the synthetic image: %v", err)
@@ -617,7 +617,7 @@ func TestSameModulePath(t *testing.T) {
 		{"case differs", `C:\Dir\P.DLL`, `c:\dir\p.dll`, true},
 		{"forward slashes", `C:/dir/p.dll`, `C:\dir\p.dll`, true},
 		{"literal device prefix", `\\?\C:\dir\p.dll`, `C:\dir\p.dll`, true},
-		// The alias trendvidia/go#40 is about: one base name, two
+		// The alias trendvidia/go-archive#40 is about: one base name, two
 		// directories. Rejecting this is the whole point.
 		{"same base, other directory", `C:\a\p.dll`, `C:\b\p.dll`, false},
 		{"different base", `C:\dir\p.dll`, `C:\dir\q.dll`, false},

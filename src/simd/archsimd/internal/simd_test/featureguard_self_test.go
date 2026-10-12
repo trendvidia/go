@@ -104,7 +104,7 @@ func TestFeatureGuardsChecker(t *testing.T) {
 		// A generic helper's body resolves `v.Less(v)` to its constraint's
 		// interface method, which is no archsimd object; the requirement
 		// only exists per instantiation. This is how the StorePart tests
-		// reached VPMASKMOVD with the pin green, trendvidia/go#156.
+		// reached VPMASKMOVD with the pin green, trendvidia/go-archive#156.
 		name: "generic helper requirement follows the type argument",
 		body: `func helperG[V interface{ Less(V) archsimd.Mask8x16 }](v V) { sinkFixture = v.Less(v) }
 		func TestF(t *testing.T) { helperG(u8) }`,

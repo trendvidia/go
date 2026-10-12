@@ -6,7 +6,7 @@
 //
 // isUserPackageName used to read that shape as "stdlib" and refuse to
 // canonicalise it, so host and plugins kept separate instances
-// (trendvidia/go#115).
+// (trendvidia/go-archive#115).
 //
 // go 1.26 matches the main module's go.mod; a replacement module may
 // not require a NEWER language version than the main module.

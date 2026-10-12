@@ -33,10 +33,10 @@ import (
 // not only plugins. Most of those binaries never load a plugin, and a
 // host does not need slots to agree with plugins on function identity:
 // linux executable hosts have none and pass the identity suites through
-// the funcval export path (trendvidia/go#106). Restricting the slots to
+// the funcval export path (trendvidia/go-archive#106). Restricting the slots to
 // -dynlink was measured to pass every plugin suite on darwin and to save
 // 1.09% of file size in belluikit/gallery (4,092 slots). It was declined
-// to keep what PIE hosts do at load unchanged (trendvidia/go#161).
+// to keep what PIE hosts do at load unchanged (trendvidia/go-archive#161).
 // TestPIEBuildsTakeFuncPtrSlots fails if they stop getting slots.
 //
 // (DATA accesses do not use a slot indirection: Bug D found that the
@@ -68,7 +68,7 @@ func slotLsym(prefix string, orig *obj.LSym) *obj.LSym {
 		// specialises those copies on their constant captures, so
 		// they need not share a body. A DUPOK slot under the trimmed
 		// name would make the linker keep one slot for all of them,
-		// and every copy would call the first body (trendvidia/go#158).
+		// and every copy would call the first body (trendvidia/go-archive#158).
 		// The name does not identify the function across modules
 		// either, so canonicalising by it would be just as wrong.
 		// Address it directly instead.
@@ -80,7 +80,7 @@ func slotLsym(prefix string, orig *obj.LSym) *obj.LSym {
 	// emit the slot data here: slotLsym is called from ssagen while
 	// functions are compiled in parallel, so emitting inline appends
 	// the slot to the object in goroutine-scheduling order and makes
-	// the compiled object non-reproducible (trendvidia/go#8).
+	// the compiled object non-reproducible (trendvidia/go-archive#8).
 	// WriteFuncPtrSlots emits the recorded slots sorted by name at the
 	// end of compilation instead. The caller only needs the symbol to
 	// exist (as a relocation target); its data is filled in before the

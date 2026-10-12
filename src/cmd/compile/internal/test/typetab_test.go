@@ -39,7 +39,7 @@ var typetabSlotsWant = []string{
 // The flag is force-enabled only for Windows plugin-compatible builds
 // (cmd/go/internal/work/init.go), so without this check the slot paths
 // in TypePtrForUseAt/ITabAddrForUseAt run on no non-Windows CI leg
-// (trendvidia/go#34). The default-flags run is the control proving the
+// (trendvidia/go-archive#34). The default-flags run is the control proving the
 // assertion machinery notices absent slots.
 func TestTypetabSlotsPresent(t *testing.T) {
 	testenv.MustHaveGoBuild(t)

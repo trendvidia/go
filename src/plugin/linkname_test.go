@@ -153,7 +153,7 @@ func asmMentions(t *testing.T, dir string, asm []string, pkg string) []string {
 }
 
 // TestPluginPushLinknameSurface pins every symbol package plugin PUSHES
-// into the global linkname namespace (trendvidia/go#78).
+// into the global linkname namespace (trendvidia/go-archive#78).
 //
 // A //go:linkname whose local name resolves to a DEFINITION in this
 // package -- a var, a const, or a func with a body -- is a PUSH, and per
@@ -248,7 +248,7 @@ func TestPluginPushLinknameSurface(t *testing.T) {
 			"  got:  %v\n"+
 			"  want: %v\n\n"+
 			"Each name here is defined in package plugin and reachable as plugin.<name> by "+
-			"//go:linkname from any package linked into a host. trendvidia/go#78 accepted "+
+			"//go:linkname from any package linked into a host. trendvidia/go-archive#78 accepted "+
 			"exactly one, on the reasoning recorded at testHookBetweenFenceStages in "+
 			"plugin_windows.go; a new one does not inherit that reasoning. Weigh it and write "+
 			"down the outcome.\n\n"+
@@ -261,7 +261,7 @@ func TestPluginPushLinknameSurface(t *testing.T) {
 	}
 	if len(renamed) > 0 {
 		t.Errorf("package plugin now defines symbols in another package's namespace: %v\n\n"+
-			"These are NOT part of the plugin.* surface trendvidia/go#78 weighed, so do not "+
+			"These are NOT part of the plugin.* surface trendvidia/go-archive#78 weighed, so do not "+
 			"add them to the set above. Each one defines the symbol on the right, which is "+
 			"either the std pull-a-variable idiom (harmless, see reflect/value.go's zeroVal) "+
 			"or package plugin planting a definition in a package it does not own (not "+
@@ -291,7 +291,7 @@ func TestPluginPushLinknameSurface(t *testing.T) {
 // unnoticed, so widen this scan rather than trust the claim if that
 // becomes plausible.
 //
-// trendvidia/go#86 holds the open question of whether the nine should be
+// trendvidia/go-archive#86 holds the open question of whether the nine should be
 // confined. This test decides nothing; it records the set as it stands
 // so a tenth cannot land unnoticed while that question is open.
 func TestRuntimePushesIntoPluginNamespace(t *testing.T) {
@@ -309,7 +309,7 @@ func TestRuntimePushesIntoPluginNamespace(t *testing.T) {
 		t.Errorf("runtime assembly now names symbols in package plugin's namespace:\n  %s\n\n"+
 			"An assembly definition lands in that namespace without any //go:linkname, so the "+
 			"directive scan below cannot see it and the pinned set is no longer the whole "+
-			"surface. Weigh it under trendvidia/go#86 with the nine directives, and teach this "+
+			"surface. Weigh it under trendvidia/go-archive#86 with the nine directives, and teach this "+
 			"test to carry it.", strings.Join(mentions, "\n  "))
 	}
 
@@ -346,7 +346,7 @@ func TestRuntimePushesIntoPluginNamespace(t *testing.T) {
 			"  want: %v\n\n"+
 			"Each name here is reachable by //go:linkname from any package linked into a host, "+
 			"exactly as a push in package plugin is, and none is confined by "+
-			"cmd/link/internal/loader.blockedLinknames. trendvidia/go#86 is open on whether they "+
+			"cmd/link/internal/loader.blockedLinknames. trendvidia/go-archive#86 is open on whether they "+
 			"should be; adding to the set before it is answered widens a surface nobody has "+
 			"weighed. Weigh the new one there and write down the outcome.", got, want)
 	}

@@ -34,7 +34,7 @@ func main() {
 	if !strings.Contains(msg, "different version") {
 		log.Fatalf("plugin.Open(p-mismatch): error %q does not mention \"different version\"", err)
 	}
-	// trendvidia/go#7: the loader error must name the mismatched
+	// trendvidia/go-archive#7: the loader error must name the mismatched
 	// package and surface both build hashes so the failure is
 	// diagnosable without decoding the raw plugin.Open message.
 	if !strings.Contains(msg, "testplugin/common") {

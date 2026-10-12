@@ -7,7 +7,7 @@
 // Upstream never removes an itab, because upstream never unloads a
 // module: addModuleItabs only ever grows the table. This fork does
 // unload, and Plugin.Close unmaps the image and reserves its address
-// range (trendvidia/go#122, #123), so every itab the closed module
+// range (trendvidia/go-archive#122, #123), so every itab the closed module
 // contributed becomes a pointer into inaccessible memory.
 //
 // That is not a dangling reference the caller can be blamed for.
@@ -15,10 +15,10 @@
 // compare Inter and Type, so a single stale entry makes an UNRELATED
 // interface lookup fault -- measured as `fmt.Printf` on a time.Duration
 // dying in find, in a host that had merely opened and closed plugins
-// (trendvidia/go#150).
+// (trendvidia/go-archive#150).
 //
 // It lives here rather than in iface.go so upstream's file stays
-// byte-identical and keeps merging cleanly (trendvidia/go#140's rule).
+// byte-identical and keeps merging cleanly (trendvidia/go-archive#140's rule).
 
 package runtime
 

@@ -7,7 +7,7 @@
 // import library. Each module still emits its OWN `shared.Fn·f` — the
 // one-word funcval object a func VALUE points at — and a plugin's copy
 // holds the address of that plugin's IAT thunk, not the host's code.
-// Canonicalising those copies is what trendvidia/go#106 is about.
+// Canonicalising those copies is what trendvidia/go-archive#106 is about.
 package shared
 
 // Fn is the function whose value identity is under test.

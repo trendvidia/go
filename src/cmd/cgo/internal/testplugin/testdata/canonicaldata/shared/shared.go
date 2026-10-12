@@ -23,7 +23,7 @@ type MyErr struct{ Code int }
 func (MyErr) Error() string { return "myerr" }
 
 // Global and Arr are the targets of the plugin's statically-embedded
-// addresses (trendvidia/go#25, edge 4). Both modules must observe one
+// addresses (trendvidia/go-archive#25, edge 4). Both modules must observe one
 // instance of each.
 var Global int
 

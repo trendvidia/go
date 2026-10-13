@@ -1276,7 +1276,7 @@ func runExpectFault(t *testing.T, bin string, args ...string) {
 //
 // Every platform reserves the freed range on unload now, so the stale
 // write faults: Windows via VirtualAlloc (trendvidia/go-archive#122), POSIX via
-// a hint-only mmap (#123). The fixture's own "corrupted Budget" branch
+// a hint-only mmap (trendvidia/go-archive#123). The fixture's own "corrupted Budget" branch
 // is what this asserts against — reaching it means a reservation
 // silently stopped happening and the upgrade path is quietly wrong
 // again, which is the failure this whole fixture exists to catch.
@@ -1310,7 +1310,7 @@ func TestCloseHazardEnvelope(t *testing.T) {
 	// The alias cell no longer tolerates a "skipped" outcome. It used
 	// to, because whether the loader reused a freed base was its
 	// decision and it varied (measured at about 1 in 6 on windows/arm64,
-	// trendvidia/go-archive#47). Unload now reserves the range (#122, #123), so
+	// trendvidia/go-archive#47). Unload now reserves the range (trendvidia/go-archive#122, trendvidia/go-archive#123), so
 	// reusing the base is not a loader coin-flip any more — it is the
 	// reservation having failed to happen, which is exactly what this
 	// must catch.
@@ -1930,14 +1930,14 @@ func TestIssue75102(t *testing.T) {
 //
 // Both link modes were broken, in different ways. Externally linked, the
 // export existed only because mingw ld auto-exports what it can, so
-// narrowing the export set removed it (2195 exported names became 6, #62).
+// narrowing the export set removed it (2195 exported names became 6, trendvidia/go-archive#62).
 // Internally linked, it was never exported at all and the notify was
 // never called: measured on windows/arm64, suppressing the call leaves
 // runtime_init_done at 0 after Open and the callback hangs, where calling
-// it leaves the flag at 1 and the callback returns (#130).
+// it leaves the flag at 1 and the callback returns (trendvidia/go-archive#130).
 //
 // So the default build is the case that matters on every platform, and
-// the narrowed build is the extra one #62 was about.
+// the narrowed build is the extra one trendvidia/go-archive#62 was about.
 func TestCgoPluginNotifyExport(t *testing.T) {
 	globalSkip(t)
 	if runtime.GOOS != "windows" {
@@ -1978,7 +1978,7 @@ func TestCgoPluginNotifyExport(t *testing.T) {
 	// accident and -Wl,--exclude-all-symbols swept it away with
 	// everything else the .def did not name. Ask the platform for the
 	// link rather than assuming which ones can do it: windows/arm64
-	// cannot link a cgo plugin externally at all (#131), and if that
+	// cannot link a cgo plugin externally at all (trendvidia/go-archive#131), and if that
 	// changes this starts covering it instead of silently not.
 	t.Run("exports narrowed", func(t *testing.T) {
 		ldflags := "-ldflags=-linkmode=external -extldflags=-Wl,--exclude-all-symbols" +

@@ -16,9 +16,9 @@ import (
 // runtime.boringCaches hazard recorded at peSharedRuntimeData
 // (trendvidia/go-archive#68): a plugin-only registrant puts plugin-resident data into
 // the host-shared slice, and clearpools stores nil through it at the first GC
-// after Plugin.Close unmaps the image — the runtime.poolcleanup shape of #61.
+// after Plugin.Close unmaps the image — the runtime.poolcleanup shape of trendvidia/go-archive#61.
 //
-// #68 recorded that as out of scope because crypto/internal/boring carries
+// trendvidia/go-archive#68 recorded that as out of scope because crypto/internal/boring carries
 // `//go:build boringcrypto && linux && (amd64 || arm64) && !android && !msan`,
 // so no Windows boringcrypto build could exist. That premise is false, and
 // this test is what says so out loud. That constraint gates the cgo BoringSSL
@@ -31,7 +31,7 @@ import (
 // This checks the constraints in the source, not runtime.GOOS, on purpose: it
 // should fire on the commit that moves them, not months later when a Windows
 // boringcrypto plugin faults in clearpools. It fails in either direction —
-// narrowing the registrants to linux would make #68's premise true, which is
+// narrowing the registrants to linux would make trendvidia/go-archive#68's premise true, which is
 // just as much a reason to revisit the decision as widening them further.
 func TestBoringCachesRegistrantsAreNotPlatformGated(t *testing.T) {
 	t.Parallel()

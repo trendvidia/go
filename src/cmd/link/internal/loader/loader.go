@@ -2575,7 +2575,7 @@ var blockedLinknames = map[string][]string{
 	//     from any other library still failing the link. Costs a fixture
 	//     restructure, and only the windows legs can show the restructured
 	//     fixture still tests what it did.
-	//  2. Build the fixture with -checklinkname=0 -- which #78 declined for
+	//  2. Build the fixture with -checklinkname=0 -- which trendvidia/go-archive#78 declined for
 	//     the plugin-side hook, and which disables checking for that whole
 	//     binary.
 	//  3. Stop runtime pushing these and give the fixture another route to
@@ -2584,12 +2584,12 @@ var blockedLinknames = map[string][]string{
 	// plugin.testHookBetweenFenceStages is absent from this map for a
 	// different reason: it is pushed by package plugin itself
 	// (plugin_windows.go) rather than by the runtime, so it is not one of
-	// the nine. #78 weighed that push and kept it, and that decision is
+	// the nine. trendvidia/go-archive#78 weighed that push and kept it, and that decision is
 	// closed. An entry here confines the pull without touching the push and
-	// was not among the options #78 weighed -- but the fixture pulls the
+	// was not among the options trendvidia/go-archive#78 weighed -- but the fixture pulls the
 	// hook from the same main package, so it is blocked by exactly the
 	// constraint above, and option 1 would cover it too. Whether to take
-	// that lever is #78's call, not this table's.
+	// that lever is trendvidia/go-archive#78's call, not this table's.
 }
 
 // check if a linkname reference to symbol s from refpkg is allowed

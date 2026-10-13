@@ -7,7 +7,7 @@
 // Upstream never removes an itab, because upstream never unloads a
 // module: addModuleItabs only ever grows the table. This fork does
 // unload, and Plugin.Close unmaps the image and reserves its address
-// range (trendvidia/go-archive#122, #123), so every itab the closed module
+// range (trendvidia/go-archive#122, trendvidia/go-archive#123), so every itab the closed module
 // contributed becomes a pointer into inaccessible memory.
 //
 // That is not a dangling reference the caller can be blamed for.

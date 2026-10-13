@@ -165,7 +165,7 @@ func aliasProbe() {
 	// document it: the loader reused a freed base despite ASLR, so a
 	// stale pointer silently addressed the new instance. Unload now
 	// reserves the range the image occupied (trendvidia/go-archive#122 on
-	// Windows, #123 on POSIX), so the reopen cannot land there and the
+	// Windows, trendvidia/go-archive#123 on POSIX), so the reopen cannot land there and the
 	// aliasing is gone by construction.
 	//
 	// The assertion is therefore inverted from what it was. Equal

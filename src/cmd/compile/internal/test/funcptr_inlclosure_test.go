@@ -93,7 +93,7 @@ func TestInlinedClosureFuncPtrSlots(t *testing.T) {
 // on darwin and linux get slots even when they never load a plugin.
 // Restricting the slots to -dynlink was measured and declined, to keep
 // what PIE hosts do at load unchanged. If this fails, the slots were
-// restricted; that reverses the decision, so revisit #161 rather than
+// restricted; that reverses the decision, so revisit trendvidia/go-archive#161 rather than
 // deleting this test.
 func TestPIEBuildsTakeFuncPtrSlots(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {

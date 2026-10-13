@@ -63,7 +63,7 @@ func main() {
 	// Post-Close mapping check. The strictness is OS-policy-bound:
 	//
 	//   - Linux: dlclose with refcount==0 reliably triggers munmap, so
-	//     the page must no longer hold a readable image. Since #123
+	//     the page must no longer hold a readable image. Since trendvidia/go-archive#123
 	//     reserves the freed range, "gone" covers both an absent
 	//     mapping and the PROT_NONE reservation over it; isUnmapped
 	//     distinguishes those from a still-loaded image by

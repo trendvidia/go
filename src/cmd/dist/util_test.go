@@ -16,7 +16,7 @@ import (
 // TestFatalfInExitHandler checks that a fatalf raised while xexit is
 // running the atexit handlers kills the process after printing the
 // message once, instead of re-entering xexit and re-running the
-// failing handler forever (#92). The handlers that have not run yet
+// failing handler forever (trendvidia/go-archive#92). The handlers that have not run yet
 // still run: the work directory cleanup is registered first, so it is
 // the last one to run and the one a bare os.Exit would drop.
 func TestFatalfInExitHandler(t *testing.T) {
@@ -56,7 +56,7 @@ func TestFatalfInExitHandler(t *testing.T) {
 // pkg/GOOS_GOARCH: it removes the directory only when it is empty, and a
 // directory that a concurrent make.bash already removed is not an error.
 // Reading it with xreaddir instead called fatalf, which killed the process
-// from inside an exit handler (#92).
+// from inside an exit handler (trendvidia/go-archive#92).
 func TestRemoveIfEmpty(t *testing.T) {
 	dir := t.TempDir()
 

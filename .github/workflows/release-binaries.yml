@@ -68,7 +68,7 @@ jobs:
       # CGO_ENABLED is unset for make.bash/make.bat on purpose: cmd/dist bakes
       # $CGO_ENABLED into internal/buildcfg.DefaultCGO_ENABLED, and a baked "1"
       # makes the shipped toolchain default cgo on unconditionally, skipping
-      # upstream's "no C compiler in PATH -> cgo off" autodetection (#9,
+      # upstream's "no C compiler in PATH -> cgo off" autodetection (trendvidia/go-archive#9,
       # README "Building this fork"). The runner's inherited environment must
       # not decide this for a released artifact.
       - name: Build toolchain (Unix)
@@ -88,7 +88,7 @@ jobs:
           set "CGO_ENABLED="
           call make.bat
 
-      # --- Verify the baked default before anything is packaged (#9) ---
+      # --- Verify the baked default before anything is packaged (trendvidia/go-archive#9) ---
       # Fail the release build loudly rather than ship a toolchain whose
       # DefaultCGO_ENABLED diverges from stock Go.
       - name: Assert CGO_ENABLED was unset at build time (Unix)

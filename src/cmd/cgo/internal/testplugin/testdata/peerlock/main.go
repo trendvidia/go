@@ -11,7 +11,7 @@
 //     (main-tree build; Ver() == 11).
 //   - pm-plugB carries a DIFFERENT build of the same import path
 //     (altpath tree). Its Open must FAIL with the standard named-
-//     package error — before #24 it silently bound to A's instance.
+//     package error — before trendvidia/go-archive#24 it silently bound to A's instance.
 //   - pm-plugC carries the SAME build as A. Positive control: it must
 //     load cleanly and observe A's instance (Ver() == 11, shared).
 //   - A must remain fully usable after B's failed Open.

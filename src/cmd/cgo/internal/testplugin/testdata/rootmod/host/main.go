@@ -9,7 +9,7 @@
 // `example%2ecom.Counter` — and isUserPackageName's "no slash means
 // stdlib" arm dropped them from userDataLink registration, leaving host
 // and plugins with separate instances of the global on Windows. Same
-// failure class as the godomain fixture (#108), different arm.
+// failure class as the godomain fixture (trendvidia/go-archive#108), different arm.
 //
 // Two globals, two mechanisms, mirroring godomain:
 //

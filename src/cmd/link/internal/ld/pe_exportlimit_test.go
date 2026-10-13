@@ -146,7 +146,7 @@ func TestInitDynexportAtLimit(t *testing.T) {
 // behavior for build modes whose export lists are bounded upstream (hosts
 // bound theirs by rank in peSnapshotHostExports): everything past
 // peExportLimit is dropped with a warning naming the counts. Only plugins
-// hard-error (#39).
+// hard-error (trendvidia/go-archive#39).
 func TestInitDynexportNonPluginTruncates(t *testing.T) {
 	ctxt := newExportCandidates(t, "exe", peExportLimit+2)
 	resetExportState(t)
@@ -356,7 +356,7 @@ func TestPEExportLimitAborts(t *testing.T) {
 			// emit, so "exports N symbols" is literally true there.
 			// pePluginExportFile counts only the names it pins in the
 			// .def; mingw's auto-export publishes more, so claiming the
-			// image "exports" that number is the false confidence #59
+			// image "exports" that number is the false confidence trendvidia/go-archive#59
 			// was filed about. The cap that binds the external image is
 			// peVerifyImageExportCount, after hostlink.
 			//

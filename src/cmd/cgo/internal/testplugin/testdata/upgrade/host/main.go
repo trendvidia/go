@@ -16,7 +16,7 @@
 //
 // Both halves now reserve the freed range on unload — Windows with
 // VirtualAlloc(MEM_RESERVE) (trendvidia/go-archive#122), POSIX with a hint-only
-// mmap that never uses MAP_FIXED (#123) — so the stale write faults and
+// mmap that never uses MAP_FIXED (trendvidia/go-archive#123) — so the stale write faults and
 // the process dies. Reaching the "corrupted Budget" branch below means
 // a reservation stopped happening.
 package main

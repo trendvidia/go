@@ -373,7 +373,7 @@ func main() {}
 // peExportedNames returns the names in a PE image's export directory.
 // Delegates to peImageExportNames so the linker's own export-count check
 // and every test that inspects an export table read the image the same
-// way — the divergence #53 was about started as three copies of one walk.
+// way — the divergence trendvidia/go-archive#53 was about started as three copies of one walk.
 func peExportedNames(t *testing.T, path string) []string {
 	t.Helper()
 	names, err := peImageExportNames(path)

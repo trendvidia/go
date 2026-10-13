@@ -23,7 +23,7 @@ var pkgFromInitNameTests = []struct {
 	{"init.init.0", "init"},
 
 	// Dotted import paths: the suffix is stripped from the END of the
-	// name, not split at the first dot after the last '/' (#27).
+	// name, not split at the first dot after the last '/' (trendvidia/go-archive#27).
 	{"gopkg.in/yaml.v2.init", "gopkg.in/yaml.v2"},
 	{"gopkg.in/yaml.v2.init.0", "gopkg.in/yaml.v2"},
 	{"x.initfoo.init.0", "x.initfoo"},

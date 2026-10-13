@@ -14,7 +14,7 @@ import (
 func BumpB() int { return ext.Bump(2) }
 
 // FlagsPtr reports which flag.CommandLine this plugin sees. flag is a
-// slashless STDLIB package the host does not link, so before #115 each
+// slashless STDLIB package the host does not link, so before trendvidia/go-archive#115 each
 // plugin kept its own copy of that variable.
 func FlagsPtr() uintptr { return reflect.ValueOf(flag.CommandLine).Pointer() }
 

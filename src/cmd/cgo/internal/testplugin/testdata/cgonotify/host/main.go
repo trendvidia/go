@@ -39,7 +39,7 @@ func main() {
 	// The export itself, read straight from the loaded image. Checking
 	// only the callback below would leave "it worked" and "the handshake
 	// was never needed here" indistinguishable, which is exactly the
-	// ambiguity that let #62 sit unnoticed on windows/arm64.
+	// ambiguity that let trendvidia/go-archive#62 sit unnoticed on windows/arm64.
 	h, err := syscall.LoadLibrary("cgonotify-plugin.dll")
 	if err != nil {
 		fail("LoadLibrary: %v", err)

@@ -56,7 +56,7 @@ jobs:
       # Hosted images have no go-plus to bootstrap from; any Go >= 1.24.6
       # will do (src/cmd/dist/notgo124.go). Its own cache is off: the cold
       # GOCACHE below is the point of this workflow.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26.x'
           cache: false

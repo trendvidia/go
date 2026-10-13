@@ -30,7 +30,10 @@ concurrency:
 
 jobs:
   validate:
-    name: ${{ matrix.platform }}
+    # The workflow name is in the job name because branch protection
+    # matches required checks by job name alone, and dist-test's legs are
+    # named after the same platforms.
+    name: plugin-matrix ${{ matrix.platform }}
     strategy:
       fail-fast: false
       matrix:

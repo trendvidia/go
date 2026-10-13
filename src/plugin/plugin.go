@@ -406,7 +406,7 @@ func pluginDependents(pluginpath string) []string
 
 // pluginClose also reports the address range the module occupied, so
 // unloadPlugin can reserve it once the image is unmapped and the loader
-// cannot hand it to the next plugin (trendvidia/go-archive#122, #123). Zero on
+// cannot hand it to the next plugin (trendvidia/go-archive#122, trendvidia/go-archive#123). Zero on
 // any path that returns an error.
 //
 //go:linkname pluginClose
@@ -524,7 +524,7 @@ func closePlugin(p *Plugin) error {
 	p.pluginpath = cloneString(p.pluginpath)
 	// pluginClose reports the range the module occupied as it tears
 	// it down; unloadPlugin reserves it after the unmap so the loader
-	// cannot reuse it (trendvidia/go-archive#122, #123).
+	// cannot reuse it (trendvidia/go-archive#122, trendvidia/go-archive#123).
 	errstr, imgBase, imgSize := pluginClose(p.pluginpath, p.funcDescriptors)
 	if errstr != "" {
 		return pluginErr("Close", p.pluginpath, errstr)

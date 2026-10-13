@@ -384,15 +384,15 @@ var peSharedRuntimeData = map[string]bool{
 	//
 	// crypto/rsa and crypto/ecdsa register pointers to their package
 	// globals into this slice from init, through
-	// crypto/internal/boring/bcache. #66 stops a plugin re-running the init
+	// crypto/internal/boring/bcache. trendvidia/go-archive#66 stops a plugin re-running the init
 	// of a package the host also links, but a package linked ONLY by the
 	// plugin legitimately runs its init — so a plugin-only crypto/rsa puts
 	// plugin-resident data in this host-shared slice, and clearpools stores
 	// nil through it at the first GC after the image is unmapped. That is
-	// the runtime.poolcleanup fault of #61, one indirection later.
+	// the runtime.poolcleanup fault of trendvidia/go-archive#61, one indirection later.
 	//
 	// MEASURED 2026-08-27 (go1.26.5): the configuration is reachable today,
-	// and #68's premise for calling it out of scope — "crypto/internal/boring
+	// and trendvidia/go-archive#68's premise for calling it out of scope — "crypto/internal/boring
 	// is //go:build boringcrypto && linux && ..., so no Windows boringcrypto
 	// build can exist" — does not hold. That constraint covers the cgo
 	// BoringSSL binding, which decides whether the cache is USED; the
@@ -406,7 +406,7 @@ var peSharedRuntimeData = map[string]bool{
 	// does on PE; on ELF/Mach-O the symbol interposes) while an unshared
 	// crypto/rsa.pubCache stays plugin-resident.
 	//
-	// So this entry is not a guard, and the choice #68 has to make —
+	// So this entry is not a guard, and the choice trendvidia/go-archive#68 has to make —
 	// unregister at Close, or refuse the configuration at link time — is
 	// still open. Pinned by TestBoringCachesRegistrantsAreNotPlatformGated,
 	// which fails if those constraints move in either direction.

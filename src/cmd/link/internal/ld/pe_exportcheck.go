@@ -143,7 +143,7 @@ func peImageExportDir(path string) (peImageExports, error) {
 // x_cgo_notify_runtime_init_done, which plugin.Open reaches by
 // GetProcAddress and which was present only because mingw auto-exported
 // it; losing it hung every cgo plugin in _cgo_wait_runtime_init_done with
-// no diagnostic (#62).
+// no diagnostic (trendvidia/go-archive#62).
 //
 // That objection no longer holds: addCgoNotifyExport names the symbol in
 // the .def itself, and TestCgoPluginNotifyExport builds its plugin with
@@ -186,7 +186,7 @@ func peVerifyImageExportCount(ctxt *Link) {
 		// An empty export directory is not a plugin: the host resolves
 		// everything in it through GetProcAddress. Zero sails under any
 		// limit, so logging it as a pass would be the same false
-		// confidence #59 was filed about. Warn rather than fail, for
+		// confidence trendvidia/go-archive#59 was filed about. Warn rather than fail, for
 		// the same reason as above: the cap is what this function owns,
 		// and rejecting images on a condition never measured is not.
 		fmt.Fprintf(os.Stderr, "link: warning: %s publishes no exports; its export count was not verified against the %d-symbol limit\n",
@@ -216,7 +216,7 @@ func peVerifyImageExportCount(ctxt *Link) {
 // uint16" (initdynexport), and every address-table entry burns an ordinal
 // whether a name points at it or not: a NONAME or ordinal-only export
 // makes NumberOfNames the smaller of the two, and counting names would
-// then undercount exactly the way #59's .def count did. The larger of the
+// then undercount exactly the way trendvidia/go-archive#59's .def count did. The larger of the
 // two is taken so a malformed directory cannot shrink the number either.
 //
 // Ordinal Base is not modelled: every linker in play emits 1, and the

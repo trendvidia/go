@@ -175,7 +175,7 @@ func asmMentions(t *testing.T, dir string, asm []string, pkg string) []string {
 // defined in the runtime, which chose to export it to package plugin,
 // and nothing is exposed outward.
 //
-// #78 weighed one push and kept it: testHookBetweenFenceStages lets code
+// trendvidia/go-archive#78 weighed one push and kept it: testHookBetweenFenceStages lets code
 // linked into a host run inside open's TOCTOU window with pluginsMu
 // held. It was accepted because anything linkable into the host is
 // already inside the trust boundary and could call syscall.LoadLibrary
@@ -190,7 +190,7 @@ func asmMentions(t *testing.T, dir string, asm []string, pkg string) []string {
 // someone makes rather than a detail that lands.
 //
 // If this fails because you added a push linkname: that is the design
-// call #78 describes, not a test to update. Re-read that issue, weigh
+// call trendvidia/go-archive#78 describes, not a test to update. Re-read that issue, weigh
 // the new symbol on its own terms, and record the reasoning where the
 // hook's is.
 func TestPluginPushLinknameSurface(t *testing.T) {
@@ -222,9 +222,9 @@ func TestPluginPushLinknameSurface(t *testing.T) {
 		if d.remote != "" && d.remote != "plugin."+d.local {
 			// A definition renamed into somebody else's namespace. It
 			// is reachable as d.remote, NOT as plugin.<local>, so it is
-			// not part of the surface #78 weighed and does not belong
+			// not part of the surface trendvidia/go-archive#78 weighed and does not belong
 			// in the set below -- reporting it there would tell the
-			// next reader to re-litigate #78 over a symbol that is not
+			// next reader to re-litigate trendvidia/go-archive#78 over a symbol that is not
 			// in package plugin's namespace at all.
 			//
 			// It is still worth surfacing, because std writes
@@ -271,7 +271,7 @@ func TestPluginPushLinknameSurface(t *testing.T) {
 }
 
 // TestRuntimePushesIntoPluginNamespace pins the other half of the
-// plugin.* linkname surface, which #78 did not weigh.
+// plugin.* linkname surface, which trendvidia/go-archive#78 did not weigh.
 //
 // Package runtime pushes nine of its own definitions in under a
 // plugin.* name. Each is reachable from any package for the same reason

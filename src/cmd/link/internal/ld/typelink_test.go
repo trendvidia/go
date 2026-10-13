@@ -137,7 +137,7 @@ func TestIsUserPackageName(t *testing.T) {
 		"sync..stmp_3",
 	} {
 		if isUserPackageName(name) {
-			t.Errorf("isUserPackageName(%q) = true, want false: #115 widened the slashless case, "+
+			t.Errorf("isUserPackageName(%q) = true, want false: trendvidia/go-archive#115 widened the slashless case, "+
 				"it must not have widened the subsystem exclusions", name)
 		}
 	}
@@ -377,7 +377,7 @@ func TestInternalPkgScopingShared(t *testing.T) {
 			t.Errorf("isUserPackageName(%q) = true, want false: an internal package must stay module-local", name)
 		}
 		if !skipStaticCanonContainer(name) {
-			t.Errorf("skipStaticCanonContainer(%q) = false, want true: the gates disagree, which is the drift #111 removed", name)
+			t.Errorf("skipStaticCanonContainer(%q) = false, want true: the gates disagree, which is the drift trendvidia/go-archive#111 removed", name)
 		}
 	}
 	for _, name := range notInternal {
@@ -421,7 +421,7 @@ func TestUserDataExportable(t *testing.T) {
 		}
 	}
 
-	// Ordinary package-level data, unchanged by #106.
+	// Ordinary package-level data, unchanged by trendvidia/go-archive#106.
 	for _, st := range []sym.SymKind{sym.SDATA, sym.SBSS, sym.SNOPTRDATA, sym.SNOPTRBSS} {
 		if !userDataExportable("testplugin/common.X", st) {
 			t.Errorf("userDataExportable(testplugin/common.X, %v) = false, want true", st)
@@ -451,7 +451,7 @@ func TestUserDataExportable(t *testing.T) {
 	}
 
 	// A STDLIB funcval is exportable too, since trendvidia/go-archive#115
-	// dropped the slashless arm. That closes the residual #106 left
+	// dropped the slashless arm. That closes the residual trendvidia/go-archive#106 left
 	// open: host and plugin now agree on the identity of a stdlib
 	// function value, not just a user-package one.
 	for _, st := range []sym.SymKind{sym.SRODATA, sym.SNOPTRDATA} {

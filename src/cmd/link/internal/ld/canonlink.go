@@ -564,7 +564,7 @@ func isInternalPkgName(name string) bool {
 //
 // One definition, because this scoping rule existed in copies and had
 // been wrong in a different direction in each (trendvidia/go-archive#111, and
-// #108/#110/#115 before it). isUserPackageName gates what gets
+// trendvidia/go-archive#108, trendvidia/go-archive#110 and trendvidia/go-archive#115 before it). isUserPackageName gates what gets
 // REGISTERED for canonicalisation and skipStaticCanonContainer gates
 // which static containers get SCANNED for words to rewrite: the two ask
 // the same question about a name and now get the same answer, while

@@ -176,7 +176,7 @@ func peSetExportFunctionCount(t *testing.T, path string, n uint32) string {
 // (initdynexport), so the set it bounds is the ordinal space, and every
 // address-table entry burns an ordinal whether a name points at it or
 // not. Counting names undercounts an image with NONAME exports -- the
-// same shape of mistake as #59's .def count, one field over.
+// same shape of mistake as trendvidia/go-archive#59's .def count, one field over.
 func TestPEImageExportOverLimitCountsOrdinalSpace(t *testing.T) {
 	t.Parallel()
 	exe := buildWindowsPE(t, peExportingMain)
@@ -281,7 +281,7 @@ func TestPEVerifyImageExportCountAfterError(t *testing.T) {
 // export directory is reported rather than counted as a pass. Zero sails
 // under any limit, and a plugin that publishes nothing is one the host
 // cannot bind a single symbol out of -- logging "publishes 0 of 65500" is
-// the same false confidence #59 was filed about.
+// the same false confidence trendvidia/go-archive#59 was filed about.
 func TestPEVerifyImageExportCountEmptyExports(t *testing.T) {
 	ctxt := peVerifyContext(t)
 	exe := buildWindowsPE(t, peNonExportingMain)

@@ -21,7 +21,7 @@ var typetabStatsRe = regexp.MustCompile(`(?m)^typetabstats: workers=(\d+) typept
 // reflectdata.itabptrLsym: walk never reaches it while the parallel
 // backend phase (base.Ctxt.InParallel) is in effect, because walk runs
 // in gc.prepareFunc off the enqueue loop, which only resumes after
-// compileFunctions' wg.Wait (trendvidia/go-archive#33, #55).
+// compileFunctions' wg.Wait (trendvidia/go-archive#33, trendvidia/go-archive#55).
 //
 // The pin is a counter, not an assert, so a stale comment fails this
 // test on the measured configuration instead of ICEing the compiler on

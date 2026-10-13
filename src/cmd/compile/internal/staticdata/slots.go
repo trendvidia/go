@@ -57,7 +57,7 @@ func (r *SlotRegistry) Record(slot, target *obj.LSym) {
 // relocations); the runtime rewrites slots at module load during
 // cross-module canonicalisation, so a read-only slot would fault
 // there. Assigning the type explicitly after Global was measured to
-// change nothing (byte-identical object, 2026-08-27, #67); what pins
+// change nothing (byte-identical object, 2026-08-27, trendvidia/go-archive#67); what pins
 // the writable placement of these slots is
 // cmd/compile/internal/test.TestTypetabSlotsPresent on the object and
 // cmd/cgo/internal/testplugin.TestTypetabLinkedTables on the linked

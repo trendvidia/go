@@ -71,7 +71,7 @@ func isUnmapped(addr uintptr) (status int, errnoOut int) {
 	case mbi.State == memFree:
 		return 1, 0
 	case mbi.State == memReserve && mbi.Type != memImage:
-		// The #122 reservation: address space held, nothing mapped.
+		// The trendvidia/go-archive#122 reservation: address space held, nothing mapped.
 		return 1, 0
 	}
 	return 0, 0

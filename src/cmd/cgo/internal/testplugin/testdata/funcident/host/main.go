@@ -25,7 +25,7 @@
 //   - shared.Fn materialized through reflect: goes through a
 //     go.funcptr slot. Was broken.
 //   - wrap.FuncVar: statically initialized word in a plugin-only
-//     package pointing at a host-shared func. #106's literal shape.
+//     package pointing at a host-shared func. trendvidia/go-archive#106's literal shape.
 //     Was broken.
 //   - plugA vs plugB: peer agreement, which worked before and must
 //     keep working.

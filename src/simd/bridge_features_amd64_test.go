@@ -46,7 +46,7 @@ var grantedFeatures = map[int][]string{
 // What an operation needs comes from its doc comment ("CPU Feature: X"); a
 // Go-bodied helper needs whatever the archsimd operations it calls need. A
 // bodyless intrinsic with no annotation (the raw Load/Store family, issue
-// #97) is taken to need only its width's base instruction set, which is what
+// trendvidia/go-archive#97) is taken to need only its width's base instruction set, which is what
 // those are; they are counted so a change in their number is visible.
 func TestBridgeFeatures(t *testing.T) {
 	// No testing.Short() skip on purpose: cmd/dist runs every package test

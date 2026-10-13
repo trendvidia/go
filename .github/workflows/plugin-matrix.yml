@@ -1,4 +1,4 @@
-# Cross-platform plugin validation matrix (ROADMAP A3, issue #4).
+# Cross-platform plugin validation matrix (ROADMAP A3, issue trendvidia/go-archive#4).
 #
 # One GitHub-hosted runner per platform:
 #
@@ -183,7 +183,7 @@ jobs:
         run: bin\go test -count=1 plugin cmd/link/internal/ld cmd/cgo/internal/testplugin cmd/internal/testplugin
 
       # Drop this run's cache whatever the outcome, so per-run
-      # directories do not accumulate on the runners' disks (#81).
+      # directories do not accumulate on the runners' disks (trendvidia/go-archive#81).
       - name: Remove this run's build cache (Unix)
         if: always() && runner.os != 'Windows'
         run: test -n "$GOCACHE" && rm -rf "$GOCACHE" || true

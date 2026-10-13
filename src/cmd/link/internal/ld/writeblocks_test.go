@@ -171,7 +171,7 @@ func TestWriteBlockSectionlessSymAbortChild(t *testing.T) {
 // TestPEPluginLargeDataLinks covers the same exclusion end to end, but it
 // skips under -short and cmd/dist runs this package short, so without an
 // in-process pin nothing in the default build fails the day the exclusion
-// is dropped (an upstream merge restoring the original loop, say) and #49
+// is dropped (an upstream merge restoring the original loop, say) and trendvidia/go-archive#49
 // returns.
 func TestDatapExcludesTLSBSS(t *testing.T) {
 	ctxt := setUpWindowsAMD64Context(t)

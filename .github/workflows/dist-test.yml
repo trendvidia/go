@@ -143,13 +143,13 @@ jobs:
       # Windows: build the toolchain, then smoke-test a curated set of PURE core
       # stdlib packages with the freshly-built go (compile + link + run + test).
       # The list deliberately excludes packages whose tests need external tools
-      # or specific OS config (#16): os/user (workgroup account resolution), os
+      # or specific OS config (trendvidia/go-archive#16): os/user (workgroup account resolution), os
       # (symlink privilege), and runtime (its runtime-gdb tests fail on an
       # incompatible mingw gdb). make.bat already validates the runtime compiles;
       # plugin-matrix.yml validates the fork's plugin runtime feature on all 5.
       #
       # internal/buildcfg is in the list on purpose: the Windows leg does not run
-      # all.bat, so its TestDefaultCGOEnabledUnset pin (#9) would otherwise never
+      # all.bat, so its TestDefaultCGOEnabledUnset pin (trendvidia/go-archive#9) would otherwise never
       # execute on windows/{amd64,arm64}, even though make.bat bakes
       # DefaultCGO_ENABLED from %CGO_ENABLED% exactly as make.bash does. Note the
       # build below deliberately does NOT unset CGO_ENABLED: this lane exists to
@@ -180,7 +180,7 @@ jobs:
           ..\bin\go.exe version
           if (-not (..\bin\go.exe version | Select-String '\(plus')) { Write-Error 'built toolchain is not the go-plus fork'; exit 1 }
       # Drop this run's cache whatever the outcome, so per-run
-      # directories do not accumulate on the runners' disks (#81).
+      # directories do not accumulate on the runners' disks (trendvidia/go-archive#81).
       - name: Remove this run's build cache (Unix)
         if: always() && runner.os != 'Windows'
         run: test -n "$GOCACHE" && rm -rf "$GOCACHE" || true

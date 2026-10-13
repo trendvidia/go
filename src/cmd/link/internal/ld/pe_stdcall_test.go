@@ -39,7 +39,7 @@ func TestStdcallDecoration(t *testing.T) {
 		// so these are the ordinary spellings of ordinary import paths.
 		{"gopkg.in/yaml%2ev2.Set", -1},
 		{"gopkg.in/yaml%2ev2.DefaultMapType", -1},
-		{"example%2ecom.Counter", -1},             // root of a dotted module path (#110)
+		{"example%2ecom.Counter", -1},             // root of a dotted module path (trendvidia/go-archive#110)
 		{"go%2eexample%2eorg.Counter", -1},        // two escapes
 		{"go.example.org/fakemod/lib%2ev2.X", -1}, // escape in a slashed path
 		{"gopkg.in/check%2ev1.(*C).Assert", -1},   // method name after the escape

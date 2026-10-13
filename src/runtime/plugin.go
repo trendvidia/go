@@ -748,7 +748,7 @@ func neutraliseStaticDescriptors(md *moduledata, stubPC uintptr) {
 // can hold a pointer into. package plugin reserves that range once the
 // image is unmapped, so the loader cannot place the NEXT plugin over it
 // and a stale pointer faults instead of silently addressing the new
-// image (trendvidia/go-archive#122, #123). They are (0, 0) on any path that
+// image (trendvidia/go-archive#122, trendvidia/go-archive#123). They are (0, 0) on any path that
 // does not unlink a module, and reading them is only meaningful when
 // errstr is "".
 //
@@ -780,7 +780,7 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string,
 
 	// Capture the module's extent before the teardown below unlinks
 	// it; package plugin reserves this range after the image is
-	// unmapped (trendvidia/go-archive#122, #123).
+	// unmapped (trendvidia/go-archive#122, trendvidia/go-archive#123).
 	if md.end > md.text {
 		base, size = md.text, md.end-md.text
 	}
@@ -907,7 +907,7 @@ func plugin_close(pluginpath string, heapDescriptors []*uintptr) (errstr string,
 // (darwin dlopen, windows addmoduledata) — or, where the mapping
 // lingers (glibc), silently links the new module onto the detached
 // node, leaving it unreachable from firstmoduledata and surfacing as
-// "plugin already loaded". See issue #5.
+// "plugin already loaded". See issue trendvidia/go-archive#5.
 //
 // Callers hold pluginsMu (via closePlugin / open), which serialises
 // chain mutation against concurrent loads.

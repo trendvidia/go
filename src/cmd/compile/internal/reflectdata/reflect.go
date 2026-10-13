@@ -727,7 +727,7 @@ func itabptrLsym(typ, iface *types.Type) *obj.LSym {
 	// wholly before it, but it only resumes after compileFunctions'
 	// wg.Wait, so no walk ever overlaps a live worker. Measured 0
 	// recordings in the parallel phase across a -typetab build of all of
-	// std (#33; the serial count moves with each rework, the zero does
+	// std (trendvidia/go-archive#33; the serial count moves with each rework, the zero does
 	// not); TestTypetabStatsSerialItabptr pins that zero via
 	// -d=typetabstats. The lock is defensive uniformity with
 	// TypeptrLsym, not a fix for an observed race; the registry dedups
@@ -758,7 +758,7 @@ func (c *typetabPhaseCounts) count() {
 // slot recorder ran, split by compiler phase. It exists to pin the
 // itabptrLsym comment above — the claim that walk never reaches it
 // from a backend worker — against the tree rather than against a
-// one-off instrumented build (trendvidia/go-archive#33, #55). It is a counter
+// one-off instrumented build (trendvidia/go-archive#33, trendvidia/go-archive#55). It is a counter
 // reported at dumpdata time, deliberately not an assert: the claim was
 // measured on a darwin/arm64 std build and the mechanism stays correct
 // under signatmu even if it were false elsewhere, so a stale comment

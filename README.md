@@ -22,6 +22,13 @@ go version go1.27.2 windows/amd64 (plus v1.27.2)
   macOS. A plugin is a DLL. The host and its plugins share packages,
   types and interface tables, so type assertions and type switches work
   across the boundary.
+- **No C toolchain or external linker for Windows plugins.** Upstream
+  plugins need cgo and an external linker (gcc or clang) wherever they
+  are supported. On Windows, go-plus links plugin DLLs with Go's own linker
+  and loads them without cgo, so a pure-Go host and its plugins build
+  with nothing but this toolchain, including cross-compiled from macOS or
+  Linux. Plugins that use cgo still need a C compiler: mingw-w64 gcc on
+  windows/amd64, clang (for example MSYS2's clangarm64) on windows/arm64.
 - **Unloading plugins.** `(*plugin.Plugin).Close` unloads a plugin, on
   every platform that supports plugins. Func values that `Lookup`
   returned panic after `Close` instead of jumping into unmapped code.
@@ -45,7 +52,31 @@ windows/amd64 and windows/arm64 are attached to each
 the same layout as an upstream Go archive: unpack it and put `go/bin` on
 your `PATH`.
 
-To build from source, see the next section.
+To build from source, see "Building this fork" below.
+
+### Building a plugin on Windows
+
+A plugin is linked against its host's import library. `go build` writes
+that library next to any executable that imports `plugin`:
+
+```
+go build -o host.exe ./host                     # also writes host.exe.a
+go build -buildmode=plugin -ldflags=-pluginimplib=host.exe.a -o plug.dll ./plug
+```
+
+Without `-pluginimplib` the plugin build fails and says what is missing.
+Build plugins against the host they will be loaded into: `plugin.Open`
+rejects a plugin built with a different version of any package it
+shares with the host.
+
+Neither step needs a C compiler unless the code uses cgo. Both work when
+cross-compiling, for example from macOS:
+
+```
+GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -o host.exe ./host
+GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -buildmode=plugin \
+    -ldflags=-pluginimplib=host.exe.a -o plug.dll ./plug
+```
 
 ### Reporting problems
 

@@ -12,6 +12,8 @@ package testfastleaf
 #cgo fastleaf addLeaf
 #cgo fastleaf sumLeaf
 #cgo fastleaf callsBack
+#cgo fastleaf spinLeaf
+#cgo fastleaf crashLeaf
 
 #include <stddef.h>
 #include <stdint.h>
@@ -26,6 +28,21 @@ static uint64_t sumLeaf(const unsigned char *p, size_t n) {
 		s = s * 31 + p[i];
 	}
 	return s;
+}
+
+// spinLeaf busy-loops for about n iterations, long enough for profiling
+// signals to land in it.
+static uint64_t spinLeaf(int n) {
+	volatile uint64_t s = 0;
+	for (int i = 0; i < n; i++) {
+		s += (uint64_t)i * 2654435761u;
+	}
+	return s;
+}
+
+// crashLeaf faults on a NULL write.
+static void crashLeaf(void) {
+	*(volatile int *)0 = 1;
 }
 
 extern void goCallback(void);
@@ -58,6 +75,12 @@ func SumGo(b []byte) uint64 {
 	}
 	return s
 }
+
+// SpinLeaf runs a fastleaf C function that spins for about n iterations.
+func SpinLeaf(n int) uint64 { return uint64(C.spinLeaf(C.int(n))) }
+
+// CrashLeaf calls a fastleaf C function that faults.
+func CrashLeaf() { C.crashLeaf() }
 
 // CallsBack calls a fastleaf C function that calls back into Go, which
 // must throw.

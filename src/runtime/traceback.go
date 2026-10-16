@@ -897,8 +897,10 @@ func traceback1(pc, sp, lr uintptr, gp *g, flags unwindFlags) {
 		printCgoTraceback(&cgoCallers)
 	}
 
-	if readgstatus(gp)&^_Gscan == _Gsyscall {
-		// Override registers if blocked in system call.
+	if readgstatus(gp)&^_Gscan == _Gsyscall || gp.cgoFastLeaf && gp.syscallsp != 0 {
+		// Override registers if blocked in system call, or in a
+		// #cgo fastleaf call (cgocallLeaf), whose goroutine stays
+		// running but whose registers belong to the C function.
 		pc = gp.syscallpc
 		sp = gp.syscallsp
 		flags &^= unwindTrap

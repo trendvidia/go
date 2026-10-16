@@ -42,6 +42,17 @@ func cgocallLeaf(fn, arg unsafe.Pointer) int32 {
 	mp.ncgocall++
 	mp.cgoCallers[0] = 0
 
+	// Record where the goroutine's Go stack stops, as entersyscall does
+	// for an ordinary cgo call. The goroutine stays running, but its Go
+	// stack is frozen below this point until the call returns, and the
+	// code that unwinds a goroutine in C starts from here: the CPU
+	// profiler (sigprof) and crash tracebacks (traceback1), which would
+	// otherwise unwind from the C function's PC on the system stack.
+	fp := getcallerfp()
+	gp.syscallsp = sys.GetCallerSP()
+	gp.syscallpc = sys.GetCallerPC()
+	gp.syscallbp = fp
+
 	// As in cgocall: tell asynchronous preemption that the thread is in
 	// external code, and mark C on the stack for tracing and profiling.
 	osPreemptExtEnter(mp)
@@ -51,6 +62,9 @@ func cgocallLeaf(fn, arg unsafe.Pointer) int32 {
 
 	errno := asmcgocall(fn, arg)
 
+	gp.syscallsp = 0
+	gp.syscallpc = 0
+	gp.syscallbp = 0
 	gp.cgoFastLeaf = false
 	mp.incgo = false
 	mp.ncgo--

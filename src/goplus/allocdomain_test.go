@@ -149,11 +149,11 @@ func TestAllocDomainReusedGoroutine(t *testing.T) {
 	d := goplus.NewAllocDomain()
 	var wg sync.WaitGroup
 	d.Run(func() {
-		for range n {
+		for w := range n {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				allocExact(1, 10, 64)
+				allocExact(w, 10, 64) // each goroutine its own sink slot
 			}()
 		}
 	})
@@ -163,11 +163,11 @@ func TestAllocDomainReusedGoroutine(t *testing.T) {
 	if before < n*10*64 {
 		t.Fatalf("domain counted %d bytes from its own goroutines, want at least %d", before, n*10*64)
 	}
-	for range n {
+	for w := range n {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			allocExact(2, 10, 4096)
+			allocExact(w, 10, 4096)
 		}()
 	}
 	wg.Wait()

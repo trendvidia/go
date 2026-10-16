@@ -159,6 +159,8 @@ jobs:
       # goplus and goplus/internal/execmem are in the list for the same reason:
       # the fork's runtime API for generated code (#14) has Windows-only paths,
       # VirtualAlloc mapping among them, that nothing else runs on Windows.
+      # cmd/cgo/internal/testfastleaf runs #cgo fastleaf (#34) through the
+      # Windows cgo toolchain; its Rust test skips on an MSVC-hosted rustc.
       #
       # The build below deliberately does NOT unset CGO_ENABLED: this lane exists to
       # DETECT a runner whose environment exports it, the same way the Unix legs
@@ -171,7 +173,7 @@ jobs:
         run: |
           for /f "delims=" %%i in ('go env GOROOT') do set "GOROOT_BOOTSTRAP=%%i"
           call make.bat || exit /b 1
-          ..\bin\go.exe test -short -count=1 errors fmt strings strconv bytes sort math encoding/json regexp sync context internal/buildcfg goplus goplus/internal/execmem || exit /b 1
+          ..\bin\go.exe test -short -count=1 errors fmt strings strconv bytes sort math encoding/json regexp sync context internal/buildcfg goplus goplus/internal/execmem cmd/cgo/internal/testfastleaf || exit /b 1
 
       # Confirm the toolchain we just built is the fork, not stock Go.
       - name: Assert the built toolchain is go-plus (Unix)

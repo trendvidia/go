@@ -460,6 +460,26 @@ For example:
 
 	// #cgo nocallback cFunctionName
 
+The go-plus toolchain adds a third directive for short C functions that
+never block: #cgo fastleaf. A call to a fastleaf function switches to the
+system stack, calls it and switches back, without announcing a system
+call to the scheduler, so the goroutine keeps its P and the call costs a
+few nanoseconds instead of tens. fastleaf implies noescape and
+nocallback. The cost of the declaration falls on the C function: while it
+runs it holds the P, and a stop-the-world (such as a garbage collection)
+waits until it returns, because a goroutine running C code is not at a
+safe point. A fastleaf function that blocks, or runs long, therefore
+stalls other goroutines and the collector. If it calls back into Go, the
+program throws.
+
+For example:
+
+	// #cgo fastleaf cFunctionName
+
+A Rust function exported with extern "C" can be declared fastleaf the
+same way; it must catch panics at the boundary (std::panic::catch_unwind),
+since unwinding into Go is undefined behavior.
+
 # Special cases
 
 A few special C types which would normally be represented by a pointer

@@ -548,6 +548,7 @@ type g struct {
 	syncSafePoint   bool // set if g is stopped at a synchronous safe point.
 	runningCleanups atomic.Bool
 	goplusNoTiny    bool // set by goplus.SetNoTinyAlloc: bypass the tiny allocator; inherited by new goroutines
+	cgoFastLeaf     bool // in a #cgo fastleaf call (cgocallLeaf), which must not call back into Go
 	sig             uint32
 	secret          int32 // current nesting of runtime/secret.Do calls.
 	writebuf        []byte

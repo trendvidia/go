@@ -316,6 +316,11 @@ func cgocallbackg(fn, frame unsafe.Pointer, ctxt uintptr) {
 		println("runtime: bad g in cgocallback")
 		exit(2)
 	}
+	if gp.cgoFastLeaf {
+		// cgocallLeaf did not enter a system call, so there is nothing
+		// for exitsyscall below to exit, and the callback cannot run.
+		throw("runtime: function marked with #cgo fastleaf called back into Go")
+	}
 
 	sp := gp.m.g0.sched.sp // system sp saved by cgocallback.
 	oldStack := gp.m.g0.stack

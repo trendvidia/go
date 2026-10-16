@@ -52,6 +52,7 @@ type Package struct {
 	Preamble    string          // collected preamble for _cgo_export.h
 	noCallbacks map[string]bool // C function names with #cgo nocallback directive
 	noEscapes   map[string]bool // C function names with #cgo noescape directive
+	fastLeafs   map[string]bool // C function names with #cgo fastleaf directive (go-plus)
 }
 
 // A typedefInfo is an element on Package.typedefList: a typedef name
@@ -74,6 +75,7 @@ type File struct {
 	NamePos     map[*Name]token.Pos // map from Name to position of the first reference
 	NoCallbacks map[string]bool     // C function names with #cgo nocallback directive
 	NoEscapes   map[string]bool     // C function names with #cgo noescape directive
+	FastLeafs   map[string]bool     // C function names with #cgo fastleaf directive (go-plus)
 	Edit        *edit.Buffer
 
 	debugs []*debug // debug data from iterations of gccDebug. Initialized by File.loadDebug.
@@ -495,6 +497,12 @@ func main() {
 		}
 	}
 
+	for funcName := range p.fastLeafs {
+		if _, found := cFunctions[funcName]; !found {
+			error_(token.NoPos, "#cgo fastleaf %s: no matched C function", funcName)
+		}
+	}
+
 	if !*godefs {
 		p.writeDefs()
 	}
@@ -536,6 +544,7 @@ func newPackage(args []string) *Package {
 		Written:     make(map[string]bool),
 		noCallbacks: make(map[string]bool),
 		noEscapes:   make(map[string]bool),
+		fastLeafs:   make(map[string]bool),
 	}
 	p.addToFlag("CFLAGS", args)
 	return p
@@ -598,6 +607,7 @@ func (p *Package) Record(f *File) {
 	// merge nocallback & noescape
 	maps.Copy(p.noCallbacks, f.NoCallbacks)
 	maps.Copy(p.noEscapes, f.NoEscapes)
+	maps.Copy(p.fastLeafs, f.FastLeafs)
 
 	if f.ExpFunc != nil {
 		p.ExpFunc = append(p.ExpFunc, f.ExpFunc...)

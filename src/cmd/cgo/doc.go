@@ -470,12 +470,13 @@ runs it holds the P, and a stop-the-world (such as a garbage collection)
 waits until it returns, because a goroutine running C code is not at a
 safe point. A fastleaf function that blocks, or runs long, therefore
 stalls other goroutines and the collector. If it calls back into Go, the
-program throws. On Unix systems the goroutine is still running as far as
-the scheduler can tell, so while the runtime waits for it to stop, as a
-collection does to scan its stack, it repeatedly sends the thread the
-preemption signal (SIGURG), which an ordinary cgo call is not sent. An
-interruptible system call made by a fastleaf function, such as nanosleep
-or poll, can then fail with EINTR.
+program throws. On Unix systems the runtime does not send its preemption
+signal (SIGURG) to a thread while it is in a fastleaf call, but a signal
+sent just before the call starts can still arrive during it. The runtime
+installs its handlers with SA_RESTART, so most interrupted system calls
+restart, but ones the kernel never restarts, such as nanosleep or poll,
+can occasionally fail with EINTR, about as often as in an ordinary cgo
+call. A fastleaf function should handle EINTR as any C code should.
 
 For example:
 

@@ -367,6 +367,18 @@ const preemptMSupported = true
 // safe-point, it will preempt the goroutine. It always atomically
 // increments mp.preemptGen after handling a preemption request.
 func preemptM(mp *m) {
+	// A goroutine in a #cgo fastleaf call (cgocallLeaf) is running C
+	// code, which the signal cannot preempt, and the signal makes an
+	// interruptible system call in that code fail with EINTR, which an
+	// ordinary cgo call (in a system call, so never signalled) does not
+	// see. Don't send it. Callers retry (suspendG, stopTheWorld), and
+	// once the call returns the goroutine stops at its next stack check
+	// or on a later signal. The read races with the call starting or
+	// ending; either way at most one signal is sent or skipped.
+	if gp := mp.curg; gp != nil && gp.cgoFastLeaf {
+		return
+	}
+
 	// On Darwin, don't try to preempt threads during exec.
 	// Issue #41702.
 	if GOOS == "darwin" || GOOS == "ios" {

@@ -224,12 +224,19 @@ func (versionFlag) Set(s string) error {
 	}
 
 	// The go command invokes -V=full to get a unique identifier
-	// for this tool. It is assumed that the release version is sufficient
-	// for releases, but during development we include the full
-	// build ID of the binary, so that if the compiler is changed and
-	// rebuilt, we notice and rebuild all packages.
+	// for this tool. We include the full build ID of the binary, so
+	// that if the compiler is changed and rebuilt, we notice and
+	// rebuild all packages.
+	//
+	// go-plus: upstream includes it only for development versions and
+	// assumes the release version is sufficient for releases. It is not
+	// for this fork: its tools change between builds of the same
+	// version, and stock Go of the same version names the same release,
+	// so cache entries were shared across both (trendvidia/go#20).
+	// A tool linked externally has no build ID to report; it falls
+	// back to the release version, as upstream does.
 	if s == "full" {
-		if strings.Contains(buildcfg.Version, "devel") {
+		if strings.Contains(buildcfg.Version, "devel") || buildID != "" {
 			p += " buildID=" + buildID
 		}
 	}

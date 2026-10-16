@@ -177,6 +177,15 @@ func (b *Builder) toolID(name string) string {
 			// On the development branch, use the content ID part of the build ID.
 			return contentID(f[len(f)-1])
 		}
+		// go-plus: a release tool reports its build ID too, and we use its
+		// content ID, as on the development branch. Keying on the release
+		// version let a rebuilt toolchain, or stock Go of the same version,
+		// be served this toolchain's cache entries (trendvidia/go#20).
+		// The cost is the reproducibility described above: the same release
+		// built on different hosts now gives different tool IDs.
+		if id, ok := strings.CutPrefix(f[len(f)-1], "buildID="); ok && id != "" {
+			return contentID(id)
+		}
 		// For a release, the output is like: "compile version go1.9.1 X:framepointer".
 		// Use the whole line.
 		return strings.TrimSpace(line)

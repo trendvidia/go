@@ -9,6 +9,8 @@ package bootstrap_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"internal/goversion"
 	"internal/testenv"
 	"os"
 	"os/exec"
@@ -43,7 +45,10 @@ func TestExperimentToolID(t *testing.T) {
 	if err := overlayDir(gorootLib, filepath.Join(realGoroot, "lib")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(goroot, "VERSION"), []byte("go1.999"), 0666); err != nil {
+	// A release version the compiler accepts as a -lang: go1.999 is
+	// above the newest one it knows, and make.bash fails on it.
+	version := fmt.Sprintf("go1.%d.999", goversion.Version)
+	if err := os.WriteFile(filepath.Join(goroot, "VERSION"), []byte(version), 0666); err != nil {
 		t.Fatal(err)
 	}
 	env := append(os.Environ(), "GOROOT=", "GOROOT_BOOTSTRAP="+realGoroot)
@@ -67,8 +72,8 @@ func TestExperimentToolID(t *testing.T) {
 
 	// Verify compiler version string.
 	goCmdPath := filepath.Join(goroot, "bin", "go")
-	gotVersion := bytes.TrimSpace(runCmd(t, gorootSrc, env, goCmdPath, "tool", "compile", "-V=full"))
-	wantVersion := []byte(`compile version go1.999`)
+	gotVersion := compileVersion(t, gorootSrc, env, goCmdPath)
+	wantVersion := []byte("compile version " + version)
 	if !bytes.Equal(gotVersion, wantVersion) {
 		t.Errorf("compile version without experiment is unexpected:\ngot  %q\nwant %q", gotVersion, wantVersion)
 	}
@@ -81,14 +86,24 @@ func TestExperimentToolID(t *testing.T) {
 	runCmd(t, gorootSrc, env, makeScriptPath)
 
 	// Verify compiler version string.
-	gotVersion = bytes.TrimSpace(runCmd(t, gorootSrc, env, goCmdPath, "tool", "compile", "-V=full"))
-	wantVersion = []byte(`compile version go1.999 X:fieldtrack`)
+	gotVersion = compileVersion(t, gorootSrc, env, goCmdPath)
+	wantVersion = []byte("compile version " + version + " X:fieldtrack")
 	if !bytes.Equal(gotVersion, wantVersion) {
 		t.Errorf("compile version with experiment is unexpected:\ngot  %q\nwant %q", gotVersion, wantVersion)
 	}
 
 	// Build the same package. We should not get a cache conflict.
 	runCmd(t, gorootSrc, env, goCmdPath, "build", "-race", "archive/tar")
+}
+
+// compileVersion returns the compiler's -V=full line without its
+// build ID, which go-plus reports for releases too (trendvidia/go#20).
+func compileVersion(t *testing.T, dir string, env []string, goCmdPath string) []byte {
+	out := bytes.TrimSpace(runCmd(t, dir, env, goCmdPath, "tool", "compile", "-V=full"))
+	if i := bytes.Index(out, []byte(" buildID=")); i >= 0 {
+		out = out[:i]
+	}
+	return out
 }
 
 func runCmd(t *testing.T, dir string, env []string, path string, args ...string) []byte {

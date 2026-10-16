@@ -433,8 +433,9 @@ func (ctxt *Context) saveCgo(filename string, di *build.Package, text string) er
 			continue
 		}
 
-		// #cgo (nocallback|noescape) <function name>
-		if fields := strings.Fields(line); len(fields) == 3 && (fields[1] == "nocallback" || fields[1] == "noescape") {
+		// #cgo (nocallback|noescape|fastleaf) <function name>
+		// (fastleaf is a go-plus addition.)
+		if fields := strings.Fields(line); len(fields) == 3 && (fields[1] == "nocallback" || fields[1] == "noescape" || fields[1] == "fastleaf") {
 			continue
 		}
 

@@ -657,7 +657,10 @@ func (p *Package) writeDefsFunc(fgo2 io.Writer, n *Name, callsMalloc *bool) {
 		arg = "uintptr(unsafe.Pointer(&r1))"
 	}
 
-	noCallback := p.noCallbacks[n.C]
+	// A fastleaf call is made by runtime.cgocallLeaf, which keeps the P
+	// and refuses callbacks itself, and implies noescape and nocallback.
+	fastLeaf := p.fastLeafs[n.C]
+	noCallback := p.noCallbacks[n.C] && !fastLeaf
 	if noCallback {
 		// disable cgocallback, will check it in runtime.
 		fmt.Fprintf(fgo2, "\t_Cgo_no_callback(true)\n")
@@ -667,7 +670,11 @@ func (p *Package) writeDefsFunc(fgo2 io.Writer, n *Name, callsMalloc *bool) {
 	if n.AddError {
 		prefix = "errno := "
 	}
-	fmt.Fprintf(fgo2, "\t%s_cgo_runtime_cgocall(%s, %s)\n", prefix, cname, arg)
+	call := "_cgo_runtime_cgocall"
+	if fastLeaf {
+		call = "_cgo_runtime_cgocallleaf"
+	}
+	fmt.Fprintf(fgo2, "\t%s%s(%s, %s)\n", prefix, call, cname, arg)
 	if n.AddError {
 		fmt.Fprintf(fgo2, "\tif errno != 0 { r2 = syscall.Errno(errno) }\n")
 	}
@@ -679,7 +686,7 @@ func (p *Package) writeDefsFunc(fgo2 io.Writer, n *Name, callsMalloc *bool) {
 	// so that the compiler won't force to escape them to heap.
 	// Instead, make the compiler keep them alive by using _Cgo_keepalive.
 	touchFunc := "_Cgo_use"
-	if p.noEscapes[n.C] && p.noCallbacks[n.C] {
+	if p.noEscapes[n.C] && p.noCallbacks[n.C] || fastLeaf {
 		touchFunc = "_Cgo_keepalive"
 	}
 
@@ -1714,6 +1721,9 @@ static const char *_GoStringPtr(_GoString_ s) { return s.p; }
 const goProlog = `
 //go:linkname _cgo_runtime_cgocall runtime.cgocall
 func _cgo_runtime_cgocall(unsafe.Pointer, uintptr) int32
+
+//go:linkname _cgo_runtime_cgocallleaf runtime.cgocallLeaf
+func _cgo_runtime_cgocallleaf(unsafe.Pointer, uintptr) int32
 
 //go:linkname _cgoCheckPointer runtime.cgoCheckPointer
 //go:noescape

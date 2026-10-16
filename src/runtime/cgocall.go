@@ -205,6 +205,8 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 		raceacquire(unsafe.Pointer(&racecgosync))
 	}
 
+	// go-plus: cgocallLeaf (#cgo fastleaf) copies this bookkeeping; keep
+	// the two in step.
 	if sys.DITSupported {
 		// C code may have enabled or disabled DIT on this thread, restore
 		// our state to the expected one.
@@ -315,6 +317,11 @@ func cgocallbackg(fn, frame unsafe.Pointer, ctxt uintptr) {
 	if gp != gp.m.curg {
 		println("runtime: bad g in cgocallback")
 		exit(2)
+	}
+	if gp.cgoFastLeaf {
+		// cgocallLeaf did not enter a system call, so there is nothing
+		// for exitsyscall below to exit, and the callback cannot run.
+		throw("runtime: function marked with #cgo fastleaf called back into Go")
 	}
 
 	sp := gp.m.g0.sched.sp // system sp saved by cgocallback.

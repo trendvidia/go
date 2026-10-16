@@ -77,14 +77,15 @@ func cname(s string) string {
 }
 
 // ProcessCgoDirectives processes the import C preamble:
-//  1. discards all #cgo CFLAGS, LDFLAGS, nocallback and noescape directives,
-//     so they don't make their way into _cgo_export.h.
-//  2. parse the nocallback and noescape directives.
+//  1. discards all #cgo CFLAGS, LDFLAGS, nocallback, noescape and fastleaf
+//     directives, so they don't make their way into _cgo_export.h.
+//  2. parse the nocallback, noescape and fastleaf directives.
 func (f *File) ProcessCgoDirectives() {
 	linesIn := strings.Split(f.Preamble, "\n")
 	linesOut := make([]string, 0, len(linesIn))
 	f.NoCallbacks = make(map[string]bool)
 	f.NoEscapes = make(map[string]bool)
+	f.FastLeafs = make(map[string]bool)
 	for _, line := range linesIn {
 		l := strings.TrimSpace(line)
 		if len(l) < 5 || l[:4] != "#cgo" || !unicode.IsSpace(rune(l[4])) {
@@ -92,7 +93,7 @@ func (f *File) ProcessCgoDirectives() {
 		} else {
 			linesOut = append(linesOut, "")
 
-			// #cgo (nocallback|noescape) <function name>
+			// #cgo (nocallback|noescape|fastleaf) <function name>
 			if fields := strings.Fields(l); len(fields) == 3 {
 				directive := fields[1]
 				funcName := fields[2]
@@ -100,6 +101,8 @@ func (f *File) ProcessCgoDirectives() {
 					f.NoCallbacks[funcName] = true
 				} else if directive == "noescape" {
 					f.NoEscapes[funcName] = true
+				} else if directive == "fastleaf" {
+					f.FastLeafs[funcName] = true
 				}
 			}
 		}

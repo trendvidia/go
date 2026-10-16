@@ -137,6 +137,45 @@ func TestAllocDomainConcurrent(t *testing.T) {
 	}
 }
 
+// TestAllocDomainReusedGoroutine checks that a goroutine started outside
+// any domain is not counted even when it reuses the record of a goroutine
+// that ran, and exited, inside one. Goroutine records go on a per-P free
+// list when a goroutine exits and the next goroutine started on that P
+// takes one from it, so starting goroutines on one P right after a batch
+// exited makes reuse near certain.
+func TestAllocDomainReusedGoroutine(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	const n = 64
+	d := goplus.NewAllocDomain()
+	var wg sync.WaitGroup
+	d.Run(func() {
+		for range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				allocExact(1, 10, 64)
+			}()
+		}
+	})
+	wg.Wait()
+	runtime.Gosched() // let the exited goroutines' records reach the free list
+	before := d.Allocated()
+	if before < n*10*64 {
+		t.Fatalf("domain counted %d bytes from its own goroutines, want at least %d", before, n*10*64)
+	}
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			allocExact(2, 10, 4096)
+		}()
+	}
+	wg.Wait()
+	if after := d.Allocated(); after != before {
+		t.Fatalf("domain grew from %d to %d bytes from goroutines started outside it (stale domain on a reused goroutine record)", before, after)
+	}
+}
+
 // BenchmarkAllocDomain measures an allocation inside a domain against
 // one outside.
 func BenchmarkAllocDomain(b *testing.B) {

@@ -85,12 +85,14 @@ wrong conclusions:
   `cmd/cgo/internal/testplugin` skips itself wholesale under it. So
   `all.bash` green says nothing about the plugin suites; `plugin-matrix`
   is what exercises them.
-- **A rebuilt toolchain does not invalidate `GOCACHE`.** A release-style
-  `VERSION` makes the tool ID version-only, so a link can be served from
-  cache and appear to prove a linker change it never ran. Use `-a` or a
-  fresh `GOCACHE` when A/B-ing across a toolchain rebuild, and check a
-  positive marker in the artifact (an export, a symbol, a string) before
-  drawing a conclusion from it.
+- **A toolchain older than #20 does not invalidate `GOCACHE` on
+  rebuild.** Its release-style `VERSION` makes the tool ID version-only,
+  so a link can be served from cache and appear to prove a linker change
+  it never ran. The fork now keys on the tools' content IDs, but an A/B
+  against an older fork release, or a `-toolexec` stand-in that reports
+  the same `-V=full`, still needs `-a` or a fresh `GOCACHE`. Either way,
+  check a positive marker in the artifact (an export, a symbol, a
+  string) before drawing a conclusion from it.
 
 ## CI
 

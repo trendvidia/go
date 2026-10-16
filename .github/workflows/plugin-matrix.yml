@@ -81,21 +81,20 @@ jobs:
 
       # trendvidia/go#20: give every run a cold, private build cache.
       #
-      # This fork's VERSION is release-style (go1.26.5), so cmd/go keys
-      # the build cache on the compiler's version STRING alone --
-      # upstream's assumption that a released toolchain never changes.
-      # Here the compiler and linker change on every commit while the
-      # string does not, so a persistent GOCACHE on a self-hosted runner
-      # can serve std package archives built by a PREVIOUS commit's
-      # toolchain, and a change to compiler or linker output for std --
-      # exactly the work this repo is made of -- gets judged green
-      # against objects it never produced. `-count=1` does not help: it
-      # defeats test-result caching, not the package cache.
+      # Until #20, cmd/go keyed the build cache of a release-style VERSION
+      # on the compiler's version STRING alone -- upstream's assumption
+      # that a released toolchain never changes. Here the compiler and
+      # linker change on every commit while the string does not, so a
+      # persistent GOCACHE could serve std package archives built by a
+      # PREVIOUS commit's toolchain, and a change to compiler or linker
+      # output for std got judged green against objects it never
+      # produced. The fork now keys on the tools' content IDs, which
+      # closes that; the per-run cache stays so that a regression of
+      # #20 cannot quietly reopen it.
       #
-      # A private directory per run rather than `go clean -cache` on the
-      # shared one: these runners host several jobs each, and wiping a
-      # shared cache mid-run has been observed pruning a concurrent
-      # job's entries out from under it.
+      # A private directory per run rather than `go clean -cache` on a
+      # shared one: a runner hosting several jobs has been observed
+      # pruning a concurrent job's entries out from under it.
       #
       # Set here rather than in a job-level `env:` because the value
       # needs RUNNER_TEMP, and the `runner` context is not available to

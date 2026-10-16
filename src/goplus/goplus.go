@@ -20,6 +20,39 @@
 // so a toolchain whose API is older fails to build. A change that is not
 // backward compatible renames the affected declaration rather than
 // changing it in place.
+//
+// # Calling Go from generated code
+//
+// Generated code that calls a Go function, or is called by one through a
+// func value, uses Go's internal register calling convention,
+// ABIInternal. Go does not promise it is stable; this documents it as of
+// this release, and the package's tests fail if it changes.
+//
+// On amd64:
+//
+//   - integer and pointer arguments and results: AX, BX, CX, DI, SI, R8,
+//     R9, R10, R11, in that order; floating-point: X0 to X14;
+//   - R14 holds the current goroutine (g) and X15 is zero, on entry and
+//     on return, and must still hold them at any call into Go;
+//   - DX holds the closure context of a func value call;
+//   - SP, BP (the frame pointer) and R14 are preserved by a Go callee;
+//     every other register may be clobbered.
+//
+// On arm64:
+//
+//   - integer and pointer arguments and results: R0 to R15; floating-point:
+//     F0 to F15;
+//   - R28 holds the current goroutine (g), and must still hold it at any
+//     call into Go;
+//   - R26 holds the closure context of a func value call;
+//   - R18 is reserved for the platform, R16, R17 and R27 are scratch, R29
+//     is the frame pointer and R30 the link register;
+//   - SP, R28 and R29 are preserved by a Go callee; every other register
+//     may be clobbered.
+//
+// Arguments that do not fit in registers are passed on the stack, and the
+// caller reserves spill space for the register arguments at the bottom of
+// its frame; see [Func].
 package goplus
 
 // JIT is the level of this package's API. It increases by one each time
@@ -28,4 +61,5 @@ package goplus
 // Level 1: [ObjectExtent].
 // Level 2: [SetNoTinyAlloc].
 // Level 3: [WriteBarrierFlag], [WriteBarrierEntry].
-const JIT = 3
+// Level 4: [RegisterCode] and its types.
+const JIT = 4

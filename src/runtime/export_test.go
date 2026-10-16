@@ -2143,3 +2143,19 @@ func MallocGC(size uintptr, typ *abi.Type, needzero bool) unsafe.Pointer {
 func FuncNamePiecesForPrint(name string) (string, string, string, string, string) {
 	return funcNamePiecesForPrint(name)
 }
+
+// PCValueCacheHolds reports whether the current M's pcvalue cache holds
+// an entry for a PC in [lo, hi). The caller should be locked to its
+// thread.
+func PCValueCacheHolds(lo, hi uintptr) bool {
+	mp := acquirem()
+	defer releasem(mp)
+	for i := range mp.pcvalueCache.entries {
+		for _, e := range mp.pcvalueCache.entries[i] {
+			if lo <= e.targetpc && e.targetpc < hi {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -315,7 +315,7 @@ pkg uuid, method (UUID) Compare(UUID) int #62026
 pkg uuid, method (UUID) MarshalText() ([]uint8, error) #62026
 pkg uuid, method (UUID) String() string #62026
 pkg uuid, type UUID [16]uint8 #62026
-pkg goplus, const JIT = 4 #8
+pkg goplus, const JIT = 5 #7
 pkg goplus, const JIT ideal-int #10
 pkg goplus, func ObjectExtent(unsafe.Pointer) (unsafe.Pointer, uintptr, bool) #10
 pkg goplus, func SetNoTinyAlloc(bool) bool #15
@@ -341,3 +341,5 @@ pkg goplus, type LineStep struct, Off uint32 #8
 pkg goplus, type SafePoint struct #8
 pkg goplus, type SafePoint struct, Off uint32 #8
 pkg goplus, type SafePoint struct, Pointers []uint32 #8
+pkg goplus, func StackGuardOffset() uintptr #7
+pkg goplus, func YieldEntry() uintptr #7

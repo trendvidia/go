@@ -62,4 +62,5 @@ package goplus
 // Level 2: [SetNoTinyAlloc].
 // Level 3: [WriteBarrierFlag], [WriteBarrierEntry].
 // Level 4: [RegisterCode] and its types.
-const JIT = 4
+// Level 5: [StackGuardOffset], [YieldEntry].
+const JIT = 5

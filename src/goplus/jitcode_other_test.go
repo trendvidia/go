@@ -33,3 +33,7 @@ func abiProbeCode(out uintptr) []byte { return nil }
 type abiProbeFunc = func()
 
 func callABIProbe(f abiProbeFunc) []uintptr { return nil }
+
+func spinCode(counter, stop, yield uintptr, poll bool) ([]byte, []goplus.FrameStep, uint32) {
+	return nil, nil, 0
+}

@@ -188,3 +188,44 @@ func callABIProbe(f abiProbeFunc) []uintptr {
 		0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5)
 	return []uintptr{r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15}
 }
+
+// spinCode returns func() that increments *counter until *stop is
+// nonzero. With poll, each iteration compares SP with the stack guard
+// and calls yield when it is not above it; without, the loop has no
+// point at which the runtime can stop it. frame and safe describe it for
+// goplus.RegisterCode (no pointer slots: counter and stop are globals).
+func spinCode(counter, stop, yield uintptr, poll bool) (code []byte, frame []goplus.FrameStep, safe uint32) {
+	var a asm
+	a = a.i(insPushLR)  // 0: STR X30, [SP, #-16]!
+	a = a.i(0xf81f83fd) // 4: STUR X29, [SP, #-8]
+	a = a.i(0xd10023fd) // 8: SUB X29, SP, #8
+	reload := len(a) / 4
+	a = a.mov64(20, uint64(counter))
+	a = a.mov64(21, uint64(stop))
+	loop := len(a) / 4
+	a = a.i(0xf9400296) // LDR X22, [X20]
+	a = a.i(0x910006d6) // ADD X22, X22, #1
+	a = a.i(0xf9000296) // STR X22, [X20]
+	a = a.i(0xb94002b7) // LDR W23, [X21]
+	cbnz := len(a) / 4
+	a = a.i(0) // CBNZ W23, done (patched below)
+	if poll {
+		a = a.i(0xf9400000 | uint32(goplus.StackGuardOffset()/8)<<10 | 28<<5 | 24) // LDR X24, [X28, #StackGuardOffset]
+		a = a.i(0x910003f9)                                                        // MOV X25, SP
+		a = a.i(0xeb18033f)                                                        // CMP X25, X24
+		a = a.i(0x54000008 | uint32(loop-len(a)/4)&0x7ffff<<5)                     // B.HI loop
+		a = a.mov64(16, uint64(yield))
+		a = a.i(insBLRX16)
+		safe = uint32(len(a))
+		a = a.i(0x14000000 | uint32(reload-len(a)/4)&0x3ffffff) // B reload
+	} else {
+		a = a.i(0x14000000 | uint32(loop-len(a)/4)&0x3ffffff) // B loop
+	}
+	done := len(a) / 4
+	binary.LittleEndian.PutUint32(a[cbnz*4:], 0x35000000|uint32(done-cbnz)<<5|23)
+	a = a.i(0xf85f83fd) // done: LDUR X29, [SP, #-8]
+	a = a.i(insPopLR)   // LDR X30, [SP], #16
+	ret := uint32(len(a))
+	a = a.i(insRet)
+	return a, []goplus.FrameStep{{Off: 0, Size: 0}, {Off: 4, Size: 16}, {Off: ret, Size: 0}}, safe
+}

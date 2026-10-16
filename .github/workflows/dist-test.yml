@@ -88,7 +88,7 @@ jobs:
           for f in avx avx2 fma avx512f avx512bw avx512vl; do
             grep -qw "$f" /proc/cpuinfo && echo "has $f" || echo "lacks $f"
           done
-      # trendvidia/go-archive#81: give every run a cold, private build cache.
+      # trendvidia/go#20: give every run a cold, private build cache.
       #
       # This fork's VERSION is release-style (go1.26.5), so cmd/go keys
       # the build cache on the compiler's version STRING alone --
@@ -119,7 +119,7 @@ jobs:
         run: |
           cache="$RUNNER_TEMP/gocache-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           if [ -e "$cache" ]; then
-            echo "::error::$cache already exists: this run is not starting cold (trendvidia/go-archive#81)"
+            echo "::error::$cache already exists: this run is not starting cold (trendvidia/go#20)"
             exit 1
           fi
           echo "cold: $cache does not exist yet"
@@ -130,7 +130,7 @@ jobs:
         shell: cmd
         run: |
           set "cache=%RUNNER_TEMP%\gocache-%GITHUB_RUN_ID%-%GITHUB_RUN_ATTEMPT%"
-          if exist "%cache%" echo ::error::%cache% already exists - this run is not starting cold, see trendvidia/go-archive#81
+          if exist "%cache%" echo ::error::%cache% already exists - this run is not starting cold, see trendvidia/go#20
           if exist "%cache%" exit /b 1
           echo cold: %cache% does not exist yet
           echo GOCACHE=%cache%>>"%GITHUB_ENV%"
@@ -183,7 +183,7 @@ jobs:
           ..\bin\go.exe version
           if (-not (..\bin\go.exe version | Select-String '\(plus')) { Write-Error 'built toolchain is not the go-plus fork'; exit 1 }
       # Drop this run's cache whatever the outcome, so per-run
-      # directories do not accumulate on the runners' disks (trendvidia/go-archive#81).
+      # directories do not accumulate on the runners' disks (trendvidia/go#20).
       - name: Remove this run's build cache (Unix)
         if: always() && runner.os != 'Windows'
         run: test -n "$GOCACHE" && rm -rf "$GOCACHE" || true

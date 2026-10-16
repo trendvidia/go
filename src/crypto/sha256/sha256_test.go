@@ -483,8 +483,8 @@ func TestAllocatonsWithTypeAsserts(t *testing.T) {
 		// through go.itabptr.<X> slot indirection, opaque to the
 		// optimizer, defeating its specialization of statically-typed
 		// assertions like h.(encoding.BinaryMarshaler) and forcing
-		// extra allocations. See ROADMAP.md item P1.
-		t.Skip("v3-fork: -typetab slot indirection forces extra allocs on Windows; see ROADMAP.md P1")
+		// extra allocations. See trendvidia/go#16.
+		t.Skip("v3-fork: -typetab slot indirection forces extra allocs on Windows; see trendvidia/go#16")
 	}
 	allocs := testing.AllocsPerRun(100, func() {
 		h := New()

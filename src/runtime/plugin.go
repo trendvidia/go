@@ -461,7 +461,7 @@ func pluginSkipInitPkg(pkg string) bool {
 //     It is deliberately a silent skip rather than a throw, because
 //     the condition is indistinguishable from a genuinely corrupt
 //     ftab; narrowing it to a confirmed IAT-thunk range is
-//     trendvidia/go-archive#75.
+//     trendvidia/go#19.
 //
 //  3. Its package name matches pluginSkipInitPkg's allowlist. Used
 //     for cases where the inittask's first PC is plugin-local but

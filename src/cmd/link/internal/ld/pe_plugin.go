@@ -374,7 +374,7 @@ func addPluginAbiExport(ctxt *Link) {
 // on its first C->Go callback (trendvidia/go-archive#62).
 //
 // Both link modes, deliberately. windows/arm64 links plugins internally
-// (external linking of a cgo plugin there fails outright, trendvidia/go-archive#131) and
+// (external linking of a cgo plugin there fails outright, trendvidia/go#29) and
 // published no notify at all: 25 exported names, none of them this. Its
 // callbacks nonetheless ran, which they had no right to do — the flag
 // they wait on had no writer — so that path was working by accident and

@@ -90,8 +90,18 @@ func startCompiledSpinners(n int) (stop func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for atomic.LoadUint32(&spinStop) == 0 {
-				spinCounter++
+			// Count locally and touch the shared words every 1024
+			// iterations: under -race each atomic is a call into the
+			// race runtime, which cannot be preempted by signal, and a
+			// loop made only of them kept the world from stopping for
+			// minutes. Plain Go between them keeps the loop preemptible.
+			for n := uint64(1); ; n++ {
+				if n&1023 == 0 {
+					atomic.AddUint64(&spinCounter, 1024)
+					if atomic.LoadUint32(&spinStop) != 0 {
+						return
+					}
+				}
 			}
 		}()
 	}

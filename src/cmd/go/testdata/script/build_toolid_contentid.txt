@@ -4,8 +4,11 @@
 # rebuilt compiler of the same version, or stock Go of the same version,
 # be served this toolchain's cache entries.
 
-# A tool linked externally has no build ID to report. This is the
-# condition under which cmd/go leaves objabi.buildID unset (gc.go).
+# A tool linked externally has no build ID to report: gc.go leaves
+# objabi.buildID unset when MustLinkExternal holds for the platform the
+# tool is built for. [mustlinkext] asks the same of this script's
+# GOOS/GOARCH, which start as the test binary's own platform, and so as
+# the platform these tools were built for and run on.
 [mustlinkext] skip
 
 # The compiler and linker report their build IDs, whatever their version.
@@ -46,6 +49,14 @@ cp stdout strip.txt
 go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
 cmp stdout strip.txt
 
+# The key follows that version line. Nothing else distinguishes such a
+# compiler, so a different one of the same version shares its key: #20
+# is still open for tools linked externally (trendvidia/go#56).
+env TOOLID_VERSION=go1.0.2
+go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
+! cmp stdout strip.txt
+! cmp stdout base.txt
+
 -- go.mod --
 module example.com/toolid
 
@@ -57,8 +68,8 @@ func F() int { return 1 }
 -- cmd/toolid/main.go --
 // Command toolid runs a tool and, when asked for -V=full, reports it as
 // a release (so that cmd/go takes its release path whatever this tree's
-// VERSION) and rewrites one part of the build ID, as a different
-// compiler binary would.
+// VERSION), $TOOLID_VERSION or go1.0.1, and rewrites its build ID as
+// $TOOLID_REWRITE says, as a different compiler binary would.
 package main
 
 import (
@@ -91,7 +102,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "toolid: unexpected -V=full output %q\n", out)
 		os.Exit(1)
 	}
-	line := []string{f[0], "version", "go1.0.1"}
+	version := os.Getenv("TOOLID_VERSION")
+	if version == "" {
+		version = "go1.0.1"
+	}
+	line := []string{f[0], "version", version}
 	for _, field := range f[3:] {
 		if strings.HasPrefix(field, "X:") {
 			line = append(line, field)
@@ -103,8 +118,10 @@ func main() {
 			id = id[:strings.LastIndex(id, "/")+1] + "rewrittencontentid"
 		case "action":
 			id = "rewrittenactionid" + id[strings.Index(id, "/"):]
+		case "strip":
+			id = ""
 		}
-		if os.Getenv("TOOLID_REWRITE") != "strip" {
+		if id != "" {
 			line = append(line, "buildID="+id)
 		}
 	}

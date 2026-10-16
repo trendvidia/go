@@ -1,0 +1,31 @@
+# go-plus (trendvidia/go#41): the preferlinkext token is a message to
+# cmd/link and must not be handed to the C linker that links _cgo_.o for
+# cgo -dynimport. It is an empty file, which Apple's ld refuses from
+# macOS 27 on; dynimport then failed and was skipped for every package
+# that set the token.
+
+[!cgo] skip
+
+# -static is a compiler flag that triggers external linking
+# (checkCompilerFlagsForInternalLink), so the package gets the token. It
+# only reaches compile steps, where it is unused.
+env CGO_CFLAGS='-O2 -g -static'
+go build -a -x -o p$GOEXE .
+
+# The token was written, cgo -dynimport ran, and the C link before it
+# did not get the token.
+stderr 'preferlinkext'
+stderr '-dynimport'
+! stderr '_cgo_\.o.*preferlinkext'
+
+-- go.mod --
+module example.com/p
+
+go 1.27
+-- p.go --
+package main
+
+// int f(void) { return 1; }
+import "C"
+
+func main() { println(C.f()) }

@@ -3133,8 +3133,9 @@ func (b *Builder) processCgoOutputs(a *Action, runCgoProvider *runCgoProvider, c
 
 	// Output the preferlinkext file if the run cgo action determined this package
 	// was not compatible for internal linking based on CFLAGS, CXXFLAGS, or FFLAGS.
+	tokenFile := ""
 	if runCgoProvider.notCompatibleForInternalLinking {
-		tokenFile := objdir + "preferlinkext"
+		tokenFile = objdir + "preferlinkext"
 		if err := sh.writeFile(tokenFile, nil); err != nil {
 			return nil, nil, err
 		}
@@ -3157,7 +3158,16 @@ func (b *Builder) processCgoOutputs(a *Action, runCgoProvider *runCgoProvider, c
 	switch cfg.BuildToolchainName {
 	case "gc":
 		importGo := objdir + "_cgo_import.go"
-		dynOutGo, dynOutObj, err := b.dynimport(a, objdir, importGo, cgoExe, runCgoProvider.CFLAGS, runCgoProvider.LDFLAGS, outObj)
+		// The preferlinkext token is a message to cmd/link, not an input
+		// for the C link dynimport runs. It is an empty file, and Apple's
+		// ld refuses empty inputs from ld-27037 (macOS 27) on, which made
+		// dynimport fail for every package that sets the token, and so
+		// skip the checks on _cgo_import.go (trendvidia/go#41).
+		cObj := outObj
+		if tokenFile != "" {
+			cObj = slices.DeleteFunc(slices.Clone(outObj), func(f string) bool { return f == tokenFile })
+		}
+		dynOutGo, dynOutObj, err := b.dynimport(a, objdir, importGo, cgoExe, runCgoProvider.CFLAGS, runCgoProvider.LDFLAGS, cObj)
 		if err != nil {
 			return nil, nil, err
 		}

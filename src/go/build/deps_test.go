@@ -156,6 +156,9 @@ var depsRules = `
 	< internal/syscall/execenv
 	< SYSCALL;
 
+	# goplus/internal/execmem maps generated code for goplus's tests.
+	SYSCALL < goplus/internal/execmem;
+
 	# TIME is SYSCALL plus the core packages about time, including context.
 	SYSCALL
 	< time/tzdata

@@ -8,8 +8,9 @@
 package runtime
 
 import (
+	"internal/abi"
 	"internal/runtime/gc"
-	_ "unsafe" // for go:linkname
+	"unsafe"
 )
 
 // goplus_objectExtent returns the base address and slot size of the heap
@@ -55,4 +56,40 @@ func goplus_setNoTinyAlloc(on bool) (prev bool) {
 	prev = gp.goplusNoTiny
 	gp.goplusNoTiny = on
 	return prev
+}
+
+// goplus_writeBarrierFlag returns the address of the word compiled code
+// tests before a heap pointer store (see writeBarrier).
+//
+//go:linkname goplus_writeBarrierFlag goplus.runtime_writeBarrierFlag
+func goplus_writeBarrierFlag() *uint32 {
+	return (*uint32)(unsafe.Pointer(&writeBarrier))
+}
+
+// goplus_writeBarrierEntry returns the PC of gcWriteBarrier<n>, the entry
+// compiled code calls to reserve n slots in the write-barrier buffer, or
+// 0 if n is out of range. Its register contract is documented on
+// gcWriteBarrier in asm_*.s.
+//
+//go:linkname goplus_writeBarrierEntry goplus.runtime_writeBarrierEntry
+func goplus_writeBarrierEntry(n int) uintptr {
+	switch n {
+	case 1:
+		return abi.FuncPCABIInternal(gcWriteBarrier1)
+	case 2:
+		return abi.FuncPCABIInternal(gcWriteBarrier2)
+	case 3:
+		return abi.FuncPCABIInternal(gcWriteBarrier3)
+	case 4:
+		return abi.FuncPCABIInternal(gcWriteBarrier4)
+	case 5:
+		return abi.FuncPCABIInternal(gcWriteBarrier5)
+	case 6:
+		return abi.FuncPCABIInternal(gcWriteBarrier6)
+	case 7:
+		return abi.FuncPCABIInternal(gcWriteBarrier7)
+	case 8:
+		return abi.FuncPCABIInternal(gcWriteBarrier8)
+	}
+	return 0
 }

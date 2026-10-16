@@ -4552,6 +4552,7 @@ func gdestroy(gp *g) {
 	gp.waitreason = waitReasonZero
 	gp.param = nil
 	gp.labels = nil
+	gp.allocDomain = nil
 	gp.timer = nil
 	gp.bubble = nil
 	gp.fipsOnlyBypass = false
@@ -5417,6 +5418,7 @@ func newproc1(fn *funcval, callergp *g, callerpc uintptr, parked bool, waitreaso
 		newg.bubble = callergp.bubble
 		if mp.curg != nil {
 			newg.labels = mp.curg.labels
+			newg.allocDomain = mp.curg.allocDomain
 		}
 		if goroutineProfile.active {
 			// A concurrent goroutine profile is running. It should include

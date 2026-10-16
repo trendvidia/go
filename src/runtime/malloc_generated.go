@@ -32,6 +32,10 @@ func mallocgcSmallScanNoHeaderSC1(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	lockRankMayQueueFinalizer()
 
 	const sizeclass = 1
@@ -183,6 +187,10 @@ func mallocgcSmallScanNoHeaderSC2(size uintptr, typ *_type, needzero bool) unsaf
 		const elemsize = uintptr(16)
 		return mallocgcSmallScanSlowPath(size, typ, needzero, spc, elemsize)
 
+	}
+
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
 	}
 
 	lockRankMayQueueFinalizer()
@@ -338,6 +346,10 @@ func mallocgcSmallScanNoHeaderSC3(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	lockRankMayQueueFinalizer()
 
 	const sizeclass = 3
@@ -489,6 +501,10 @@ func mallocgcSmallScanNoHeaderSC4(size uintptr, typ *_type, needzero bool) unsaf
 		const elemsize = uintptr(32)
 		return mallocgcSmallScanSlowPath(size, typ, needzero, spc, elemsize)
 
+	}
+
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
 	}
 
 	lockRankMayQueueFinalizer()
@@ -644,6 +660,10 @@ func mallocgcSmallScanNoHeaderSC5(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	lockRankMayQueueFinalizer()
 
 	const sizeclass = 5
@@ -795,6 +815,10 @@ func mallocgcSmallScanNoHeaderSC6(size uintptr, typ *_type, needzero bool) unsaf
 		const elemsize = uintptr(64)
 		return mallocgcSmallScanSlowPath(size, typ, needzero, spc, elemsize)
 
+	}
+
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
 	}
 
 	lockRankMayQueueFinalizer()
@@ -950,6 +974,10 @@ func mallocgcSmallScanNoHeaderSC7(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	lockRankMayQueueFinalizer()
 
 	const sizeclass = 7
@@ -1102,6 +1130,10 @@ func mallocgcTinySC2(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	}
 
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	lockRankMayQueueFinalizer()
 
 	const elemsize = 16
@@ -1211,6 +1243,10 @@ func mallocgcSmallNoScanSC2(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	lockRankMayQueueFinalizer()
 
 	const sizeclass = 2
@@ -1308,6 +1344,10 @@ func mallocgcSmallNoScanSC3(size uintptr, typ *_type, needzero bool) unsafe.Poin
 		const elemsize = uintptr(24)
 		return mallocgcSmallNoScanSlowPath(size, typ, needzero, spc, elemsize)
 
+	}
+
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1409,6 +1449,10 @@ func mallocgcSmallNoScanSC4(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	lockRankMayQueueFinalizer()
 
 	const sizeclass = 4
@@ -1506,6 +1550,10 @@ func mallocgcSmallNoScanSC5(size uintptr, typ *_type, needzero bool) unsafe.Poin
 		const elemsize = uintptr(48)
 		return mallocgcSmallNoScanSlowPath(size, typ, needzero, spc, elemsize)
 
+	}
+
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1607,6 +1655,10 @@ func mallocgcSmallNoScanSC6(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	lockRankMayQueueFinalizer()
 
 	const sizeclass = 6
@@ -1706,6 +1758,10 @@ func mallocgcSmallNoScanSC7(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	lockRankMayQueueFinalizer()
 
 	const sizeclass = 7
@@ -1795,6 +1851,10 @@ func mallocgcTinySlowPath(size uintptr, typ *_type, needzero bool) unsafe.Pointe
 	gp := getg()
 	if goexperiment.RuntimeSecret && gp.secret > 0 || gp.goplusNoTiny {
 		return mallocgcSmallNoScanSC2(size, typ, needzero)
+	}
+
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1937,6 +1997,10 @@ func mallocgcSmallScanSlowPath(size uintptr, typ *_type, needzero bool, spc span
 	}
 
 	var mp *m
+
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
 
 	lockRankMayQueueFinalizer()
 
@@ -2114,6 +2178,10 @@ func mallocgcSmallNoScanSlowPath(size uintptr, typ *_type, needzero bool, spc sp
 	}
 
 	var mp *m
+
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
 
 	lockRankMayQueueFinalizer()
 

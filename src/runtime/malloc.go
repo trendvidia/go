@@ -1090,6 +1090,12 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		}
 	}
 
+	// Count the allocation for the goroutine's goplus.AllocDomain, if
+	// any. The size-specialised functions above count their own.
+	if d := getg().allocDomain; d != nil {
+		d.add(size)
+	}
+
 	// It's possible for any malloc to trigger sweeping, which may in
 	// turn queue finalizers. Record this dynamic lock edge.
 	// N.B. Compiled away if lockrank experiment is not enabled.

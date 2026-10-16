@@ -1073,6 +1073,27 @@ type pcvalueCache struct {
 
 type pcvalueCacheEnt struct {
 	// targetpc and off together are the key of this cache entry.
+	//
+	// The key does not identify the module, which is safe only because
+	// no two images ever hold code at the same PC (trendvidia/go#38):
+	//
+	//   - A closed plugin's address range is reserved for the life of
+	//     the process (package plugin's unloadPlugin: MEM_RESERVE on
+	//     Windows, a PROT_NONE mapping on POSIX), so no later image is
+	//     mapped over it. TestUpgradeStalePointer in
+	//     cmd/cgo/internal/testplugin fails if a reservation stops
+	//     happening. When the reservation fails because the image is
+	//     still mapped, the same image keeps the same tables, and its
+	//     cached values stay right. Open and Close hold pluginsMu, so no
+	//     other plugin can be mapped between the unmap and the
+	//     reservation.
+	//   - Code generated at run time (goplus.RegisterCode) can reuse
+	//     addresses, so pcvalue never caches results for it.
+	//
+	// The one gap left is generated code placed in a closed plugin's
+	// range during that unmap-to-reserve window, with an entry for the
+	// same PC and table offset still cached: theoretical, and not
+	// reachable from a test.
 	targetpc uintptr
 	off      uint32
 

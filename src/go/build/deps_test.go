@@ -119,6 +119,9 @@ var depsRules = `
 	< errors
 	< internal/oserror;
 
+	# goplus is the go-plus fork's runtime API for the govm JIT.
+	runtime < goplus;
+
 	cmp, runtime, math/bits
 	< iter
 	< maps, slices;

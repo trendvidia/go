@@ -91,8 +91,9 @@ jobs:
       # produced. The fork now keys on the tools' content IDs, which
       # closes that. The per-run cache stays so that a regression of
       # #20 cannot turn into a false green here. It does not detect one:
-      # the cmd/go script test build_toolid_contentid does, and only
-      # dist-test's Unix legs run it (all.bash). No Windows leg does.
+      # the cmd/go script test build_toolid_contentid does, with
+      # cmd/internal/objabi's TestVersionFlagBuildID. dist-test runs both
+      # on every leg: through all.bash on Unix, by name on Windows.
       #
       # A private directory per run rather than `go clean -cache` on a
       # shared one: on the self-hosted runners this repo used until

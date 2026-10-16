@@ -26,9 +26,15 @@ func TestFastLeafRust(t *testing.T) {
 	if err != nil {
 		t.Skip("rustc not found")
 	}
-	host := rustHost(t, rustc)
-	if runtime.GOOS == "windows" && !strings.Contains(host, "-gnu") {
-		t.Skipf("rustc's host target is %s; cgo on windows links with mingw, which needs a -gnu Rust target", host)
+	// GOPLUS_RUST_TARGET names a Rust target to build for instead of
+	// rustc's host, for example aarch64-pc-windows-gnullvm on a
+	// windows/arm64 host whose rustc is MSVC-hosted.
+	target := os.Getenv("GOPLUS_RUST_TARGET")
+	if target == "" {
+		target = rustHost(t, rustc)
+	}
+	if runtime.GOOS == "windows" && !strings.Contains(target, "-gnu") {
+		t.Skipf("Rust target %s is not a -gnu target; cgo on windows links with mingw (set GOPLUS_RUST_TARGET to an installed -gnu or -gnullvm target)", target)
 	}
 
 	dir := t.TempDir()
@@ -47,7 +53,7 @@ func TestFastLeafRust(t *testing.T) {
 
 	lib := filepath.Join(dir, "librustleaf.a")
 	cmd := exec.Command(rustc, "--crate-type=staticlib", "--edition=2021", "-O",
-		"--print", "native-static-libs", "-o", lib, "rustleaf.rs")
+		"--target", target, "--print", "native-static-libs", "-o", lib, "rustleaf.rs")
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -72,7 +78,7 @@ func TestFastLeafRust(t *testing.T) {
 	if err != nil || !strings.Contains(string(out), "OK:") {
 		t.Fatalf("rustleaf: %v\n%s", err, out)
 	}
-	t.Logf("%s (rustc host %s)", strings.TrimSpace(lastLine(string(out))), host)
+	t.Logf("%s (Rust target %s)", strings.TrimSpace(lastLine(string(out))), target)
 }
 
 func rustHost(t *testing.T, rustc string) string {

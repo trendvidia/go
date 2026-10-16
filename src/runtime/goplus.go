@@ -9,6 +9,7 @@ package runtime
 
 import (
 	"internal/abi"
+	"internal/goarch"
 	"internal/runtime/gc"
 	"unsafe"
 )
@@ -93,3 +94,11 @@ func goplus_writeBarrierEntry(n int) uintptr {
 	}
 	return 0
 }
+
+// goplus.StackGuardOffset promises generated code that g.stackguard0 is
+// at 2*PtrSize, the offset the assemblers already hardcode in every
+// function prologue. This fails to compile if it moves.
+const (
+	_ = uintptr(unsafe.Offsetof(g{}.stackguard0) - 2*goarch.PtrSize)
+	_ = uintptr(2*goarch.PtrSize - unsafe.Offsetof(g{}.stackguard0))
+)

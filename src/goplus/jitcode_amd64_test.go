@@ -160,3 +160,37 @@ func callABIProbe(f abiProbeFunc) []uintptr {
 		0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5)
 	return []uintptr{r0, r1, r2, r3, r4, r5, r6, r7, r8}
 }
+
+// spinCode returns func() that increments *counter until *stop is
+// nonzero. With poll, each iteration compares SP with the stack guard
+// and calls yield when it is not above it; without, the loop has no
+// point at which the runtime can stop it. frame and safe describe it for
+// goplus.RegisterCode (no pointer slots: counter and stop are globals).
+func spinCode(counter, stop, yield uintptr, poll bool) (code []byte, frame []goplus.FrameStep, safe uint32) {
+	var a asm
+	a = a.b(0x48, 0x83, 0xec, 0x08)          // 0:  SUBQ $8, SP
+	a = a.b(0x48, 0x89, 0x2c, 0x24)          // 4:  MOVQ BP, (SP)
+	a = a.b(0x48, 0x8d, 0x2c, 0x24)          // 8:  LEAQ (SP), BP
+	a = a.b(0x49, 0xbc).u64(uint64(counter)) // 12: reload: MOVQ $counter, R12
+	a = a.b(0x49, 0xbd).u64(uint64(stop))    // 22: MOVQ $stop, R13
+	a = a.b(0x49, 0xff, 0x04, 0x24)          // 32: loop: INCQ (R12)
+	a = a.b(0x41, 0x83, 0x7d, 0x00, 0x00)    // 36: CMPL (R13), $0
+	a = a.b(0x75, 0)                         // 41: JNE done (patched below)
+	jne := len(a) - 1
+	if poll {
+		a = a.b(0x49, 0x3b, 0x66, byte(goplus.StackGuardOffset())) // 43: CMPQ SP, StackGuardOffset(R14)
+		a = a.b(0x77, byte(32-(len(a)+2)))                         // 47: JHI loop
+		a = a.b(0x48, 0xb8).u64(uint64(yield))                     // 49: MOVQ $yield, AX
+		a = a.b(0xff, 0xd0)                                        // 59: CALL AX
+		safe = uint32(len(a))                                      // 61
+		a = a.b(0xeb, byte(12-(len(a)+2)))                         // 61: JMP reload
+	} else {
+		a = a.b(0xeb, byte(32-(len(a)+2))) // JMP loop
+	}
+	a[jne] = byte(len(a) - (jne + 1))
+	a = a.b(0x48, 0x8b, 0x2c, 0x24) // done: MOVQ (SP), BP
+	a = a.b(0x48, 0x83, 0xc4, 0x08) // ADDQ $8, SP
+	ret := uint32(len(a))
+	a = a.b(0xc3) // RET
+	return a, []goplus.FrameStep{{Off: 0, Size: 0}, {Off: 4, Size: 8}, {Off: ret, Size: 0}}, safe
+}

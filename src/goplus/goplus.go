@@ -63,4 +63,5 @@ package goplus
 // Level 3: [WriteBarrierFlag], [WriteBarrierEntry].
 // Level 4: [RegisterCode] and its types.
 // Level 5: [StackGuardOffset], [YieldEntry].
-const JIT = 5
+// Level 6: [AllocDomain].
+const JIT = 6

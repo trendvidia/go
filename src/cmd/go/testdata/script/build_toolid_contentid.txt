@@ -1,0 +1,82 @@
+# go-plus (trendvidia/go#20): the go command keys the build cache on the
+# compiler's content ID, for a release toolchain as on the development
+# branch. Upstream keys a release on its version string, which let a
+# rebuilt compiler of the same version, or stock Go of the same version,
+# be served this toolchain's cache entries.
+
+# A tool linked externally has no build ID to report.
+[GOOS:android] skip
+[GOOS:ios] skip
+
+# The compiler reports its build ID, whatever its version.
+go tool compile -V=full
+stdout '^compile version .* buildID=[^ /]+/[^ ]+$'
+
+go build ./cmd/toolid
+env GOCACHE=$WORK/gocache
+
+# The baseline: the compiler as it is.
+env TOOLID_REWRITE=none
+go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
+cp stdout base.txt
+
+# A compiler whose content differs must not be served the cached object.
+env TOOLID_REWRITE=content
+go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
+! cmp stdout base.txt
+
+# Only the content counts: the action ID part of the compiler's own
+# build ID does not change the key, as on the development branch.
+env TOOLID_REWRITE=action
+go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
+cmp stdout base.txt
+
+-- go.mod --
+module example.com/toolid
+
+go 1.27
+-- p/p.go --
+package p
+
+func F() int { return 1 }
+-- cmd/toolid/main.go --
+// Command toolid runs a tool and, when asked for -V=full, rewrites one
+// part of the build ID it reports, as a different compiler binary would.
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+)
+
+func main() {
+	tool, args := os.Args[1], os.Args[2:]
+	cmd := exec.Command(tool, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	if len(args) == 0 || args[0] != "-V=full" {
+		cmd.Stdout = os.Stdout
+		if err := cmd.Run(); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		os.Exit(1)
+	}
+	line := strings.TrimSpace(string(out))
+	if i := strings.Index(line, " buildID="); i >= 0 {
+		head, id := line[:i+len(" buildID=")], line[i+len(" buildID="):]
+		switch os.Getenv("TOOLID_REWRITE") {
+		case "content":
+			id = id[:strings.LastIndex(id, "/")+1] + "rewrittencontentid"
+		case "action":
+			id = "rewrittenactionid" + id[strings.Index(id, "/"):]
+		}
+		line = head + id
+	}
+	fmt.Println(line)
+}

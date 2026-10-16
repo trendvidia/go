@@ -134,9 +134,16 @@ crashing the host:
   divergent version of *any* shared package (runtime, protobuf, etc.),
   not just a compiler-version mismatch. See the `plugin` package docs.
 
-**Reproducibility.** Builds are bit-for-bit reproducible, as upstream's
-are: the `go.funcptr` slots are emitted sorted by name, and the upstream
-`cmd/go` `TestScript/repro_build` test passes.
+**Reproducibility.** Builds with one installed toolchain are bit-for-bit
+reproducible: the `go.funcptr` slots are emitted sorted by name, and the
+upstream `cmd/go` `TestScript/repro_build` test passes. Unlike upstream's
+releases, the same release installed on two different hosts does not give
+identical outputs. The build cache is keyed on the tools' own build IDs
+rather than on the version string (so a rebuilt toolchain, or stock Go of
+the same version, is never served this toolchain's objects; #20), and those
+build IDs differ between hosts. The outputs differ in the action IDs of
+their Go build ID, and on ELF and Mach-O in the GNU build-id note and UUID
+the linker derives from it; the content IDs in the build ID still match.
 
 ### Known limitations of the plugin support
 

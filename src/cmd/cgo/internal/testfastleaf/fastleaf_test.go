@@ -57,7 +57,14 @@ func TestFastLeafHeapMemory(t *testing.T) {
 	}
 	r := rand.New(rand.NewPCG(1, 2))
 	var garbage [][]byte
-	for i := range iters {
+	// Run for at least iters calls and at least 10 collections: bounding
+	// by calls alone ended a -short run after 6 collections on a fast CI
+	// runner.
+	deadline := time.Now().Add(30 * time.Second)
+	for i := 0; i < iters || gcs.Load() < 10; i++ {
+		if time.Now().After(deadline) {
+			break
+		}
 		b := make([]byte, 1+r.IntN(4096))
 		for j := range b {
 			b[j] = byte(r.Uint32())

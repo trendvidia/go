@@ -23,6 +23,9 @@ import "unsafe"
 //
 // The domain counts cumulative allocation, not live memory: bytes are
 // never subtracted when objects are freed.
+//
+// A domain must be created with [NewAllocDomain]; the zero value is not
+// a domain, and its methods panic.
 type AllocDomain struct {
 	d unsafe.Pointer
 }
@@ -37,14 +40,22 @@ func NewAllocDomain() *AllocDomain {
 // starts are in d for their whole lives. Run may be nested; the
 // innermost domain counts.
 func (d *AllocDomain) Run(f func()) {
-	prev := runtime_setAllocDomain(d.d)
+	// A nil domain would take the goroutine out of any enclosing one.
+	prev := runtime_setAllocDomain(d.domain())
 	defer runtime_setAllocDomain(prev)
 	f()
 }
 
 // Allocated returns the number of bytes allocated in d so far.
 func (d *AllocDomain) Allocated() uint64 {
-	return runtime_allocDomainTotal(d.d)
+	return runtime_allocDomainTotal(d.domain())
+}
+
+func (d *AllocDomain) domain() unsafe.Pointer {
+	if d.d == nil {
+		panic("goplus: AllocDomain not created by NewAllocDomain")
+	}
+	return d.d
 }
 
 //go:linkname runtime_newAllocDomain

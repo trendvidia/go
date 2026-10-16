@@ -6,9 +6,15 @@ package goplus_test
 
 import (
 	"goplus"
+	"internal/testenv"
+	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+	"unsafe"
+	"weak"
 )
 
 // allocSinks keeps allocations reachable, one slot per worker so that
@@ -25,6 +31,75 @@ var allocSinks [64][]byte
 func allocExact(w, n, size int) {
 	for range n {
 		allocSinks[w] = make([]byte, size)
+	}
+}
+
+// ptrSinks is allocSinks for objects that contain pointers.
+var ptrSinks [64][]*byte
+
+// allocPointers is allocExact for objects of n pointers.
+//
+//go:noinline
+func allocPointers(w, count, n int) {
+	for range count {
+		ptrSinks[w] = make([]*byte, n)
+	}
+}
+
+// TestAllocDomainSmall checks the count for each kind of small
+// allocation the runtime has a size-specialised function for: tiny,
+// pointer-free and with pointers, and tiny with SetNoTinyAlloc, whose
+// allocations the tiny function hands to another. Each must be counted
+// once, by whichever function finally allocates it.
+//
+// TestAllocDomainSlowPath runs this test again with every allocation
+// sent down the slow path.
+func TestAllocDomainSmall(t *testing.T) {
+	const count = 10000
+	ptrSize := int(unsafe.Sizeof(uintptr(0)))
+	for _, tc := range []struct {
+		name   string
+		noTiny bool
+		bytes  int
+		alloc  func()
+	}{
+		{"tiny", false, 8, func() { allocExact(0, count, 8) }},
+		{"NoTinyAlloc", true, 8, func() { allocExact(0, count, 8) }},
+		{"noscan", false, 64, func() { allocExact(0, count, 64) }},
+		{"scan", false, 4 * ptrSize, func() { allocPointers(0, count, 4) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.noTiny {
+				defer goplus.SetNoTinyAlloc(goplus.SetNoTinyAlloc(true))
+			}
+			d := goplus.NewAllocDomain()
+			d.Run(tc.alloc)
+			want := uint64(count * tc.bytes)
+			if n := d.Allocated(); n < want || n > want+want/100 {
+				t.Fatalf("domain counted %d bytes, want %d within 1%% (%.2fx)", n, want, float64(n)/float64(want))
+			}
+		})
+	}
+}
+
+// TestAllocDomainSlowPath reruns the counting tests in a process where
+// every allocation takes the allocator's slow path, as it does whenever
+// the collector is marking. GODEBUG=inittrace=1 turns on the
+// allocator's debug hooks, which force that path.
+func TestAllocDomainSlowPath(t *testing.T) {
+	testenv.MustHaveExec(t)
+	cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t),
+		"-test.run=^(TestAllocDomainSmall|TestAllocDomainMatchesMemStats)$", "-test.v", "-test.count=1"))
+	cmd.Env = append(cmd.Environ(), "GODEBUG=inittrace=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	// Require each test to have run, not merely nothing to have failed.
+	for _, name := range []string{"TestAllocDomainSmall", "TestAllocDomainMatchesMemStats"} {
+		if !strings.Contains(string(out), "--- PASS: "+name+" ") {
+			t.Errorf("%s did not pass in the child process:\n%s", name, out)
+		}
 	}
 }
 
@@ -173,6 +248,68 @@ func TestAllocDomainReusedGoroutine(t *testing.T) {
 	wg.Wait()
 	if after := d.Allocated(); after != before {
 		t.Fatalf("domain grew from %d to %d bytes from goroutines started outside it (stale domain on a reused goroutine record)", before, after)
+	}
+}
+
+// TestAllocDomainNotRetained checks that goroutines that ran in a domain
+// do not keep it alive once they exit. Their records stay in the
+// runtime, on a free list, until they are reused.
+func TestAllocDomainNotRetained(t *testing.T) {
+	wp := runDomainAndDrop(t)
+	deadline := time.Now().Add(10 * time.Second)
+	for wp.Value() != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("domain still reachable after its goroutines exited and the domain was dropped")
+		}
+		runtime.GC()
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// runDomainAndDrop runs goroutines in a new domain, waits for them to
+// exit, and returns a weak pointer to the domain's counter.
+//
+//go:noinline
+func runDomainAndDrop(t *testing.T) weak.Pointer[byte] {
+	const n = 64
+	d := goplus.NewAllocDomain()
+	var wg sync.WaitGroup
+	d.Run(func() {
+		for w := range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				allocExact(w, 10, 64)
+			}()
+		}
+	})
+	wg.Wait()
+	if got := d.Allocated(); got < n*10*64 {
+		t.Fatalf("domain counted %d bytes from its goroutines, want at least %d", got, n*10*64)
+	}
+	return weak.Make((*byte)(goplus.AllocDomainCounter(d)))
+}
+
+// TestAllocDomainZero checks that the zero AllocDomain, which is not a
+// domain, panics instead of silently taking the goroutine out of the
+// domain it is in.
+func TestAllocDomainZero(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		f    func(*goplus.AllocDomain)
+	}{
+		{"Run", func(d *goplus.AllocDomain) { d.Run(func() {}) }},
+		{"Allocated", func(d *goplus.AllocDomain) { d.Allocated() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if s, _ := r.(string); !strings.Contains(s, "NewAllocDomain") {
+					t.Fatalf("got panic %v, want one naming NewAllocDomain", r)
+				}
+			}()
+			tc.f(new(goplus.AllocDomain))
+		})
 	}
 }
 

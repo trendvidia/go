@@ -63,10 +63,6 @@ func mallocgcSlowPathStub(size uintptr, typ *_type, needzero bool, spc spanClass
 // WARNING: mallocStub does not do any work for sanitizers so callers need
 // to steer out of this codepath early if sanitizers are enabled.
 func mallocStub(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
-	// Count the allocation for the goroutine's goplus.AllocDomain, if any.
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
-	}
 	if doubleCheckMalloc {
 		if gcphase == _GCmarktermination {
 			throw("mallocgc called with gcphase == _GCmarktermination")
@@ -97,6 +93,14 @@ func mallocStub(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			}
 		}
 
+		// Count the allocation for the goroutine's goplus.AllocDomain,
+		// if any. Not before the check above: the slow path counts the
+		// allocations it is handed, so counting here too would count
+		// them twice.
+		if d := getg().allocDomain; d != nil {
+			d.add(size)
+		}
+
 		// It's possible for any malloc to trigger sweeping, which may
 		// in turn queue finalizers. Record this dynamic lock edge.
 		// N.B. Compiled away if lockrank experiment is not enabled.
@@ -117,6 +121,12 @@ func mallocStub(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			if goexperiment.RuntimeSecret && gp.secret > 0 || gp.goplusNoTiny {
 				return mallocgcSmallNoScanSC2(size, typ, needzero)
 			}
+		}
+
+		// Count the allocation for the goroutine's goplus.AllocDomain,
+		// if any. Not before the redirect above, which counts its own.
+		if d := getg().allocDomain; d != nil {
+			d.add(size)
 		}
 
 		// It's possible for any malloc to trigger sweeping, which may

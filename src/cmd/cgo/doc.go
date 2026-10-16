@@ -470,7 +470,12 @@ runs it holds the P, and a stop-the-world (such as a garbage collection)
 waits until it returns, because a goroutine running C code is not at a
 safe point. A fastleaf function that blocks, or runs long, therefore
 stalls other goroutines and the collector. If it calls back into Go, the
-program throws.
+program throws. On Unix systems the goroutine is still running as far as
+the scheduler can tell, so while the runtime waits for it to stop, as a
+collection does to scan its stack, it repeatedly sends the thread the
+preemption signal (SIGURG), which an ordinary cgo call is not sent. An
+interruptible system call made by a fastleaf function, such as nanosleep
+or poll, can then fail with EINTR.
 
 For example:
 

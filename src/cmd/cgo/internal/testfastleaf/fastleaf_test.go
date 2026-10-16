@@ -8,6 +8,9 @@ package testfastleaf_test
 
 import (
 	"cmd/cgo/internal/testfastleaf"
+	"context"
+	"crypto/subtle"
+	"internal/runtime/sys"
 	"internal/testenv"
 	"math/rand/v2"
 	"os"
@@ -18,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -28,6 +32,35 @@ func TestFastLeafResults(t *testing.T) {
 			t.Fatalf("AddLeaf(%d) = %d", x, got)
 		}
 	}
+}
+
+// TestFastLeafErrno checks the two-result form of a fastleaf call, which
+// returns errno through cgocallLeaf's result.
+func TestFastLeafErrno(t *testing.T) {
+	r, err := testfastleaf.ErrnoLeaf(syscall.EINVAL)
+	if r != -1 || err != syscall.EINVAL {
+		t.Fatalf("ErrnoLeaf(EINVAL) = %d, %v; want -1, %v", r, err, syscall.EINVAL)
+	}
+}
+
+// TestFastLeafDIT checks that a fastleaf call restores the goroutine's
+// DIT state after C code changes it, as an ordinary cgo call does
+// (cmd/cgo/internal/test's TestDITCgo).
+func TestFastLeafDIT(t *testing.T) {
+	if !sys.DITSupported {
+		t.Skip("CPU does not support DIT")
+	}
+	before := sys.DITEnabled()
+	testfastleaf.EnableDITLeaf()
+	if after := sys.DITEnabled(); after != before {
+		t.Fatalf("DIT state not restored across a fastleaf call: before %t, after %t", before, after)
+	}
+	subtle.WithDataIndependentTiming(func() {
+		testfastleaf.DisableDITLeaf()
+		if !sys.DITEnabled() {
+			t.Fatal("DIT disabled after a fastleaf call disabled it")
+		}
+	})
 }
 
 // TestFastLeafHeapMemory passes Go heap memory to a fastleaf function
@@ -88,14 +121,46 @@ func TestFastLeafHeapMemory(t *testing.T) {
 // TestFastLeafStopTheWorld runs goroutines making short fastleaf calls on
 // every P and checks that the world still stops promptly, next to the
 // same measurement for goroutines in a pure Go loop.
+//
+// The measurement runs in a child process. A fastleaf call that never let
+// the world stop would leave the collection waiting forever, and every
+// goroutine of the process stopped with it, the test's own timers
+// included; only the parent can then end it, under a deadline.
 func TestFastLeafStopTheWorld(t *testing.T) {
+	if os.Getenv("FASTLEAF_STW_CHILD") != "" {
+		stopTheWorldChild(t)
+		return
+	}
+	testenv.MustHaveExec(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := testenv.CommandContext(t, ctx, testenv.Executable(t), "-test.run=^TestFastLeafStopTheWorld$", "-test.v")
+	cmd.Env = append(os.Environ(), "FASTLEAF_STW_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("the child did not finish within a minute: the world did not stop with fastleaf callers on every P\n%s", out)
+	}
+	if err != nil {
+		t.Fatalf("child: %v\n%s", err, out)
+	}
+	// A positive marker that the measurement ran and passed.
+	if !strings.Contains(string(out), "--- PASS: TestFastLeafStopTheWorld") {
+		t.Fatalf("child output lacks a pass line:\n%s", out)
+	}
+	for line := range strings.Lines(string(out)) {
+		if _, msg, ok := strings.Cut(line, "slowest stop-the-world"); ok {
+			t.Log("slowest stop-the-world " + strings.TrimSpace(msg))
+		}
+	}
+}
+
+func stopTheWorldChild(t *testing.T) {
 	const procs = 4
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
 	goLoops := measureStops(t, procs, func() { testfastleaf.AddGo(1) })
 	leafLoops := measureStops(t, procs, func() { testfastleaf.AddLeaf(1) })
 	t.Logf("slowest stop-the-world with %d spinning goroutines: Go calls under %gs, fastleaf calls under %gs", procs, goLoops, leafLoops)
-	// The bound allows for a loaded machine; a fastleaf call that never
-	// let the world stop would exceed it.
+	// The bound allows for a loaded machine.
 	if leafLoops > 1 {
 		t.Errorf("stopping the world took up to %gs with fastleaf callers on every P", leafLoops)
 	}

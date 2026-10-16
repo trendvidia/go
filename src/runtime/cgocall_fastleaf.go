@@ -24,6 +24,12 @@ import (
 //
 // Like cgocall, it is nosplit: the arguments are untyped on the stack.
 //
+// Apart from the system call, its bookkeeping is cgocall's, copied rather
+// than shared: a helper for the DIT restore is not inlined and costs
+// about 0.2ns on every cgo call. A change to cgocall's bookkeeping must
+// be made here too; TestFastLeafDIT in cmd/cgo/internal/testfastleaf pins
+// the DIT half.
+//
 //go:linkname cgocallLeaf
 //go:nosplit
 func cgocallLeaf(fn, arg unsafe.Pointer) int32 {

@@ -14,7 +14,11 @@ package testfastleaf
 #cgo fastleaf callsBack
 #cgo fastleaf spinLeaf
 #cgo fastleaf crashLeaf
+#cgo fastleaf errnoLeaf
+#cgo fastleaf enableDITLeaf
+#cgo fastleaf disableDITLeaf
 
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -45,12 +49,33 @@ static void crashLeaf(void) {
 	*(volatile int *)0 = 1;
 }
 
+// errnoLeaf sets errno to e and returns -1.
+static int errnoLeaf(int e) {
+	errno = e;
+	return -1;
+}
+
+static void enableDITLeaf(void) {
+	#ifdef __arm64__
+	__asm__ __volatile__("msr dit, #1");
+	#endif
+}
+
+static void disableDITLeaf(void) {
+	#ifdef __arm64__
+	__asm__ __volatile__("msr dit, #0");
+	#endif
+}
+
 extern void goCallback(void);
 static void callsBack(void) { goCallback(); }
 */
 import "C"
 
-import "unsafe"
+import (
+	"syscall"
+	"unsafe"
+)
 
 func AddPlain(x int) int { return int(C.addPlain(C.int(x))) }
 func AddNoCB(x int) int  { return int(C.addNoCB(C.int(x))) }
@@ -75,6 +100,18 @@ func SumGo(b []byte) uint64 {
 	}
 	return s
 }
+
+// ErrnoLeaf calls a fastleaf C function that sets errno to e, through
+// the two-result form of a cgo call.
+func ErrnoLeaf(e syscall.Errno) (int, error) {
+	r, err := C.errnoLeaf(C.int(e))
+	return int(r), err
+}
+
+// EnableDITLeaf and DisableDITLeaf call fastleaf C functions that turn
+// the arm64 DIT bit on and off.
+func EnableDITLeaf()  { C.enableDITLeaf() }
+func DisableDITLeaf() { C.disableDITLeaf() }
 
 // SpinLeaf runs a fastleaf C function that spins for about n iterations.
 func SpinLeaf(n int) uint64 { return uint64(C.spinLeaf(C.int(n))) }

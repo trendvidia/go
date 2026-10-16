@@ -7,6 +7,7 @@
 package testfastleaf_test
 
 import (
+	"cmd/internal/quoted"
 	"internal/testenv"
 	"os"
 	"os/exec"
@@ -66,10 +67,21 @@ func TestFastLeafRust(t *testing.T) {
 		}
 	}
 
+	// Add the library to the link flags the go command would use anyway.
+	// CGO_LDFLAGS is split like a shell command line, so the path, which
+	// may hold a space (a Windows user profile), is quoted.
+	ldflags, err := testenv.Command(t, testenv.GoToolPath(t), "env", "CGO_LDFLAGS").Output()
+	if err != nil {
+		t.Fatalf("go env CGO_LDFLAGS: %v", err)
+	}
+	quotedLib, err := quoted.Join([]string{lib})
+	if err != nil {
+		t.Fatal(err)
+	}
 	exe := filepath.Join(dir, "rustleaf.exe")
 	build := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", exe, ".")
 	build.Dir = dir
-	build.Env = append(os.Environ(), "CGO_LDFLAGS="+lib+" "+native)
+	build.Env = append(os.Environ(), "CGO_LDFLAGS="+strings.TrimSpace(string(ldflags))+" "+quotedLib+" "+native)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}

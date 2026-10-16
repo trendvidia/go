@@ -205,6 +205,8 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 		raceacquire(unsafe.Pointer(&racecgosync))
 	}
 
+	// go-plus: cgocallLeaf (#cgo fastleaf) copies this bookkeeping; keep
+	// the two in step.
 	if sys.DITSupported {
 		// C code may have enabled or disabled DIT on this thread, restore
 		// our state to the expected one.

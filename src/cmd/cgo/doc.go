@@ -477,6 +477,10 @@ installs its handlers with SA_RESTART, so most interrupted system calls
 restart, but ones the kernel never restarts, such as nanosleep or poll,
 can occasionally fail with EINTR, about as often as in an ordinary cgo
 call. A fastleaf function should handle EINTR as any C code should.
+Under the race detector, a fastleaf call that runs longer than 1s makes
+the program throw, naming the function; GODEBUG=fastleafcheck sets
+another limit, or turns the check off with 0 (see the runtime package's
+GODEBUG documentation).
 
 For example:
 

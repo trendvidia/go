@@ -352,6 +352,12 @@ var debug struct {
 	// tracebacklabels controls the inclusion of goroutine labels in the
 	// goroutine status header line.
 	tracebacklabels atomic.Int32
+
+	// fastleafcheck is the longest a #cgo fastleaf call may run, in
+	// nanoseconds, before sysmon throws; 0 turns the check off. It is
+	// on by default under the race detector. It is read at startup
+	// only. (go-plus)
+	fastleafcheck int64
 }
 
 var dbgvars = []*dbgVar{
@@ -407,6 +413,9 @@ func parseRuntimeDebugVars(godebug string) {
 		debug.madvdontneed = 1
 	}
 	debug.traceadvanceperiod = defaultTraceAdvancePeriod
+	if raceenabled {
+		debug.fastleafcheck = 1e9 // 1s
+	}
 
 	// apply runtime defaults, if any
 	for _, v := range dbgvars {
@@ -547,6 +556,10 @@ func parsegodebug(godebug string, seen map[string]bool) {
 		if seen == nil && key == "memprofilerate" {
 			if n, err := strconv.Atoi(value); err == nil {
 				MemProfileRate = n
+			}
+		} else if seen == nil && key == "fastleafcheck" {
+			if n, ok := parseFastLeafCheck(value); ok {
+				debug.fastleafcheck = n
 			}
 		} else {
 			for _, v := range dbgvars {

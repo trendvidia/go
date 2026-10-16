@@ -154,6 +154,14 @@ for example,
 see the [runtime documentation](/pkg/runtime#hdr-Environment_Variables)
 and the [go command documentation](/cmd/go#hdr-Build_and_test_caching).
 
+### go-plus
+
+go-plus, the trendvidia fork of Go, adds the `fastleafcheck` setting. It is a
+debugging check, not a compatibility setting: `fastleafcheck=10ms` makes the
+runtime throw when a C function declared `#cgo fastleaf` runs longer than 10ms.
+It is on with a limit of 1s under the race detector, and `fastleafcheck=0`
+turns it off. See the [runtime documentation](/pkg/runtime#hdr-Environment_Variables).
+
 ### Go 1.28
 
 Go 1.28 changed

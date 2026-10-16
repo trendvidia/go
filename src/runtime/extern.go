@@ -95,6 +95,17 @@ It is a comma-separated list of name=val pairs setting these named variables:
 	where each object is allocated on a unique page and addresses are
 	never recycled.
 
+	fastleafcheck: setting fastleafcheck=<duration>, for example
+	fastleafcheck=10ms, makes the runtime throw when a C function declared
+	#cgo fastleaf runs longer than that, naming the function. Such a call
+	keeps its P and delays every stop-the-world until it returns. The
+	check runs on the runtime's monitor thread, so it costs the call
+	nothing; it reports a call that has run past the limit by the time it
+	has run about twice the limit, plus 20ms at most. It is on with a
+	limit of 1s under the race detector; fastleafcheck=0 turns it off.
+	The value is a whole number with a unit (ns, us, ms or s). The
+	setting is read at program start only. (go-plus)
+
 	gccheckmark: setting gccheckmark=1 enables verification of the
 	garbage collector's concurrent mark phase by performing a
 	second mark pass while the world is stopped.  If the second

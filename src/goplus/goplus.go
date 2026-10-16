@@ -27,4 +27,5 @@ package goplus
 //
 // Level 1: [ObjectExtent].
 // Level 2: [SetNoTinyAlloc].
-const JIT = 2
+// Level 3: [WriteBarrierFlag], [WriteBarrierEntry].
+const JIT = 3

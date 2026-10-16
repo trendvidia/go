@@ -81,8 +81,13 @@ func TestPreemptPoll(t *testing.T) {
 	}
 }
 
-// startCompiledSpinners starts n goroutines spinning in compiled Go with
-// no calls, the baseline for TestPreemptPoll.
+// spinBatch is how many iterations a compiled spinner runs between
+// touches of the shared words.
+const spinBatch = 1024
+
+// startCompiledSpinners starts n goroutines spinning in compiled Go, the
+// baseline for TestPreemptPoll. The loop makes no calls except, under
+// -race, the atomics it runs once every spinBatch iterations.
 func startCompiledSpinners(n int) (stop func()) {
 	atomic.StoreUint32(&spinStop, 0)
 	var wg sync.WaitGroup
@@ -90,14 +95,15 @@ func startCompiledSpinners(n int) (stop func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// Count locally and touch the shared words every 1024
-			// iterations: under -race each atomic is a call into the
-			// race runtime, which cannot be preempted by signal, and a
+			// Count locally and touch the shared words once a batch:
+			// under -race each atomic is a call into the race runtime,
+			// where a preemption signal cannot stop the goroutine, and a
 			// loop made only of them kept the world from stopping for
-			// minutes. Plain Go between them keeps the loop preemptible.
-			for n := uint64(1); ; n++ {
-				if n&1023 == 0 {
-					atomic.AddUint64(&spinCounter, 1024)
+			// minutes. With plain Go in between, almost every signal
+			// lands where the loop can be preempted.
+			for i := uint64(1); ; i++ {
+				if i%spinBatch == 0 {
+					atomic.AddUint64(&spinCounter, spinBatch)
 					if atomic.LoadUint32(&spinStop) != 0 {
 						return
 					}

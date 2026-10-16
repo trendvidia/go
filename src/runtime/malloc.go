@@ -1143,7 +1143,9 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 				// Make sure secret allocations get zeroed by avoiding the tiny allocator
 				// See go.dev/issue/76356
 				gp := getg()
-				if size < maxTinySize && gp.secret == 0 {
+				// goplus.SetNoTinyAlloc asks for the same, so that each
+				// allocation has a slot of its own.
+				if size < maxTinySize && gp.secret == 0 && !gp.goplusNoTiny {
 					x, elemsize = mallocgcTiny(size, typ)
 				} else {
 					x, elemsize = mallocgcSmallNoscan(size, typ, needzero)

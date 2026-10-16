@@ -1092,7 +1092,8 @@ func mallocgcTinySC2(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) ||
+		(getg().goplusNoTiny)
 
 	if forceSlowPath {
 		releasem(mp)
@@ -1792,7 +1793,7 @@ func mallocgcTinySlowPath(size uintptr, typ *_type, needzero bool) unsafe.Pointe
 	var mp *m
 
 	gp := getg()
-	if goexperiment.RuntimeSecret && gp.secret > 0 {
+	if goexperiment.RuntimeSecret && gp.secret > 0 || gp.goplusNoTiny {
 		return mallocgcSmallNoScanSC2(size, typ, needzero)
 	}
 

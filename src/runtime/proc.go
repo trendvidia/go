@@ -5463,6 +5463,9 @@ func newproc1(fn *funcval, callergp *g, callerpc uintptr, parked bool, waitreaso
 	// dit bubble
 	newg.ditWanted = callergp.ditWanted
 
+	// goplus.SetNoTinyAlloc
+	newg.goplusNoTiny = callergp.goplusNoTiny
+
 	if goexperiment.RuntimeSecret && callergp.secret > 0 {
 		// while it might seem weird to have a non-zero gp.secret value
 		// with no calls to secret.Do on the stack, this case is handled

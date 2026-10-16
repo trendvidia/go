@@ -26,4 +26,5 @@ package goplus
 // a declaration is added.
 //
 // Level 1: [ObjectExtent].
-const JIT = 1
+// Level 2: [SetNoTinyAlloc].
+const JIT = 2

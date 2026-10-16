@@ -44,3 +44,15 @@ func goplus_objectExtent(p uintptr) (base, size uintptr) {
 	}
 	return base, size
 }
+
+// goplus_setNoTinyAlloc sets whether the calling goroutine bypasses the
+// tiny allocator (see mallocgc and the tiny malloc stubs), and returns
+// the previous setting. newproc1 copies it to new goroutines.
+//
+//go:linkname goplus_setNoTinyAlloc goplus.runtime_setNoTinyAlloc
+func goplus_setNoTinyAlloc(on bool) (prev bool) {
+	gp := getg()
+	prev = gp.goplusNoTiny
+	gp.goplusNoTiny = on
+	return prev
+}

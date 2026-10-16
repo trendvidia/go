@@ -148,10 +148,10 @@ func contentID(buildID string) string {
 // of the same release version, and stock Go of the same version names the same
 // release, so a version-keyed cache served one toolchain's objects to the other
 // (trendvidia/go#20). A release tool reports its build ID like a development one,
-// and toolID uses its content ID; only a tool with no build ID to report (one that
-// had to be linked externally) is still keyed on its version line, which leaves
-// #20 open on the hosts whose tools must link externally (trendvidia/go#56). The
-// cost is the cross-host reproducibility above: the Linux and Mac compilers of one
+// and toolID uses its content ID. A tool with no build ID (one that had to be
+// linked externally) reports a hash of its own executable in its place
+// (trendvidia/go#56); only a tool that reports nothing at all, because it could
+// not read its executable, is still keyed on its version line. The cost is the cross-host reproducibility above: the Linux and Mac compilers of one
 // release have different tool IDs, so their outputs differ in the action ID half
 // of the build ID. (Two hosts that install the same release binaries run the same
 // tools, and get the same tool IDs.)

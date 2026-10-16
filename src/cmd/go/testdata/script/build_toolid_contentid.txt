@@ -39,9 +39,34 @@ env TOOLID_REWRITE=action
 go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
 cmp stdout base.txt
 
-# A compiler with no build ID to report, as one linked externally, is
-# keyed on its version line: it builds, gets a key of its own, and gets
-# the same key each time.
+# A tool linked externally has no build ID, and reports a hash of its
+# own executable instead (trendvidia/go#56). Build two such tools that
+# differ in content: -X empties the build ID, as gc.go's leaving it unset
+# would, and -s changes the content.
+env TOOLID_REWRITE=none
+go build -o asm1$GOEXE -ldflags=-X=cmd/internal/objabi.buildID= cmd/asm
+go build -o asm2$GOEXE '-ldflags=-X=cmd/internal/objabi.buildID= -s' cmd/asm
+exec ./asm1$GOEXE -V=full
+stdout '^asm1 version .* buildID=[^ /]+$'
+exec ./asm2$GOEXE -V=full
+stdout '^asm2 version .* buildID=[^ /]+$'
+
+# Answering for the compiler, each gets a key of its own, the same each
+# time, though both report the same version line.
+env TOOLID_SUBST=$PWD/asm1$GOEXE
+go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
+! cmp stdout base.txt
+cp stdout self1.txt
+go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
+cmp stdout self1.txt
+env TOOLID_SUBST=$PWD/asm2$GOEXE
+go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
+! cmp stdout self1.txt
+env TOOLID_SUBST=
+
+# A tool that reports no build ID at all (one that could not read its
+# own executable) is keyed on its version line: it builds, gets a key of
+# its own, and gets the same key each time.
 env TOOLID_REWRITE=strip
 go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
 ! cmp stdout base.txt
@@ -50,8 +75,7 @@ go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
 cmp stdout strip.txt
 
 # The key follows that version line. Nothing else distinguishes such a
-# compiler, so a different one of the same version shares its key: #20
-# is still open for tools linked externally (trendvidia/go#56).
+# tool, so a different one of the same version would share its key.
 env TOOLID_VERSION=go1.0.2
 go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
 ! cmp stdout strip.txt
@@ -69,13 +93,15 @@ func F() int { return 1 }
 // Command toolid runs a tool and, when asked for -V=full, reports it as
 // a release (so that cmd/go takes its release path whatever this tree's
 // VERSION), $TOOLID_VERSION or go1.0.1, and rewrites its build ID as
-// $TOOLID_REWRITE says, as a different compiler binary would.
+// $TOOLID_REWRITE says, as a different compiler binary would. With
+// $TOOLID_SUBST set, that binary answers -V=full in the tool's place.
 package main
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -90,6 +116,10 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+	if subst := os.Getenv("TOOLID_SUBST"); subst != "" {
+		cmd = exec.Command(subst, args...)
+		cmd.Stderr = os.Stderr
 	}
 	out, err := cmd.Output()
 	if err != nil {
@@ -106,7 +136,8 @@ func main() {
 	if version == "" {
 		version = "go1.0.1"
 	}
-	line := []string{f[0], "version", version}
+	name := strings.TrimSuffix(filepath.Base(tool), ".exe")
+	line := []string{name, "version", version}
 	for _, field := range f[3:] {
 		if strings.HasPrefix(field, "X:") {
 			line = append(line, field)

@@ -148,9 +148,8 @@ of its Go build ID, and on ELF and Mach-O in the GNU build-id note and
 UUID the linker derives from it; the content IDs in the build ID still
 match. Hosts that install the same release archive run identical tools,
 and this does not arise between them. Where the tools themselves must be
-linked externally (android except arm64, ios), they have no build ID and
-are keyed on their version as upstream's are, so #20 is still open there
-(#56).
+linked externally (android except arm64, ios), they have no build ID, and
+each reports a hash of its own executable in its place (#56).
 
 ### Known limitations of the plugin support
 

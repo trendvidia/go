@@ -5,6 +5,8 @@
 package objabi
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"internal/bisect"
@@ -233,17 +235,46 @@ func (versionFlag) Set(s string) error {
 	// for this fork: its tools change between builds of the same
 	// version, and stock Go of the same version names the same release,
 	// so cache entries were shared across both (trendvidia/go#20).
-	// A tool linked externally has no build ID to report; it falls
-	// back to the release version, as upstream does.
+	//
+	// A tool linked externally has no build ID: cmd/go leaves it unset
+	// on a host where the tools must link externally (gc.go). Such a
+	// tool hashes its own executable instead, so that it still reports
+	// what it is rather than only its version (trendvidia/go#56). It is
+	// the tool that answers, so this holds under -toolexec too.
 	if s == "full" {
-		if strings.Contains(buildcfg.Version, "devel") || buildID != "" {
-			p += " buildID=" + buildID
+		id := buildID
+		if id == "" {
+			id = selfContentID()
+		}
+		if strings.Contains(buildcfg.Version, "devel") || id != "" {
+			p += " buildID=" + id
 		}
 	}
 
 	fmt.Printf("%s version %s%s\n", name, buildcfg.Version, p)
 	os.Exit(0)
 	return nil
+}
+
+// selfContentID returns a content ID for the running executable, in the
+// form cmd/go gives content IDs (a SHA-256 prefix, base64), or "" if
+// the executable cannot be read. It costs a read of the binary: about
+// 10ms for the compiler on darwin/arm64.
+func selfContentID() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	f, err := os.Open(exe)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:15])
 }
 
 // count is a flag.Value that is like a flag.Bool and a flag.Int.

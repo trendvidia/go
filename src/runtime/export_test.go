@@ -38,6 +38,8 @@ var Fastlog2 = fastlog2
 
 var ParseByteCount = parseByteCount
 
+var ParseFastLeafCheck = parseFastLeafCheck // go-plus
+
 var Nanotime = nanotime
 var Cputicks = cputicks
 var CyclesPerSecond = pprof_cyclesPerSecond

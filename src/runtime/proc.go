@@ -6593,9 +6593,9 @@ func sysmon() {
 		// from a timer to avoid adding system load to applications that spend
 		// most of their time sleeping.
 		now := nanotime()
-		if debug.schedtrace <= 0 && (sched.gcwaiting.Load() || sched.npidle.Load() == gomaxprocs) {
+		if debug.schedtrace <= 0 && sysmonMayDeepSleep() {
 			lock(&sched.lock)
-			if sched.gcwaiting.Load() || sched.npidle.Load() == gomaxprocs {
+			if sysmonMayDeepSleep() {
 				syscallWake := false
 				next := timeSleepUntil()
 				if next > now {
@@ -6671,6 +6671,9 @@ func sysmon() {
 		} else {
 			idle++
 		}
+		if debug.fastleafcheck > 0 {
+			sysmonCheckFastLeaf(now)
+		}
 		// check if we need to force a GC
 		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && forcegc.idle.Load() {
 			lock(&forcegc.lock)
@@ -6693,6 +6696,23 @@ type sysmontick struct {
 	syscalltick uint32
 	schedwhen   int64
 	syscallwhen int64
+
+	// The #cgo fastleaf call sysmonCheckFastLeaf last saw on this P:
+	// its M, that M's ncgocall during the call, and when it was first
+	// seen. leafwhen is 0 when none was seen.
+	leafm    muintptr
+	leafcall uint64
+	leafwhen int64
+}
+
+// sysmonMayDeepSleep reports whether sysmon may sleep until the next
+// timer: while the world is stopping or stopped, or while every P is idle.
+//
+// go-plus: not while the world is stopping if GODEBUG=fastleafcheck is
+// on. A #cgo fastleaf call that runs too long is exactly what keeps the
+// world from stopping, and sysmon must stay awake to report it.
+func sysmonMayDeepSleep() bool {
+	return sched.gcwaiting.Load() && debug.fastleafcheck <= 0 || sched.npidle.Load() == gomaxprocs
 }
 
 // forcePreemptNS is the time slice given to a G before it is

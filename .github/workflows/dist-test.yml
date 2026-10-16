@@ -146,6 +146,15 @@ jobs:
           export GOROOT_BOOTSTRAP
           ./all.bash
 
+      # all.bash's race test covers a fixed package list without goplus, and
+      # the Windows smoke runs goplus without -race. That is how a data race
+      # in goplus's tests merged unseen (#45, #50). Every Unix leg has the
+      # race detector, so run goplus under it here.
+      - name: goplus under -race (Unix)
+        if: runner.os != 'Windows'
+        working-directory: src
+        run: ../bin/go test -race -count=1 goplus goplus/internal/execmem
+
       # Windows: build the toolchain, then smoke-test a curated set of PURE core
       # stdlib packages with the freshly-built go (compile + link + run + test).
       # The list deliberately excludes packages whose tests need external tools

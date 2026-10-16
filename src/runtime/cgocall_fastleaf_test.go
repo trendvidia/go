@@ -23,6 +23,7 @@ func TestParseFastLeafCheck(t *testing.T) {
 		{"1s", 1e9, true},
 		{"500us", 500e3, true},
 		{"500µs", 500e3, true},
+		{"500\u03bcs", 500e3, true}, // Greek mu
 		{"750ns", 750, true},
 		{"", 0, false},
 		{"10", 0, false},   // a unit is required

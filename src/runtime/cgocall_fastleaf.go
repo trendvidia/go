@@ -106,9 +106,13 @@ func cgocallLeaf(fn, arg unsafe.Pointer) int32 {
 // the time reported is a lower bound, and the check's resolution is
 // sysmon's wake-up interval: 20us when busy, up to 10ms when idle.
 //
-// It reads other Ms' state without synchronization, as retake does. A
-// call that ends between the reads looks like a different call, or like
-// none, and is caught again on the next pass if it is still running.
+// It reads other Ms' state without synchronization, as retake does. The
+// flag is read before the counter: cgocallLeaf sets the counter first,
+// so a call that ends and another that starts between the two reads
+// shows the new call's counter, and looks like a different call. A
+// weakly ordered machine can still pair the new call's flag with the old
+// counter, for one pass, so a call is reported only once two passes in a
+// row have seen it over the limit.
 func sysmonCheckFastLeaf(now int64) {
 	limit := debug.fastleafcheck
 	lock(&allpLock)
@@ -122,19 +126,24 @@ func sysmonCheckFastLeaf(now int64) {
 			pd.leafwhen = 0
 			continue
 		}
-		call := mp.ncgocall
 		gp := mp.curg
 		if gp == nil || !gp.cgoFastLeaf {
 			pd.leafwhen = 0
 			continue
 		}
+		call := mp.ncgocall
 		if pd.leafwhen == 0 || pd.leafm.ptr() != mp || pd.leafcall != call {
 			pd.leafm.set(mp)
 			pd.leafcall = call
 			pd.leafwhen = now
+			pd.leafover = false
 			continue
 		}
 		if now-pd.leafwhen < limit {
+			continue
+		}
+		if !pd.leafover {
+			pd.leafover = true
 			continue
 		}
 		// The Go wrapper cgo generated for the C function (_Cfunc_name)
@@ -143,30 +152,22 @@ func sysmonCheckFastLeaf(now int64) {
 		if f := findfunc(gp.syscallpc); f.valid() {
 			wrapper = funcname(f)
 		}
+		// Both times in the largest unit the limit is a whole number of,
+		// so the limit prints as it was set and the time as no less.
+		unit, suffix := int64(1), "ns"
+		if limit%1e6 == 0 {
+			unit, suffix = 1e6, "ms"
+		} else if limit%1e3 == 0 {
+			unit, suffix = 1e3, "us"
+		}
 		printlock()
-		print("runtime: #cgo fastleaf call to ", wrapper, " in goroutine ", gp.goid, " has run for at least ")
-		printDurationNS(now - pd.leafwhen)
-		print(", over GODEBUG=fastleafcheck=")
-		printDurationNS(limit)
-		print("\n")
+		print("runtime: #cgo fastleaf call to ", wrapper, " in goroutine ", gp.goid, " has run for at least ",
+			(now-pd.leafwhen)/unit, suffix, ", over GODEBUG=fastleafcheck=", limit/unit, suffix, "\n")
 		printunlock()
 		unlock(&allpLock)
 		throw("#cgo fastleaf call ran too long")
 	}
 	unlock(&allpLock)
-}
-
-// printDurationNS prints a duration in nanoseconds, in milliseconds
-// when it is at least one.
-func printDurationNS(ns int64) {
-	switch {
-	case ns >= 1e6:
-		print(ns/1e6, "ms")
-	case ns >= 1e3:
-		print(ns/1e3, "us")
-	default:
-		print(ns, "ns")
-	}
 }
 
 // parseFastLeafCheck parses the value of GODEBUG=fastleafcheck: a
@@ -190,7 +191,7 @@ func parseFastLeafCheck(s string) (int64, bool) {
 	switch s[i:] {
 	case "ns":
 		unit = 1
-	case "us", "\u00b5s":
+	case "us", "\u00b5s", "\u03bcs": // micro sign or Greek mu, as time.ParseDuration
 		unit = 1e3
 	case "ms":
 		unit = 1e6

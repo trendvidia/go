@@ -6607,6 +6607,13 @@ func sysmon() {
 					if next-now < sleep {
 						sleep = next - now
 					}
+					// go-plus: no longer than GODEBUG=fastleafcheck. A
+					// #cgo fastleaf call does not wake sysmon, and a
+					// goroutine woken by the network poller can start one
+					// while sysmon sleeps.
+					if l := debug.fastleafcheck; l > 0 && l < sleep {
+						sleep = l
+					}
 					shouldRelax := sleep >= osRelaxMinNS
 					if shouldRelax {
 						osRelax(true)
@@ -6698,11 +6705,13 @@ type sysmontick struct {
 	syscallwhen int64
 
 	// The #cgo fastleaf call sysmonCheckFastLeaf last saw on this P:
-	// its M, that M's ncgocall during the call, and when it was first
-	// seen. leafwhen is 0 when none was seen.
+	// its M, that M's ncgocall during the call, when it was first seen,
+	// and whether a pass has already seen it over the limit. leafwhen is
+	// 0 when none was seen.
 	leafm    muintptr
 	leafcall uint64
 	leafwhen int64
+	leafover bool
 }
 
 // sysmonMayDeepSleep reports whether sysmon may sleep until the next

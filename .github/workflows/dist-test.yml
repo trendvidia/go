@@ -100,8 +100,9 @@ jobs:
       # produced. The fork now keys on the tools' content IDs, which
       # closes that. The per-run cache stays so that a regression of
       # #20 cannot turn into a false green here. It does not detect one:
-      # the cmd/go script test build_toolid_contentid does, and only
-      # dist-test's Unix legs run it (all.bash). No Windows leg does.
+      # the cmd/go script test build_toolid_contentid does, with
+      # cmd/internal/objabi's TestVersionFlagBuildID. dist-test runs both
+      # on every leg: through all.bash on Unix, by name on Windows.
       #
       # A private directory per run rather than `go clean -cache` on a
       # shared one: on the self-hosted runners this repo used until
@@ -167,6 +168,12 @@ jobs:
       # cgo (a runner that lost its C compiler), where it would otherwise report
       # "no test files" and pass with nothing run.
       #
+      # The last two commands run the #20 pins (build cache keyed on the tools'
+      # content) on Windows, where all.bash does not run them: cmd/go's
+      # build_toolid_contentid script test and cmd/internal/objabi. A
+      # Windows-only link path that lost objabi.buildID would otherwise
+      # regress #20 there unseen (#57).
+      #
       # The build below deliberately does NOT unset CGO_ENABLED: this lane exists to
       # DETECT a runner whose environment exports it, the same way the Unix legs
       # do via all.bash. (release-binaries.yml unsets it instead -- there the goal
@@ -180,6 +187,8 @@ jobs:
           call make.bat || exit /b 1
           set "GOPLUS_REQUIRE_CGO=1"
           ..\bin\go.exe test -short -count=1 errors fmt strings strconv bytes sort math encoding/json regexp sync context internal/buildcfg goplus goplus/internal/execmem cmd/cgo/internal/testfastleaf || exit /b 1
+          ..\bin\go.exe test -short -count=1 -v -run TestScript/build_toolid_contentid cmd/go || exit /b 1
+          ..\bin\go.exe test -short -count=1 cmd/internal/objabi || exit /b 1
 
       # Confirm the toolchain we just built is the fork, not stock Go.
       - name: Assert the built toolchain is go-plus (Unix)

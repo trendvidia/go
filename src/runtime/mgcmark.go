@@ -1804,3 +1804,29 @@ func gcMarkTinyAllocs() {
 		}
 	}
 }
+
+// PROTOTYPE (trendvidia/go#12): keep a heap-allocated type alive while
+// objects allocated from it are. protoHeapTypeGate selects the gate:
+// 0 off, 1 every recorded type goes through findObject, 2 only types
+// with tflagHeapType set.
+const protoHeapTypeGate = 0
+
+const tflagHeapType abi.TFlag = 1 << 6
+
+func shadeHeapType(typ *_type, gcw *gcWork) {
+	switch protoHeapTypeGate {
+	case 1:
+	case 2:
+		if typ.TFlag&tflagHeapType == 0 {
+			return
+		}
+	default:
+		return
+	}
+	b := uintptr(unsafe.Pointer(typ))
+	if !tryDeferToSpanScan(b, gcw) {
+		if obj, span, objIndex := findObject(b, 0, 0); obj != 0 {
+			greyobject(obj, 0, 0, span, gcw, objIndex)
+		}
+	}
+}

@@ -186,9 +186,15 @@ func scanObject(b uintptr, gcw *gcWork) {
 		n = s.base() + s.elemsize - b
 		n = min(n, maxObletBytes)
 		tp = s.typePointersOfUnchecked(s.base())
+		if b == s.base() && tp.typ != nil {
+			shadeHeapType(tp.typ, gcw)
+		}
 		tp = tp.fastForward(b-tp.addr, b+n)
 	} else {
 		tp = s.typePointersOfUnchecked(b)
+		if tp.typ != nil {
+			shadeHeapType(tp.typ, gcw)
+		}
 	}
 
 	var scanSize uintptr

@@ -1662,6 +1662,7 @@ func mallocgcSmallScanHeader(size uintptr, typ *_type) (unsafe.Pointer, uintptr)
 		// This may be racing with GC so do it atomically if there can be
 		// a race marking the bit.
 		gcmarknewobject(span, uintptr(x))
+		shadeHeapType(typ, &getg().m.p.ptr().gcw) // PROTOTYPE #12
 	} else {
 		// Track the last free index before the mark phase. This field
 		// is only used by the garbage collector. During the mark phase
@@ -1789,6 +1790,9 @@ func mallocgcLarge(size uintptr, typ *_type, needzero bool) (unsafe.Pointer, uin
 	if typ != nil && typ.Pointers() {
 		// Finish storing the type information, now that we're certain the memory is zeroed.
 		getMCache(mp).scanAlloc += heapSetTypeLarge(uintptr(x), size, typ, span)
+		if writeBarrier.enabled {
+			shadeHeapType(typ, &mp.p.ptr().gcw) // PROTOTYPE #12
+		}
 	}
 	// Publish the object again, now with zeroed memory and initialized type information.
 	//

@@ -19,6 +19,7 @@ var stdPkgs = []string{
 	"expvar",
 	"flag",
 	"fmt",
+	"goplus",
 	"hash",
 	"html",
 	"image",

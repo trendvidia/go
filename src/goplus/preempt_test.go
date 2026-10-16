@@ -5,6 +5,7 @@
 package goplus_test
 
 import (
+	"fmt"
 	"goplus"
 	"goplus/internal/execmem"
 	"internal/testenv"
@@ -68,12 +69,22 @@ func TestPreemptPoll(t *testing.T) {
 	if os.Getenv("GOPLUS_SPIN_CHILD") != "" {
 		t.Skip("in child")
 	}
+	// Skip here, not when startSpinners maps the code: that comes after
+	// the compiled baseline, which may never stop on such a platform.
+	if code, _, _ := spinCode(0, 0, 0, true); code == nil || !execmem.Supported() {
+		t.Skipf("no generated-code support on %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
 	const procs = 4
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
 
-	compiled := measureStops(t, startCompiledSpinners(procs))
-	generated := measureStops(t, startSpinners(t, procs, true))
-	t.Logf("slowest stop-the-world with %d spinning goroutines: compiled loops under %gs, polling generated loops under %gs", procs, compiled, generated)
+	// Only preemption signals stop the compiled loops, so without them a
+	// collection would never return. The polling loops need no signals.
+	compiled := "not measured with asynchronous preemption off"
+	if !asyncPreemptOff() {
+		compiled = fmt.Sprintf("under %gs", measureStops(t, "compiled loops", startCompiledSpinners(procs)))
+	}
+	generated := measureStops(t, "generated loops", startSpinners(t, procs, true))
+	t.Logf("slowest stop-the-world with %d spinning goroutines: compiled loops %s, polling generated loops under %gs", procs, compiled, generated)
 	// The control shows unpolled loops never stop. Polled ones must stop
 	// in bounded time; the bound allows for a loaded machine.
 	if generated > 1 {
@@ -84,6 +95,14 @@ func TestPreemptPoll(t *testing.T) {
 // spinBatch is how many iterations a compiled spinner runs between
 // touches of the shared words.
 const spinBatch = 1024
+
+// asyncPreemptOff reports whether GODEBUG turns off signal-based
+// preemption: asyncpreemptoff=1 does, and so does gccheckmark=1 (see
+// parseRuntimeDebugVars).
+func asyncPreemptOff() bool {
+	godebug := os.Getenv("GODEBUG")
+	return strings.Contains(godebug, "asyncpreemptoff=1") || strings.Contains(godebug, "gccheckmark=1")
+}
 
 // startCompiledSpinners starts n goroutines spinning in compiled Go, the
 // baseline for TestPreemptPoll. The loop makes no calls except, under
@@ -120,11 +139,11 @@ func startCompiledSpinners(n int) (stop func()) {
 // measureStops runs five collections while the spinners run, stops them,
 // and returns the upper bound of the slowest recorded time to stop the
 // world for a collection.
-func measureStops(t *testing.T, stop func()) float64 {
+func measureStops(t *testing.T, what string, stop func()) float64 {
 	t.Helper()
 	defer stop()
 	atomic.StoreUint64(&spinCounter, 0)
-	waitCounter(t) // a positive marker that the loops are running
+	waitCounter(t, what) // a positive marker that the loops are running
 
 	stopping := []metrics.Sample{{Name: "/sched/pauses/stopping/gc:seconds"}}
 	metrics.Read(stopping)
@@ -133,7 +152,7 @@ func measureStops(t *testing.T, stop func()) float64 {
 		progress := atomic.LoadUint64(&spinCounter)
 		runtime.GC()
 		if atomic.LoadUint64(&spinCounter) == progress {
-			t.Fatal("the loops made no progress across a collection")
+			t.Fatalf("the %s made no progress across a collection", what)
 		}
 	}
 	metrics.Read(stopping)
@@ -152,12 +171,13 @@ func measureStops(t *testing.T, stop func()) float64 {
 	return worst
 }
 
-func waitCounter(t *testing.T) {
+// waitCounter waits for the spinning loops, which what names, to count.
+func waitCounter(t *testing.T, what string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for atomic.LoadUint64(&spinCounter) == 0 {
 		if time.Now().After(deadline) {
-			t.Fatal("the generated loops never ran")
+			t.Fatalf("the %s never ran", what)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -201,7 +221,7 @@ func TestPreemptPollControlChild(t *testing.T) {
 	const procs = 4
 	runtime.GOMAXPROCS(procs)
 	startSpinners(t, procs-1, false)
-	waitCounter(t)
+	waitCounter(t, "generated loops")
 	println("loops running")
 	runtime.GC()
 	println("GC returned")

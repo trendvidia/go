@@ -89,11 +89,13 @@ jobs:
       # PREVIOUS commit's toolchain, and a change to compiler or linker
       # output for std got judged green against objects it never
       # produced. The fork now keys on the tools' content IDs, which
-      # closes that; the per-run cache stays so that a regression of
-      # #20 cannot quietly reopen it.
+      # closes that. The per-run cache stays so that a regression of
+      # #20 cannot turn into a false green here. It does not detect one:
+      # the cmd/go script test build_toolid_contentid does.
       #
       # A private directory per run rather than `go clean -cache` on a
-      # shared one: a runner hosting several jobs has been observed
+      # shared one: on the self-hosted runners this repo used until
+      # 2026-10-12, each hosting several jobs, a shared wipe was observed
       # pruning a concurrent job's entries out from under it.
       #
       # Set here rather than in a job-level `env:` because the value

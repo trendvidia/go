@@ -143,6 +143,15 @@ func contentID(buildID string) string {
 // modulo bugs. (Producing the exact same executables also requires that the different
 // build setups agree on details like $GOROOT and file name paths, but at least the
 // tool IDs do not make it impossible.)
+//
+// go-plus: this fork does not make that trade. Its tools change between builds
+// of the same release version, and stock Go of the same version names the same
+// release, so a version-keyed cache served one toolchain's objects to the other
+// (trendvidia/go#20). A release tool reports its build ID like a development one,
+// and toolID uses its content ID; only a tool with no build ID to report (one that
+// had to be linked externally) is still keyed on its version line. The cost is
+// the cross-host reproducibility above: the same release built on two hosts gives
+// two sets of tool IDs, so their outputs differ in the action ID half of the build ID.
 func (b *Builder) toolID(name string) string {
 	return b.toolIDCache.Do(name, func() string {
 		path := base.Tool(name)
@@ -178,11 +187,7 @@ func (b *Builder) toolID(name string) string {
 			return contentID(f[len(f)-1])
 		}
 		// go-plus: a release tool reports its build ID too, and we use its
-		// content ID, as on the development branch. Keying on the release
-		// version let a rebuilt toolchain, or stock Go of the same version,
-		// be served this toolchain's cache entries (trendvidia/go#20).
-		// The cost is the reproducibility described above: the same release
-		// built on different hosts now gives different tool IDs.
+		// content ID, as on the development branch (see the go-plus note above).
 		if id, ok := strings.CutPrefix(f[len(f)-1], "buildID="); ok && id != "" {
 			return contentID(id)
 		}

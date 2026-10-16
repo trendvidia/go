@@ -4,13 +4,18 @@
 # rebuilt compiler of the same version, or stock Go of the same version,
 # be served this toolchain's cache entries.
 
-# A tool linked externally has no build ID to report.
-[GOOS:android] skip
-[GOOS:ios] skip
+# A tool linked externally has no build ID to report. This is the
+# condition under which cmd/go leaves objabi.buildID unset (gc.go).
+[mustlinkext] skip
 
-# The compiler reports its build ID, whatever its version.
+# The compiler and linker report their build IDs, whatever their version.
+# (That a release in particular does so is pinned by
+# cmd/internal/objabi's TestVersionFlagBuildID, which does not depend on
+# this tree's VERSION.)
 go tool compile -V=full
 stdout '^compile version .* buildID=[^ /]+/[^ ]+$'
+go tool link -V=full
+stdout '^link version .* buildID=[^ /]+/[^ ]+$'
 
 go build ./cmd/toolid
 env GOCACHE=$WORK/gocache
@@ -31,6 +36,16 @@ env TOOLID_REWRITE=action
 go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
 cmp stdout base.txt
 
+# A compiler with no build ID to report, as one linked externally, is
+# keyed on its version line: it builds, gets a key of its own, and gets
+# the same key each time.
+env TOOLID_REWRITE=strip
+go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
+! cmp stdout base.txt
+cp stdout strip.txt
+go list -export -toolexec=$PWD/toolid -f '{{.BuildID}}' ./p
+cmp stdout strip.txt
+
 -- go.mod --
 module example.com/toolid
 
@@ -40,8 +55,10 @@ package p
 
 func F() int { return 1 }
 -- cmd/toolid/main.go --
-// Command toolid runs a tool and, when asked for -V=full, rewrites one
-// part of the build ID it reports, as a different compiler binary would.
+// Command toolid runs a tool and, when asked for -V=full, reports it as
+// a release (so that cmd/go takes its release path whatever this tree's
+// VERSION) and rewrites one part of the build ID, as a different
+// compiler binary would.
 package main
 
 import (
@@ -67,16 +84,29 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
-	line := strings.TrimSpace(string(out))
-	if i := strings.Index(line, " buildID="); i >= 0 {
-		head, id := line[:i+len(" buildID=")], line[i+len(" buildID="):]
+	// "compile version devel go1.N-... buildID=a/c" or
+	// "compile version go1.N.M X:exp buildID=a/c".
+	f := strings.Fields(string(out))
+	if len(f) < 3 || f[1] != "version" {
+		fmt.Fprintf(os.Stderr, "toolid: unexpected -V=full output %q\n", out)
+		os.Exit(1)
+	}
+	line := []string{f[0], "version", "go1.0.1"}
+	for _, field := range f[3:] {
+		if strings.HasPrefix(field, "X:") {
+			line = append(line, field)
+		}
+	}
+	if id, ok := strings.CutPrefix(f[len(f)-1], "buildID="); ok {
 		switch os.Getenv("TOOLID_REWRITE") {
 		case "content":
 			id = id[:strings.LastIndex(id, "/")+1] + "rewrittencontentid"
 		case "action":
 			id = "rewrittenactionid" + id[strings.Index(id, "/"):]
 		}
-		line = head + id
+		if os.Getenv("TOOLID_REWRITE") != "strip" {
+			line = append(line, "buildID="+id)
+		}
 	}
-	fmt.Println(line)
+	fmt.Println(strings.Join(line, " "))
 }

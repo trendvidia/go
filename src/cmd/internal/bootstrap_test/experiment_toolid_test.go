@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"internal/goversion"
+	"internal/platform"
 	"internal/testenv"
 	"os"
 	"os/exec"
@@ -98,10 +99,14 @@ func TestExperimentToolID(t *testing.T) {
 
 // compileVersion returns the compiler's -V=full line without its
 // build ID, which go-plus reports for releases too (trendvidia/go#20).
+// A compiler make.bash built must report one, unless it had to be
+// linked externally.
 func compileVersion(t *testing.T, dir string, env []string, goCmdPath string) []byte {
 	out := bytes.TrimSpace(runCmd(t, dir, env, goCmdPath, "tool", "compile", "-V=full"))
 	if i := bytes.Index(out, []byte(" buildID=")); i >= 0 {
 		out = out[:i]
+	} else if !platform.MustLinkExternal(runtime.GOOS, runtime.GOARCH, false) {
+		t.Errorf("compile -V=full reports no build ID: %q", out)
 	}
 	return out
 }

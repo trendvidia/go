@@ -8,3 +8,6 @@ import "unsafe"
 
 // AllocDomainCounter returns the runtime object that holds d's count.
 func AllocDomainCounter(d *AllocDomain) unsafe.Pointer { return d.d }
+
+// LayoutType returns the runtime type behind l.
+func LayoutType(l *Layout) unsafe.Pointer { return l.typ }

@@ -1575,9 +1575,9 @@ func cmdbootstrap() {
 	// see that change from toolchain1 to toolchain2, so in release builds,
 	// nothing looks out of date.
 	// (go-plus: this fork keys release builds on the tools' build IDs too,
-	// trendvidia/go#20, so here they behave like non-release builds. Only
-	// tools that must be linked externally have no build ID and still report
-	// their version instead.)
+	// trendvidia/go#20, so here they behave like non-release builds. A tool
+	// with no build ID, toolchain1's or one that must be linked externally,
+	// reports a hash of its own executable instead, trendvidia/go#56.)
 	// To keep the behavior the same in both non-release and release builds,
 	// we force-install everything here.
 	//
@@ -1607,10 +1607,10 @@ func cmdbootstrap() {
 		// on a release branch). We must not fall back to the shared build cache
 		// in this case. Leave $GOCACHE alone.
 		//
-		// go-plus: the premise above holds here only for tools that must
-		// be linked externally, which have no build ID and so are still
-		// keyed on their version (trendvidia/go#20). The rest are keyed on
-		// content, as in a non-release build. The upstream behavior is kept.
+		// go-plus: the premise above does not hold for this fork. Its
+		// tools are keyed on content, as in a non-release build: on their
+		// build IDs (trendvidia/go#20), or, for a tool with none, on a hash
+		// of its executable (trendvidia/go#56). The upstream behavior is kept.
 	} else {
 		os.Setenv("GOCACHE", oldgocache)
 	}

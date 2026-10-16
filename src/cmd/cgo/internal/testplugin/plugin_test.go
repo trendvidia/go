@@ -1500,7 +1500,7 @@ func TestUniqueTypesAndItabs(t *testing.T) {
 // the difference is why the static half is not redundant. On windows
 // the slots ARE the dedup mechanism -- the PE loader interposes
 // nothing, and cmd/go forces -typetab onto every windows build
-// (work/init.go; ROADMAP.md P1) -- so an empty table fails iface.exe's
+// (work/init.go; trendvidia/go#16) -- so an empty table fails iface.exe's
 // pointer-identity assertions outright. On POSIX the dynamic loader
 // binds the plugin's shared type descriptors to the host's copies
 // regardless, so the run passes with or without populated tables and
@@ -1526,7 +1526,7 @@ func TestTypetabLinkedTables(t *testing.T) {
 	// Private build cache. This fork ships a release-style VERSION, so
 	// cmd/go's toolID for the compiler and linker is version-only and
 	// does NOT change when they are rebuilt from source (trendvidia/
-	// go#81). A shared GOCACHE therefore hands this test std archives
+	// go#20). A shared GOCACHE therefore hands this test std archives
 	// linked by whatever toolchain filled the cache, and the test
 	// silently measures that one instead: measured 2026-08-27 on
 	// linux/arm64, a clean HEAD toolchain reporting 40+ bogus "promoted
@@ -1978,7 +1978,7 @@ func TestCgoPluginNotifyExport(t *testing.T) {
 	// accident and -Wl,--exclude-all-symbols swept it away with
 	// everything else the .def did not name. Ask the platform for the
 	// link rather than assuming which ones can do it: windows/arm64
-	// cannot link a cgo plugin externally at all (trendvidia/go-archive#131), and if that
+	// cannot link a cgo plugin externally at all (trendvidia/go#29), and if that
 	// changes this starts covering it instead of silently not.
 	t.Run("exports narrowed", func(t *testing.T) {
 		ldflags := "-ldflags=-linkmode=external -extldflags=-Wl,--exclude-all-symbols" +

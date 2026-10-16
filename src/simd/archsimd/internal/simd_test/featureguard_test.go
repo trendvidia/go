@@ -45,7 +45,7 @@ import (
 // Those are counted and reported separately rather than silently treated as
 // needing nothing, and unresolvedFamilies pins which kinds exist, so a new
 // kind of unannotated declaration fails here instead of quietly widening the
-// hole. Issue trendvidia/go-archive#97 tracks giving those declarations a feature.
+// hole. Issue trendvidia/go#23 tracks giving those declarations a feature.
 func TestFeatureGuards(t *testing.T) {
 	// The importer runs `go list -export` to find export data.
 	testenv.MustHaveGoBuild(t)
@@ -419,7 +419,7 @@ func isFeatureAccessor(fd *ast.FuncDecl) bool {
 // CPU feature anywhere in the source, with why each is unclassifiable. It is
 // a pin, not a permission: a declaration outside these families means
 // archsimd grew a new unannotated intrinsic, and the check below says so.
-// Resolving them for real is issue trendvidia/go-archive#97.
+// Resolving them for real is issue trendvidia/go#23.
 var unresolvedFamilies = []struct {
 	name  string
 	match func(fn *types.Func) bool

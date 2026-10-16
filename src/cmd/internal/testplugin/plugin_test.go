@@ -258,7 +258,7 @@ func main() {}
 `
 
 // TestStress exercises the multi-plugin lifecycle under concurrency
-// (ROADMAP A2, https://github.com/trendvidia/go-archive/issues/3): rounds of
+// (trendvidia/go-archive#3): rounds of
 // parallel Opens (including duplicate Opens of already-loaded paths,
 // which must dedup), concurrent calls through looked-up functions
 // into a shared package, Close of a random subset, GC churn, reopen.

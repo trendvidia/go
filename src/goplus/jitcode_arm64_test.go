@@ -4,7 +4,10 @@
 
 package goplus_test
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"goplus"
+)
 
 // Hand-assembled arm64 code for the write-barrier tests. Functions are
 // entered under ABIInternal: the first two arguments arrive in R0 and R1,
@@ -124,3 +127,64 @@ func storeLoopCode(mode int, flag, entry, helper uintptr) []byte {
 }
 
 func (a asm) b(bs ...byte) asm { return append(a, bs...) }
+
+// frameCode returns func(obj unsafe.Pointer, callee uintptr) uintptr: a
+// function with a Go-layout frame that keeps obj at 8(SP) and the
+// address of 8(SP) at 16(SP), calls the Go function at callee, and
+// returns 16(SP) minus the address of 8(SP), which is 0 if a stack copy
+// during the call adjusted that slot. frame and safe describe it for
+// goplus.RegisterCode; the two pointer slots are 8 and 16.
+func frameCode() (code []byte, frame []goplus.FrameStep, safe uint32) {
+	var a asm
+	a = a.i(0xf81e0ffe) // 0:  STR X30, [SP, #-32]!
+	a = a.i(0xf81f83fd) // 4:  STUR X29, [SP, #-8]
+	a = a.i(0xd10023fd) // 8:  SUB X29, SP, #8
+	a = a.i(0xf90007e0) // 12: STR X0, [SP, #8]
+	a = a.i(0x910023f0) // 16: ADD X16, SP, #8
+	a = a.i(0xf9000bf0) // 20: STR X16, [SP, #16]
+	a = a.i(0xd63f0020) // 24: BLR X1
+	a = a.i(0xf9400be0) // 28: LDR X0, [SP, #16]
+	a = a.i(0x910023e1) // 32: ADD X1, SP, #8
+	a = a.i(0xcb010000) // 36: SUB X0, X0, X1
+	a = a.i(0xf85f83fd) // 40: LDUR X29, [SP, #-8]
+	a = a.i(0xf84207fe) // 44: LDR X30, [SP], #32
+	a = a.i(insRet)     // 48: RET
+	return a, []goplus.FrameStep{{Off: 0, Size: 0}, {Off: 4, Size: 32}, {Off: 48, Size: 0}}, 28
+}
+
+// framePointerSlots are frameCode's pointer slots, as SP offsets.
+var framePointerSlots = []uint32{8, 16}
+
+// abiIntRegs and abiFloatRegs are ABIInternal's argument and result
+// registers on arm64, as documented in package goplus.
+var (
+	abiIntRegs   = []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+	abiFloatRegs = 16 // F0-F15
+)
+
+// abiProbeCode returns a function that stores each integer argument
+// register in order to out[0:16], each of F0-F15 to out[16:32], and
+// returns 100+i in the i'th integer result register.
+func abiProbeCode(out uintptr) []byte {
+	var a asm
+	a = a.mov64(16, uint64(out))
+	for i, r := range abiIntRegs {
+		a = a.i(0xf9000000 | uint32(i)<<10 | 16<<5 | uint32(r)) // STR Xr, [X16, #8*i]
+	}
+	for x := range uint32(16) {
+		a = a.i(0xfd000000 | (16+x)<<10 | 16<<5 | x) // STR Dx, [X16, #8*(16+x)]
+	}
+	for i, r := range abiIntRegs {
+		a = a.i(0xd2800000 | uint32(100+i)<<5 | uint32(r)) // MOVZ Xr, #100+i
+	}
+	return a.i(insRet)
+}
+
+type abiProbeFunc = func(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15 uintptr,
+	f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15 float64) (r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15 uintptr)
+
+func callABIProbe(f abiProbeFunc) []uintptr {
+	r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15 := f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+		0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5)
+	return []uintptr{r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15}
+}

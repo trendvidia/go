@@ -315,9 +315,29 @@ pkg uuid, method (UUID) Compare(UUID) int #62026
 pkg uuid, method (UUID) MarshalText() ([]uint8, error) #62026
 pkg uuid, method (UUID) String() string #62026
 pkg uuid, type UUID [16]uint8 #62026
-pkg goplus, const JIT = 3 #9
+pkg goplus, const JIT = 4 #8
 pkg goplus, const JIT ideal-int #10
 pkg goplus, func ObjectExtent(unsafe.Pointer) (unsafe.Pointer, uintptr, bool) #10
 pkg goplus, func SetNoTinyAlloc(bool) bool #15
 pkg goplus, func WriteBarrierEntry(int) uintptr #9
 pkg goplus, func WriteBarrierFlag() *uint32 #9
+pkg goplus, func RegisterCode([]Func) (*CodeRange, error) #8
+pkg goplus, method (*CodeRange) Unregister() error #8
+pkg goplus, type CodeRange struct #8
+pkg goplus, type FrameStep struct #8
+pkg goplus, type FrameStep struct, Off uint32 #8
+pkg goplus, type FrameStep struct, Size uint32 #8
+pkg goplus, type Func struct #8
+pkg goplus, type Func struct, End uintptr #8
+pkg goplus, type Func struct, Entry uintptr #8
+pkg goplus, type Func struct, File string #8
+pkg goplus, type Func struct, Frame []FrameStep #8
+pkg goplus, type Func struct, Lines []LineStep #8
+pkg goplus, type Func struct, Name string #8
+pkg goplus, type Func struct, SafePoints []SafePoint #8
+pkg goplus, type LineStep struct #8
+pkg goplus, type LineStep struct, Line int32 #8
+pkg goplus, type LineStep struct, Off uint32 #8
+pkg goplus, type SafePoint struct #8
+pkg goplus, type SafePoint struct, Off uint32 #8
+pkg goplus, type SafePoint struct, Pointers []uint32 #8

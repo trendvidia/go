@@ -369,6 +369,10 @@ func (f *_func) funcInfo() funcInfo {
 			break
 		}
 	}
+	if mod == nil {
+		// Code generated at run time (goplus.RegisterCode).
+		mod = goplusModuleOfFunc(ptr)
+	}
 	return funcInfo{f, mod}
 }
 
@@ -942,7 +946,8 @@ func findmoduledatap(pc uintptr) *moduledata {
 			return datap
 		}
 	}
-	return nil
+	// Code generated at run time and registered with goplus.RegisterCode.
+	return goplusFindModule(pc)
 }
 
 type funcInfo struct {
@@ -1169,7 +1174,11 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 					print("runtime: table value ", val, "@", prevpc, " != cache value ", checkVal, "@", checkPC, " at PC ", targetpc, " off ", off, "\n")
 					throw("bad pcvalue cache")
 				}
-			} else {
+			} else if datap.pcHeader != &goplusPCHeader {
+				// Results for code generated at run time are not
+				// cached: the cache is keyed by PC and table offset
+				// only, and new code can be registered at the
+				// addresses of code that was unregistered.
 				mp := acquirem()
 				cache := &mp.pcvalueCache
 				cache.inUse++

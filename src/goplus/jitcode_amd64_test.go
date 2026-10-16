@@ -4,7 +4,10 @@
 
 package goplus_test
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"goplus"
+)
 
 // Hand-assembled amd64 code for the write-barrier tests. Functions are
 // entered under ABIInternal: the first two arguments arrive in AX and BX,
@@ -95,4 +98,65 @@ func storeLoopCode(mode int, flag, entry, helper uintptr) []byte {
 	body = body.b(0x48, 0xff, 0xc9)             // DECQ CX
 	body = body.b(0x75, byte(-(len(body) + 2))) // JNE loop
 	return body.b(0xc3)                         // RET
+}
+
+// frameCode returns func(obj unsafe.Pointer, callee uintptr) uintptr: a
+// function with a Go-layout frame that keeps obj at 0(SP) and the
+// address of 0(SP) at 8(SP), calls the Go function at callee, and returns
+// 8(SP) minus the address of 0(SP), which is 0 if a stack copy during
+// the call adjusted that slot. frame and safe describe it for
+// goplus.RegisterCode; the two pointer slots are 0 and 8.
+func frameCode() (code []byte, frame []goplus.FrameStep, safe uint32) {
+	var a asm
+	a = a.b(0x48, 0x83, 0xec, 0x18)       // 0:  SUBQ $24, SP
+	a = a.b(0x48, 0x89, 0x6c, 0x24, 0x10) // 4:  MOVQ BP, 16(SP)
+	a = a.b(0x48, 0x8d, 0x6c, 0x24, 0x10) // 9:  LEAQ 16(SP), BP
+	a = a.b(0x48, 0x89, 0x04, 0x24)       // 14: MOVQ AX, (SP)
+	a = a.b(0x48, 0x8d, 0x0c, 0x24)       // 18: LEAQ (SP), CX
+	a = a.b(0x48, 0x89, 0x4c, 0x24, 0x08) // 22: MOVQ CX, 8(SP)
+	a = a.b(0xff, 0xd3)                   // 27: CALL BX
+	a = a.b(0x48, 0x8b, 0x44, 0x24, 0x08) // 29: MOVQ 8(SP), AX
+	a = a.b(0x48, 0x8d, 0x0c, 0x24)       // 34: LEAQ (SP), CX
+	a = a.b(0x48, 0x29, 0xc8)             // 38: SUBQ CX, AX
+	a = a.b(0x48, 0x8b, 0x6c, 0x24, 0x10) // 41: MOVQ 16(SP), BP
+	a = a.b(0x48, 0x83, 0xc4, 0x18)       // 46: ADDQ $24, SP
+	a = a.b(0xc3)                         // 50: RET
+	return a, []goplus.FrameStep{{Off: 0, Size: 0}, {Off: 4, Size: 24}, {Off: 50, Size: 0}}, 29
+}
+
+// framePointerSlots are frameCode's pointer slots, as SP offsets.
+var framePointerSlots = []uint32{0, 8}
+
+// abiIntRegs and abiFloatRegs are ABIInternal's argument and result
+// registers on amd64, as documented in package goplus.
+var (
+	abiIntRegs   = []byte{0, 3, 1, 7, 6, 8, 9, 10, 11} // AX BX CX DI SI R8 R9 R10 R11
+	abiFloatRegs = 15                                  // X0-X14
+)
+
+// abiProbeCode returns a function that stores each integer argument
+// register in order to out[0:9], each of X0-X15 to out[9:25], and returns
+// 100+i in the i'th integer result register.
+func abiProbeCode(out uintptr) []byte {
+	var a asm
+	a = a.b(0x49, 0xbd).u64(uint64(out)) // MOVQ $out, R13
+	for i, r := range abiIntRegs {
+		a = a.b(0x49|(r>>3)<<2, 0x89, 0x85|(r&7)<<3).u32(uint32(8 * i)) // MOVQ r, 8*i(R13)
+	}
+	for x := range byte(16) {
+		a = a.b(0xf2, 0x41|(x>>3)<<2, 0x0f, 0x11, 0x85|(x&7)<<3).u32(uint32(8 * (9 + int(x)))) // MOVSD Xx, ...(R13)
+	}
+	for i, r := range abiIntRegs {
+		a = a.b(0x48|r>>3, 0xc7, 0xc0|r&7).u32(uint32(100 + i)) // MOVQ $100+i, r
+	}
+	return a.b(0xc3)
+}
+
+type abiProbeFunc = func(a0, a1, a2, a3, a4, a5, a6, a7, a8 uintptr,
+	f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14 float64) (r0, r1, r2, r3, r4, r5, r6, r7, r8 uintptr)
+
+func callABIProbe(f abiProbeFunc) []uintptr {
+	r0, r1, r2, r3, r4, r5, r6, r7, r8 := f(1, 2, 3, 4, 5, 6, 7, 8, 9,
+		0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5)
+	return []uintptr{r0, r1, r2, r3, r4, r5, r6, r7, r8}
 }

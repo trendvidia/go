@@ -1491,6 +1491,7 @@ const (
 	stwForTestPageCachePagesLeaked                  // "PageCachePagesLeaked (test)"
 	stwForTestResetDebugLog                         // "ResetDebugLog (test)"
 	stwPluginClose                                  // "plugin close"
+	stwGoplusCode                                   // "goplus code unregister"
 )
 
 func (r stwReason) String() string {
@@ -1523,6 +1524,7 @@ var stwReasonStrings = [...]string{
 	stwForTestPageCachePagesLeaked: "PageCachePagesLeaked (test)",
 	stwForTestResetDebugLog:        "ResetDebugLog (test)",
 	stwPluginClose:                 "plugin close",
+	stwGoplusCode:                  "goplus code unregister",
 }
 
 // worldStop provides context from the stop-the-world required by the

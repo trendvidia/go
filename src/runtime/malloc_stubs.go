@@ -79,7 +79,8 @@ func mallocStub(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		mp = acquirem()
 
 		// Do we need to fall back to slow path?
-		forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+		forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) ||
+			(isTiny_ && getg().goplusNoTiny)
 
 		if forceSlowPath {
 			releasem(mp) // Slow path will reacquire.
@@ -105,8 +106,11 @@ func mallocStub(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			//
 			// Call directly into the NoScan allocator.
 			// See go.dev/issue/76356
+			//
+			// A goroutine that set goplus.SetNoTinyAlloc does the same,
+			// so each of its allocations has a slot of its own.
 			gp := getg()
-			if goexperiment.RuntimeSecret && gp.secret > 0 {
+			if goexperiment.RuntimeSecret && gp.secret > 0 || gp.goplusNoTiny {
 				return mallocgcSmallNoScanSC2(size, typ, needzero)
 			}
 		}

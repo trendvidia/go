@@ -827,6 +827,10 @@ func (sl *sweepLocked) sweep(preserve bool) bool {
 			// have mysterious crashes due to confused memory reuse.
 			// It should be possible to switch back to sysFree if we also
 			// implement and then call some kind of mheap.deleteSpan.
+			// Drop the type: it may be a heap type that this same cycle
+			// frees (a goplus.Layout's, trendvidia/go#12), and the mspan
+			// outlives it.
+			atomic.StorepNoWB(unsafe.Pointer(&s.largeType), nil)
 			if debug.efence > 0 {
 				s.limit = 0 // prevent mlookup from finding this span
 				sysFault(unsafe.Pointer(s.base()), size)

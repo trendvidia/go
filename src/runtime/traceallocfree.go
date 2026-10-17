@@ -71,7 +71,7 @@ func traceSnapshotMemory(gen uintptr) {
 		for i := uintptr(0); i < uintptr(s.nelems); i++ {
 			if abits.index < uintptr(s.freeindex) || abits.isMarked() {
 				x := s.base() + i*s.elemsize
-				trace.HeapObjectExists(x, traceRecordedType(s, x))
+				trace.HeapObjectExists(x, traceRecordedType(s, i, x))
 			}
 			abits.advance()
 		}
@@ -84,15 +84,26 @@ func traceSnapshotMemory(gen uintptr) {
 	traceRelease(trace)
 }
 
-// traceRecordedType returns the type the allocator recorded for the
-// object at x in span s: its malloc header, or its span's largeType; nil
-// if no type is recorded with the object. It never dereferences the
-// type. The snapshot visits dead objects in spans not yet swept, and the
-// type of such an object may be a goplus.Layout type that died in the
-// same cycle and whose memory is already reused (trendvidia/go#63).
-func traceRecordedType(s *mspan, x uintptr) *abi.Type {
+// traceRecordedType returns the type the allocator recorded for object
+// i at x in span s, its malloc header or its span's largeType, or nil if
+// none is recorded. It returns nil without reading the object for a dead
+// object in a span not yet swept: its type may be a goplus.Layout type
+// that died in the same cycle, already freed and reused
+// (trendvidia/go#63). Any other allocated object is live, and a live
+// object keeps its type alive (see shadeObjectType), so the type it
+// returns may be read.
+//
+// The world is stopped, so no span is part way through being swept.
+func traceRecordedType(s *mspan, i, x uintptr) *abi.Type {
 	if s.spanclass.noscan() || heapBitsInSpan(s.elemsize) {
 		return nil
+	}
+	if sg := mheap_.sweepgen; s.sweepgen == sg-2 || s.sweepgen == sg+1 {
+		// Unswept: the mark bits are this cycle's, and an allocated
+		// object without one is dead.
+		if !s.markBitsForIndex(i).isMarked() {
+			return nil
+		}
 	}
 	if s.spanclass.sizeclass() != 0 {
 		return *(**abi.Type)(unsafe.Pointer(x))
@@ -100,18 +111,18 @@ func traceRecordedType(s *mspan, x uintptr) *abi.Type {
 	return (*abi.Type)(atomic.Loadp(unsafe.Pointer(&s.largeType)))
 }
 
-// traceHeapTypeless drops a type made at run time, one in the heap, from
-// an alloc/free event. The trace's type table holds types outside the
-// collector's view until the generation ends, and dumps them then; a
-// goplus.Layout type can be freed before that (trendvidia/go#63).
-// Types reflect makes are in the heap too and lose their type the same
-// way. Events already carry no type for every object the allocator
-// records none for, so consumers handle its absence.
+// traceTypeFor returns the type to record for an object of type typ in
+// an alloc/free event: typ itself, or nil for a goplus.Layout type. The
+// trace's type table holds types outside the collector's view until the
+// generation ends, and reads them then; a layout type can be freed
+// before that (trendvidia/go#63). Every other type, the types reflect
+// makes included, is never freed. Events already carry no type for
+// every object the allocator records none for, so consumers handle its
+// absence.
 //
-// The test is the address alone, in a heap arena or not, so it holds for
-// a type already freed, whatever has become of its span.
-func traceHeapTypeless(typ *abi.Type) *abi.Type {
-	if typ != nil && heapArenaOf(uintptr(unsafe.Pointer(typ))) != nil {
+// typ must be live: it is read.
+func traceTypeFor(typ *abi.Type) *abi.Type {
+	if typ != nil && isLayoutType(typ) {
 		return nil
 	}
 	return typ
@@ -148,14 +159,14 @@ func traceSpanID(s *mspan) traceArg {
 // The type is optional, and the size of the slot occupied the object is inferred from the
 // span containing it.
 func (tl traceLocker) HeapObjectExists(addr uintptr, typ *abi.Type) {
-	tl.eventWriter(tracev2.GoRunning, tracev2.ProcRunning).event(tracev2.EvHeapObject, traceHeapObjectID(addr), tl.rtype(traceHeapTypeless(typ)))
+	tl.eventWriter(tracev2.GoRunning, tracev2.ProcRunning).event(tracev2.EvHeapObject, traceHeapObjectID(addr), tl.rtype(traceTypeFor(typ)))
 }
 
 // HeapObjectAlloc records that an object was newly allocated at addr with the provided type.
 // The type is optional, and the size of the slot occupied the object is inferred from the
 // span containing it.
 func (tl traceLocker) HeapObjectAlloc(addr uintptr, typ *abi.Type) {
-	tl.eventWriter(tracev2.GoRunning, tracev2.ProcRunning).event(tracev2.EvHeapObjectAlloc, traceHeapObjectID(addr), tl.rtype(traceHeapTypeless(typ)))
+	tl.eventWriter(tracev2.GoRunning, tracev2.ProcRunning).event(tracev2.EvHeapObjectAlloc, traceHeapObjectID(addr), tl.rtype(traceTypeFor(typ)))
 }
 
 // HeapObjectFree records that an object at addr is about to be freed.

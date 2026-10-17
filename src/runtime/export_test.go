@@ -2161,3 +2161,12 @@ func PCValueCacheHolds(lo, hi uintptr) bool {
 	}
 	return false
 }
+
+// TraceRecordsTypeOf reports whether the alloc/free trace records a type
+// for the live heap object at p (go-plus, trendvidia/go#63).
+func TraceRecordsTypeOf(p unsafe.Pointer) bool {
+	s := spanOfHeap(uintptr(p))
+	i := s.objIndex(uintptr(p))
+	x := s.base() + i*s.elemsize
+	return traceTypeFor(traceRecordedType(s, i, x)) != nil
+}

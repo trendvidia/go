@@ -1230,17 +1230,14 @@ func scanObject(b uintptr, gcw *gcWork) {
 		n = s.base() + s.elemsize - b
 		n = min(n, maxObletBytes)
 		tp = s.typePointersOfUnchecked(s.base())
-		if b == s.base() && tp.typ != nil && !s.isUserArenaChunk {
-			// Once per object, from its first oblet. A user arena
-			// chunk's type is its own metadata, not a heap object.
-			shadeObjectType(tp.typ, gcw)
+		if b == s.base() {
+			// Once per object, from its first oblet.
+			shadeObjectType(s, tp.typ, gcw)
 		}
 		tp = tp.fastForward(b-tp.addr, b+n)
 	} else {
 		tp = s.typePointersOfUnchecked(b)
-		if tp.typ != nil {
-			shadeObjectType(tp.typ, gcw)
-		}
+		shadeObjectType(s, tp.typ, gcw)
 	}
 
 	var scanSize uintptr

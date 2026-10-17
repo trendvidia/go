@@ -18,6 +18,8 @@ import (
 	"weak"
 )
 
+const ptrSize = unsafe.Sizeof(uintptr(0))
+
 type leaf struct{ v [8]uint64 }
 
 // newLeaf returns a leaf holding v, and a flag the collector sets when
@@ -52,8 +54,9 @@ func churn() {
 // headerMin is the smallest object for which the runtime records the
 // type with the object (a malloc header, or a large object's span) and
 // reads it back on every scan; below it the type is not needed after
-// allocation.
-const headerMin = 512 + 1
+// allocation. It is one pointer mask word's worth of words: 512 bytes
+// on 64-bit ports, 128 on 32-bit ones.
+const headerMin = ptrSize*8*ptrSize + 1
 
 // TestLayoutKeepsTypeAlive drops a layout while an object allocated
 // from it lives on, and checks that the collector still scans the
@@ -63,7 +66,7 @@ const headerMin = 512 + 1
 func TestLayoutKeepsTypeAlive(t *testing.T) {
 	for _, size := range []uintptr{64, 1024, 64 << 10} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
-			l := goplus.NewLayout(size, 8, []byte{1})
+			l := goplus.NewLayout(size, ptrSize, []byte{1})
 			obj := l.New()
 			c, freed := newLeaf(42)
 			*(**leaf)(obj) = c
@@ -93,24 +96,37 @@ func TestLayoutKeepsTypeAlive(t *testing.T) {
 
 // TestLayoutPointerMask checks both halves of the mask: a pointer word
 // keeps what it points to alive, and an address stored in a scalar word
-// does not.
+// does not. The collector reads a mask one word (64 or 32 bits) at a
+// time, so some layouts have their pointers past the mask's first word,
+// and one has none in its first word at all.
 func TestLayoutPointerMask(t *testing.T) {
-	const ptrSize = unsafe.Sizeof(uintptr(0))
-	for _, size := range []uintptr{64, 1024} {
-		t.Run(fmt.Sprint(size), func(t *testing.T) {
-			// Words 1, 3 and 6 hold pointers.
-			l := goplus.NewLayout(size, ptrSize, []byte{1<<1 | 1<<3 | 1<<6})
+	for _, tt := range []struct {
+		size   uintptr
+		ptrs   []uintptr // pointer words, ascending
+		scalar uintptr   // a scalar word
+	}{
+		{64, []uintptr{1, 3, 6}, 2},
+		{1024, []uintptr{1, 3, 6}, 2},
+		{1024, []uintptr{70, 127}, 65},
+		{64 << 10, []uintptr{1, 70, 1000}, 65},
+	} {
+		t.Run(fmt.Sprint(tt.size, tt.ptrs), func(t *testing.T) {
+			mask := make([]byte, tt.ptrs[len(tt.ptrs)-1]/8+1)
+			for _, w := range tt.ptrs {
+				mask[w/8] |= 1 << (w % 8)
+			}
+			l := goplus.NewLayout(tt.size, ptrSize, mask)
 			obj := l.New()
-			words := unsafe.Slice((*uintptr)(obj), size/ptrSize)
+			words := unsafe.Slice((*uintptr)(obj), tt.size/ptrSize)
 			var kept []*atomic.Bool
-			for _, w := range []int{1, 3, 6} {
+			for _, w := range tt.ptrs {
 				c, freed := newLeaf(uint64(w))
 				*(**leaf)(unsafe.Pointer(&words[w])) = c
 				kept = append(kept, freed)
 			}
-			// A leaf whose only reference is an address in scalar word 2.
-			c, scalarFreed := newLeaf(2)
-			words[2] = uintptr(unsafe.Pointer(c))
+			// A leaf whose only reference is an address in a scalar word.
+			c, scalarFreed := newLeaf(uint64(tt.scalar))
+			words[tt.scalar] = uintptr(unsafe.Pointer(c))
 			c = nil
 
 			for i := 0; i < 10 && !scalarFreed.Load(); i++ {
@@ -119,7 +135,7 @@ func TestLayoutPointerMask(t *testing.T) {
 			if !scalarFreed.Load() {
 				t.Error("an address in a scalar word kept its target alive: the mask marks it as a pointer")
 			}
-			for i, w := range []int{1, 3, 6} {
+			for i, w := range tt.ptrs {
 				if got := (*(**leaf)(unsafe.Pointer(&words[w]))).v[0]; got != uint64(w) || kept[i].Load() {
 					t.Errorf("pointer word %d: value %d, freed %v", w, got, kept[i].Load())
 				}
@@ -129,8 +145,59 @@ func TestLayoutPointerMask(t *testing.T) {
 	}
 }
 
+// TestLayoutNoPointers allocates from layouts without pointer words: tiny,
+// small, header-sized and large, with and without a mask. Their objects
+// record no type, and an address stored in one keeps nothing alive.
+func TestLayoutNoPointers(t *testing.T) {
+	for _, tt := range []struct {
+		size, align uintptr
+		mask        []byte
+	}{
+		{1, 1, nil},
+		{12, 4, nil},
+		{ptrSize, ptrSize, []byte{0}},
+		{1024, ptrSize, nil},
+		{64 << 10, ptrSize, make([]byte, 64)},
+	} {
+		t.Run(fmt.Sprint(tt.size), func(t *testing.T) {
+			l := goplus.NewLayout(tt.size, tt.align, tt.mask)
+			obj := l.New()
+			b := unsafe.Slice((*byte)(obj), tt.size)
+			for i := range b {
+				if b[i] != 0 {
+					t.Fatalf("byte %d of a new object is %#x, not zero", i, b[i])
+				}
+				b[i] = byte(i)
+			}
+			// An address in word 0, which the checks below skip.
+			start := uintptr(0)
+			var scalarFreed *atomic.Bool
+			if tt.size >= ptrSize {
+				var c *leaf
+				c, scalarFreed = newLeaf(1)
+				*(*uintptr)(obj) = uintptr(unsafe.Pointer(c))
+				c = nil
+				start = ptrSize
+			}
+			l = nil
+			for i := 0; i < 10 && scalarFreed != nil && !scalarFreed.Load(); i++ {
+				runtime.GC()
+			}
+			churn()
+			for i := start; i < tt.size; i++ {
+				if b[i] != byte(i) {
+					t.Fatalf("byte %d is %#x, want %#x", i, b[i], byte(i))
+				}
+			}
+			if scalarFreed != nil && !scalarFreed.Load() {
+				t.Error("an address in a pointer-free object kept its target alive")
+			}
+			runtime.KeepAlive(obj)
+		})
+	}
+}
+
 func TestLayoutNewArray(t *testing.T) {
-	const ptrSize = unsafe.Sizeof(uintptr(0))
 	const n = 100
 	l := goplus.NewLayout(3*ptrSize, ptrSize, []byte{1 << 1}) // word 1 of 3
 	if l.Size() != 3*ptrSize {
@@ -155,12 +222,13 @@ func TestLayoutNewArray(t *testing.T) {
 	}
 	runtime.KeepAlive(arr)
 
+	l = goplus.NewLayout(ptrSize, ptrSize, nil)
 	defer func() {
 		if recover() == nil {
 			t.Error("NewArray(-1) did not panic")
 		}
 	}()
-	goplus.NewLayout(8, 8, nil).NewArray(-1)
+	l.NewArray(-1)
 }
 
 // TestLayoutConcurrentGC allocates from short-lived layouts while
@@ -197,7 +265,7 @@ func TestLayoutConcurrentGC(t *testing.T) {
 		if i%8 == 0 {
 			size = 40 << 10 // large objects take the span's type path
 		}
-		l := goplus.NewLayout(size, 8, []byte{1})
+		l := goplus.NewLayout(size, ptrSize, []byte{1})
 		obj := l.New()
 		c, freed := newLeaf(i)
 		*(**leaf)(obj) = c
@@ -262,7 +330,7 @@ func TestLayoutLargeAllocDuringMark(t *testing.T) {
 			for v := uint64(0); cycles.Load() < 200; {
 				var ls [batch]*goplus.Layout // on the stack only
 				for i := range ls {
-					ls[i] = goplus.NewLayout(32<<10+8, 8, []byte{1})
+					ls[i] = goplus.NewLayout(32<<10+8, ptrSize, []byte{1})
 				}
 				for i := range ls {
 					obj := ls[i].New()
@@ -309,8 +377,8 @@ func TestLayoutHeapReturnsToBaseline(t *testing.T) {
 	base := heap()
 	objs := make([]unsafe.Pointer, 100_000)
 	for i := range objs {
-		// 576 bytes: just above the size that records its type per object.
-		objs[i] = goplus.NewLayout(576, 8, []byte{1}).New()
+		// 576 bytes: above the size that records its type per object.
+		objs[i] = goplus.NewLayout(576, ptrSize, []byte{1}).New()
 	}
 	held := heap()
 	runtime.KeepAlive(objs)
@@ -336,8 +404,8 @@ func TestLayoutHeapDump(t *testing.T) {
 	}
 	defer f.Close()
 	objs := []unsafe.Pointer{
-		goplus.NewLayout(1024, 8, []byte{1}).New(),
-		goplus.NewLayout(64<<10, 8, []byte{1}).New(),
+		goplus.NewLayout(1024, ptrSize, []byte{1}).New(),
+		goplus.NewLayout(64<<10, ptrSize, []byte{1}).New(),
 	}
 	debug.WriteHeapDump(f.Fd())
 	runtime.KeepAlive(objs)
@@ -351,19 +419,26 @@ func TestLayoutHeapDump(t *testing.T) {
 }
 
 func TestNewLayoutPanics(t *testing.T) {
-	const ptrSize = unsafe.Sizeof(uintptr(0))
-	for _, tt := range []struct {
+	type panicCase struct {
 		name        string
 		size, align uintptr
 		mask        []byte
-	}{
-		{"zero size", 0, 8, nil},
-		{"zero align", 8, 0, nil},
+	}
+	tests := []panicCase{
+		{"zero size", 0, ptrSize, nil},
+		{"zero align", ptrSize, 0, nil},
 		{"align not a power of two", 12, 3, nil},
 		{"align above pointer size", 32, 2 * ptrSize, nil},
 		{"size not a multiple of align", 6, 4, nil},
-		{"pointers without pointer alignment", 16, 4, []byte{1}},
-	} {
+		{"pointers without pointer alignment", 4 * ptrSize, ptrSize / 2, []byte{1}},
+	}
+	if ptrSize == 8 {
+		// Larger than any object the runtime can allocate. A 32-bit port
+		// can allocate up to the top of its address space, so there is no
+		// such size there.
+		tests = append(tests, panicCase{"size above the allocation limit", 1 << (8*ptrSize - 8), ptrSize, nil})
+	}
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			defer func() {
 				if recover() == nil {
@@ -375,7 +450,7 @@ func TestNewLayoutPanics(t *testing.T) {
 	}
 	// Valid edge cases.
 	goplus.NewLayout(1, 1, nil)
-	goplus.NewLayout(4, 4, []byte{0}) // a mask with no pointers needs no alignment
+	goplus.NewLayout(4, 4, []byte{0})                // a mask with no pointers needs no alignment
 	goplus.NewLayout(ptrSize, ptrSize, []byte{0xff}) // bits past the end are ignored
 }
 

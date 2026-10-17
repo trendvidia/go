@@ -1799,7 +1799,7 @@ func mallocgcLarge(size uintptr, typ *_type, needzero bool) (unsafe.Pointer, uin
 		if writeBarrier.enabled {
 			// Allocated black: its type must survive this cycle too;
 			// see shadeObjectType.
-			shadeObjectType(typ, &mp.p.ptr().gcw)
+			shadeObjectType(span, typ, &mp.p.ptr().gcw)
 		}
 	}
 	// Publish the object again, now with zeroed memory and initialized type information.

@@ -15,7 +15,10 @@ import (
 
 // goplus_newLayoutType returns a type for objects of the given size and
 // alignment whose pointer words are the set bits of mask (bit i of byte
-// i/8 for word i). The caller (goplus.NewLayout) has validated them.
+// i/8 for word i), the last of them word ptrWords-1; ptrWords is 0 if
+// there are none. The caller (goplus.NewLayout) has validated them, all
+// but the size's upper bound: it returns nil for a size larger than any
+// object the runtime can allocate.
 //
 // The type and its pointer mask are ordinary heap objects. Nothing
 // caches them: they are collected when no object allocated from the
@@ -29,7 +32,10 @@ import (
 // the collector does not trace it.
 //
 //go:linkname goplus_newLayoutType goplus.runtime_newLayoutType
-func goplus_newLayoutType(size, align uintptr, mask []byte) unsafe.Pointer {
+func goplus_newLayoutType(size, align, ptrWords uintptr, mask []byte) unsafe.Pointer {
+	if size > maxAlloc {
+		return nil
+	}
 	st := new(abi.StructType)
 	t := &st.Type
 	t.Size_ = size
@@ -39,25 +45,17 @@ func goplus_newLayoutType(size, align uintptr, mask []byte) unsafe.Pointer {
 	t.Hash = cheaprand()
 	t.Str = layoutTypeName()
 
-	// PtrBytes ends at the last pointer word.
-	words := size / goarch.PtrSize
-	last := -1
-	for i := uintptr(0); i < words && i/8 < uintptr(len(mask)); i++ {
-		if mask[i/8]&(1<<(i%8)) != 0 {
-			last = int(i)
-		}
-	}
-	if last >= 0 {
-		t.PtrBytes = uintptr(last+1) * goarch.PtrSize
+	if ptrWords != 0 {
+		t.PtrBytes = ptrWords * goarch.PtrSize
 		// The collector reads a mask a pointer-sized word at a time from
 		// an aligned address (readUintptr), so it is stored in whole,
 		// aligned words, its bytes in mask order.
-		n := (uintptr(last) + 8) / 8
+		n := (ptrWords + 7) / 8
 		maskWords := make([]uintptr, (n+goarch.PtrSize-1)/goarch.PtrSize)
 		gcdata := unsafe.Slice((*byte)(unsafe.Pointer(&maskWords[0])), n)
 		copy(gcdata, mask)
 		// Clear any bits past the last pointer word.
-		if r := uintptr(last+1) % 8; r != 0 {
+		if r := ptrWords % 8; r != 0 {
 			gcdata[n-1] &= 1<<r - 1
 		}
 		t.GCData = &gcdata[0]
@@ -69,8 +67,7 @@ func goplus_newLayoutType(size, align uintptr, mask []byte) unsafe.Pointer {
 //
 //go:linkname goplus_layoutNew goplus.runtime_layoutNew
 func goplus_layoutNew(t unsafe.Pointer) unsafe.Pointer {
-	typ := (*_type)(t)
-	return mallocgc(typ.Size_, typ, true)
+	return newobject((*_type)(t))
 }
 
 // goplus_layoutNewArray allocates n contiguous zeroed objects of the

@@ -30,12 +30,16 @@ type Layout struct {
 // Bits past the end of the object are ignored, and a short ptrmask
 // leaves the remaining words without pointers.
 //
-// size must be positive and a multiple of align. align must be a power
-// of two no larger than the pointer size, and must equal it if any word
-// holds a pointer. NewLayout panics otherwise.
+// size must be positive, a multiple of align, and no larger than the
+// largest object the runtime can allocate. align must be a power of two
+// no larger than the pointer size, and must equal it if any word holds a
+// pointer. NewLayout panics otherwise.
 //
 // A word marked as a pointer must only ever hold nil or a valid pointer,
-// as a Go pointer field must; the other words may hold anything.
+// as a Go pointer field must; the other words may hold anything. A store
+// of a pointer into a pointer word must be recorded while the collector
+// is marking, as Go code storing through a typed pointer does; generated
+// code does so as [WriteBarrierFlag] describes.
 func NewLayout(size, align uintptr, ptrmask []byte) *Layout {
 	const ptrSize = unsafe.Sizeof(uintptr(0))
 	if size == 0 {
@@ -47,18 +51,22 @@ func NewLayout(size, align uintptr, ptrmask []byte) *Layout {
 	if size%align != 0 {
 		panic("goplus: NewLayout size is not a multiple of its alignment")
 	}
+	// ptrWords ends at the last pointer word.
 	words := size / ptrSize
-	hasPointers := false
+	ptrWords := uintptr(0)
 	for i := uintptr(0); i < words && i/8 < uintptr(len(ptrmask)); i++ {
 		if ptrmask[i/8]&(1<<(i%8)) != 0 {
-			hasPointers = true
-			break
+			ptrWords = i + 1
 		}
 	}
-	if hasPointers && align != ptrSize {
+	if ptrWords != 0 && align != ptrSize {
 		panic("goplus: NewLayout with pointer words must be pointer-aligned")
 	}
-	return &Layout{typ: runtime_newLayoutType(size, align, ptrmask), size: size}
+	typ := runtime_newLayoutType(size, align, ptrWords, ptrmask)
+	if typ == nil {
+		panic("goplus: NewLayout size out of range")
+	}
+	return &Layout{typ: typ, size: size}
 }
 
 // Size reports the size in bytes of one object of the layout.
@@ -75,7 +83,7 @@ func (l *Layout) NewArray(n int) unsafe.Pointer { return runtime_layoutNewArray(
 // Implemented in runtime.
 
 //go:linkname runtime_newLayoutType
-func runtime_newLayoutType(size, align uintptr, mask []byte) unsafe.Pointer
+func runtime_newLayoutType(size, align, ptrWords uintptr, mask []byte) unsafe.Pointer
 
 //go:linkname runtime_layoutNew
 func runtime_layoutNew(t unsafe.Pointer) unsafe.Pointer

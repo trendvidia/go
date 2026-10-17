@@ -110,10 +110,10 @@ then the skip stands.
 A fork-only standard-library package, `goplus`, exposes runtime hooks
 that a virtual machine whose guest values are ordinary Go memory needs:
 finding an object's extent from an interior pointer, opting a goroutine
-out of the tiny allocator, and (planned) write barriers, preemption
-polling and stack maps for generated code, allocation domains, and
-collectable layout-only types. `goplus.JIT` is the API level.
-**Tracked in [#14](https://github.com/trendvidia/go/issues/14).**
+out of the tiny allocator, write barriers, preemption polling and stack
+maps for generated code, allocation domains, and collectable
+layout-only types. All of them have shipped; `goplus.JIT` is the API
+level (7). **Tracked in [#14](https://github.com/trendvidia/go/issues/14).**
 
 ---
 

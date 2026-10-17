@@ -1804,3 +1804,27 @@ func gcMarkTinyAllocs() {
 		}
 	}
 }
+
+// shadeObjectType marks the type recorded for a heap object (its malloc
+// header, or its span's largeType) if that type is itself a heap object,
+// as types made by goplus.NewLayout are. Those headers are not pointers
+// the collector traces, so without this a type could be freed while
+// objects allocated from it are still live, and the next scan of one
+// would read the freed type's pointer mask (trendvidia/go#12).
+//
+// s is the object's span. A user arena chunk's type is its own metadata,
+// stored past the chunk's limit, not a heap object, so it is skipped.
+//
+// A type in a binary's read-only data is not in the heap, and the lookup
+// below rejects it; that lookup is the whole cost for every other type.
+func shadeObjectType(s *mspan, typ *_type, gcw *gcWork) {
+	if typ == nil || s.isUserArenaChunk {
+		return
+	}
+	b := uintptr(unsafe.Pointer(typ))
+	if !tryDeferToSpanScan(b, gcw) {
+		if obj, span, objIndex := findObject(b, 0, 0); obj != 0 {
+			greyobject(obj, 0, 0, span, gcw, objIndex)
+		}
+	}
+}

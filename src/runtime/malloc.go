@@ -1662,6 +1662,9 @@ func mallocgcSmallScanHeader(size uintptr, typ *_type) (unsafe.Pointer, uintptr)
 		// This may be racing with GC so do it atomically if there can be
 		// a race marking the bit.
 		gcmarknewobject(span, uintptr(x))
+		// The object's type must survive this cycle too (see
+		// shadeObjectType). It does: heapSetTypeSmallHeader stored it in
+		// the header through a write barrier, which shaded it.
 	} else {
 		// Track the last free index before the mark phase. This field
 		// is only used by the garbage collector. During the mark phase
@@ -1717,7 +1720,11 @@ func mallocgcLarge(size uintptr, typ *_type, needzero bool) (unsafe.Pointer, uin
 	span := c.allocLarge(size, typ == nil || !typ.Pointers())
 	span.freeindex = 1
 	span.allocCount = 1
-	span.largeType = nil // Tell the GC not to look at this yet.
+	// Tell the GC not to look at this yet. No write barrier: the mspan is
+	// not in the heap, and the old value is whatever type the span's last
+	// large object had, which may be a heap type already freed (a
+	// goplus.Layout's, trendvidia/go#12); a barrier would shade it.
+	atomic.StorepNoWB(unsafe.Pointer(&span.largeType), nil)
 	size = span.elemsize
 	x := unsafe.Pointer(span.base())
 
@@ -1789,6 +1796,11 @@ func mallocgcLarge(size uintptr, typ *_type, needzero bool) (unsafe.Pointer, uin
 	if typ != nil && typ.Pointers() {
 		// Finish storing the type information, now that we're certain the memory is zeroed.
 		getMCache(mp).scanAlloc += heapSetTypeLarge(uintptr(x), size, typ, span)
+		if writeBarrier.enabled {
+			// Allocated black: its type must survive this cycle too;
+			// see shadeObjectType.
+			shadeObjectType(span, typ, &mp.p.ptr().gcw)
+		}
 	}
 	// Publish the object again, now with zeroed memory and initialized type information.
 	//

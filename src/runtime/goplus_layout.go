@@ -96,3 +96,11 @@ func layoutTypeName() abi.NameOff {
 	layoutNameOff.CompareAndSwap(0, off)
 	return abi.NameOff(layoutNameOff.Load())
 }
+
+// isLayoutType reports whether typ was made by goplus_newLayoutType: such
+// a type, unlike any other, can be freed. Every layout type, and no
+// other, reports layoutNameOff as its name. typ must be live.
+func isLayoutType(typ *abi.Type) bool {
+	off := layoutNameOff.Load()
+	return off != 0 && typ.Str == abi.NameOff(off)
+}

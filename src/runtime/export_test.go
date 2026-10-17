@@ -2161,3 +2161,19 @@ func PCValueCacheHolds(lo, hi uintptr) bool {
 	}
 	return false
 }
+
+// TraceTypesOf returns, for the heap object at p, which must have a
+// malloc header, the type the alloc/free trace's snapshot records for it
+// live and as a dead object in a span not yet swept, and the type the
+// collector reads for it (go-plus, trendvidia/go#63).
+func TraceTypesOf(p unsafe.Pointer) (live, dead, gc unsafe.Pointer) {
+	s := spanOfHeap(uintptr(p))
+	if s == nil || s.spanclass.noscan() || heapBitsInSpan(s.elemsize) {
+		panic("TraceTypesOf: not a heap object with a malloc header")
+	}
+	x := s.base() + s.objIndex(uintptr(p))*s.elemsize
+	live = unsafe.Pointer(traceTypeFor(traceRecordedType(s, x, false)))
+	dead = unsafe.Pointer(traceTypeFor(traceRecordedType(s, x, true)))
+	gc = unsafe.Pointer(s.typePointersOfUnchecked(x).typ)
+	return
+}

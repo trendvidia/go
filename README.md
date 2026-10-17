@@ -196,6 +196,23 @@ defect awaiting a fix.
 opened under two spellings of a Windows drive letter (`C:\` vs `c:\`)
 loads twice. Canonicalise paths before calling `Open`.
 
+**On linux and darwin, `Close` can crash a host that keeps the upgrade
+contract** ([#68](https://github.com/trendvidia/go/issues/68)). If code in
+the plugin starts a garbage collection, the plugin's own copy of the
+runtime creates the collector's background workers, and they run code in
+the plugin's image; after `Close` unmaps it, the next collection crashes.
+Windows is not affected: a Windows plugin links against the host and
+carries no copy of the runtime. Until the fix lands, a host on linux or
+darwin can start the workers itself by calling `runtime.GC()` once before
+it opens any plugin (measured clean on linux/amd64); raising `GOMAXPROCS`
+after that can still let a plugin start more of them.
+
+**Execution traces with `GODEBUG=traceallocfree=1` crash after a plugin
+is closed** ([#67](https://github.com/trendvidia/go/issues/67)). The trace
+keeps the types it has seen until the generation ends, and a closed
+plugin's types are unmapped by then. Ordinary execution traces are not
+affected; don't combine the alloc/free experiment with `Close`.
+
 **The upgrade contract is the caller's to keep.** `Plugin.Close`
 neutralises the func values `Lookup` returned and the static `·f`
 descriptors; it cannot protect a pointer into the image, a

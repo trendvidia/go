@@ -38,7 +38,7 @@ func TestGoplusCodeNotCached(t *testing.T) {
 
 	// FileLine runs pcvalue on the file and line tables, as a traceback
 	// would. That the answer is right shows the lookups ran.
-	if file, line := runtime.FuncForPC(base+40).FileLine(base + 40); file != "never.jit" || line != 4 {
+	if file, line := runtime.FuncForPC(base + 40).FileLine(base + 40); file != "never.jit" || line != 4 {
 		t.Fatalf("FileLine = %s:%d, want never.jit:4", file, line)
 	}
 	if runtime.PCValueCacheHolds(base, end) {

@@ -5,8 +5,10 @@
 package goplus_test
 
 import (
+	"errors"
 	"goplus"
 	"internal/testenv"
+	"math"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -82,21 +84,21 @@ func TestAllocDomainSmall(t *testing.T) {
 	}
 }
 
-// TestAllocDomainSlowPath reruns the counting tests in a process where
-// every allocation takes the allocator's slow path, as it does whenever
-// the collector is marking. GODEBUG=inittrace=1 turns on the
+// TestAllocDomainSlowPath reruns the counting and budget tests in a
+// process where every allocation takes the allocator's slow path, as it
+// does whenever the collector is marking. GODEBUG=inittrace=1 turns on the
 // allocator's debug hooks, which force that path.
 func TestAllocDomainSlowPath(t *testing.T) {
 	testenv.MustHaveExec(t)
 	cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t),
-		"-test.run=^(TestAllocDomainSmall|TestAllocDomainMatchesMemStats)$", "-test.v", "-test.count=1"))
+		"-test.run=^(TestAllocDomainSmall|TestAllocDomainMatchesMemStats|TestAllocBudgetSmall)$", "-test.v", "-test.count=1"))
 	cmd.Env = append(cmd.Environ(), "GODEBUG=inittrace=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	// Require each test to have run, not merely nothing to have failed.
-	for _, name := range []string{"TestAllocDomainSmall", "TestAllocDomainMatchesMemStats"} {
+	for _, name := range []string{"TestAllocDomainSmall", "TestAllocDomainMatchesMemStats", "TestAllocBudgetSmall"} {
 		if !strings.Contains(string(out), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass in the child process:\n%s", name, out)
 		}
@@ -327,5 +329,187 @@ func BenchmarkAllocDomain(b *testing.B) {
 				allocSinks[0] = make([]byte, 64)
 			}
 		})
+	})
+}
+
+// budgetGranule is the runtime's goplusBudgetGranule: small allocations
+// are checked against the budget each time a P's count crosses a
+// multiple of it.
+const budgetGranule = 64 << 10
+
+// runRefused runs f in d and returns the value it panicked with, or nil.
+func runRefused(d *goplus.AllocDomain, f func()) (r any) {
+	d.Run(func() {
+		defer func() { r = recover() }()
+		f()
+	})
+	return r
+}
+
+// checkBudgetPanic fails t unless r is the budget refusal.
+func checkBudgetPanic(t *testing.T, r any) {
+	t.Helper()
+	if r == nil {
+		t.Fatal("allocation past the budget was not refused")
+	}
+	err, ok := r.(error)
+	if !ok || !errors.Is(err, goplus.ErrAllocBudget) {
+		t.Fatalf("panicked with %v (%T), want goplus.ErrAllocBudget", r, r)
+	}
+	if _, ok := r.(runtime.Error); !ok {
+		t.Fatalf("panic value %T is not a runtime.Error", r)
+	}
+}
+
+// TestAllocBudgetHugeRequest asks a native that sizes its own result,
+// strings.Repeat, for far more memory than the budget, and more than
+// the machine has on 64-bit platforms. Without the budget this is
+// "fatal error: out of memory", which no recover catches.
+func TestAllocBudgetHugeRequest(t *testing.T) {
+	d := goplus.NewAllocDomain()
+	d.SetBudget(64 << 20)
+	// 192 TiB on 64-bit platforms, under the 256 TiB beyond which
+	// makeslice already refuses a length; 1 GiB on 32-bit ones.
+	const n = int(min(uint64(3)<<46, math.MaxInt>>1))
+	var s string
+	r := runRefused(d, func() { s = strings.Repeat("x", n) })
+	checkBudgetPanic(t, r)
+	if n := d.Allocated(); n > 1<<20 {
+		t.Errorf("domain counted %d bytes after the refusal; the refused request must not count", n)
+	}
+	if s != "" {
+		t.Fatalf("strings.Repeat returned %d bytes", len(s))
+	}
+
+	// The process and the domain carry on: an allocation within the
+	// budget succeeds.
+	if r := runRefused(d, func() { allocExact(0, 1, 1<<20) }); r != nil {
+		t.Fatalf("allocation within the budget panicked: %v", r)
+	}
+	if n := d.Allocated(); n < 1<<20 {
+		t.Errorf("domain counted %d bytes, want at least %d after the allocation within budget", n, 1<<20)
+	}
+}
+
+// TestAllocBudgetSmall allocates small objects in a loop until one is
+// refused, and checks the count against the stated overshoot: less than
+// one granule per P.
+func TestAllocBudgetSmall(t *testing.T) {
+	const budget = 4 << 20
+	for _, tc := range []struct {
+		name  string
+		size  int
+		alloc func()
+	}{
+		{"tiny", 8, func() { allocExact(0, 1<<30, 8) }},
+		{"noscan", 64, func() { allocExact(0, 1<<30, 64) }},
+		{"scan", 4 * int(unsafe.Sizeof(uintptr(0))), func() { allocPointers(0, 1<<30, 4) }},
+		{"medium", 16 << 10, func() { allocExact(0, 1<<30, 16<<10) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := goplus.NewAllocDomain()
+			d.SetBudget(budget)
+			checkBudgetPanic(t, runRefused(d, tc.alloc))
+			n := d.Allocated()
+			over := uint64(runtime.GOMAXPROCS(0)) * budgetGranule
+			t.Logf("refused at %d bytes, budget %d", n, budget)
+			if n+uint64(tc.size) <= budget || n > budget+over {
+				t.Fatalf("refused at %d bytes, want past %d by less than %d", n, budget, over)
+			}
+		})
+	}
+}
+
+// TestAllocBudgetConcurrent runs allocating goroutines of one domain on
+// every P and checks that each is refused, within the overshoot.
+func TestAllocBudgetConcurrent(t *testing.T) {
+	const workers, budget = 16, 8 << 20
+	d := goplus.NewAllocDomain()
+	d.SetBudget(budget)
+	var wg sync.WaitGroup
+	refused := make([]any, workers)
+	d.Run(func() {
+		for w := range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { refused[w] = recover() }()
+				allocExact(w, 1<<30, 128)
+			}()
+		}
+	})
+	wg.Wait()
+	for _, r := range refused {
+		checkBudgetPanic(t, r)
+	}
+	over := uint64(runtime.GOMAXPROCS(0)) * budgetGranule
+	if n := d.Allocated(); n <= budget-workers*128 || n > budget+over {
+		t.Fatalf("domain counted %d bytes, want past %d by less than %d", n, budget, over)
+	}
+}
+
+// TestAllocBudgetChange raises and removes the budget of a domain that
+// is over it, and lowers one below what the domain has allocated.
+func TestAllocBudgetChange(t *testing.T) {
+	d := goplus.NewAllocDomain()
+	d.SetBudget(1 << 20)
+	big := func() { allocExact(0, 1, 1<<20) }
+	if r := runRefused(d, big); r != nil {
+		t.Fatalf("first 1 MiB within a 1 MiB budget panicked: %v", r)
+	}
+	checkBudgetPanic(t, runRefused(d, big))
+	d.SetBudget(4 << 20) // grant more
+	if r := runRefused(d, big); r != nil {
+		t.Fatalf("allocation after raising the budget panicked: %v", r)
+	}
+	d.SetBudget(1 << 20) // lower it below what is allocated
+	checkBudgetPanic(t, runRefused(d, big))
+	d.SetBudget(0) // no budget
+	if r := runRefused(d, func() { allocExact(0, 8, 1<<20) }); r != nil {
+		t.Fatalf("allocation with no budget panicked: %v", r)
+	}
+}
+
+// TestAllocBudgetMapGrowth grows a map in a domain that is over budget.
+// Its growth must be let through: a refusal would leave the map marked
+// as being written, and the map's next write would throw "concurrent map
+// writes". The map's elements make each table large enough to be checked
+// against the budget on its own, so the growth does reach the check.
+func TestAllocBudgetMapGrowth(t *testing.T) {
+	type elem [120]byte
+	m := make(map[int64]elem)
+	d := goplus.NewAllocDomain()
+	d.SetBudget(1)
+	r := runRefused(d, func() {
+		for i := range int64(4096) {
+			m[i] = elem{}
+		}
+	})
+	if r != nil {
+		t.Fatalf("map growth in a domain over budget panicked: %v", r)
+	}
+	// Positive marker: the growth was counted, so it went past the
+	// budget, and its largest tables were big enough to be checked.
+	if n := d.Allocated(); n < 4*budgetGranule {
+		t.Fatalf("domain counted %d bytes of map growth, want at least %d", n, 4*budgetGranule)
+	}
+	// The domain's next allocation that can panic is refused.
+	checkBudgetPanic(t, runRefused(d, func() { allocExact(0, 1, 1<<20) }))
+	// And the map is still usable.
+	m[-1] = elem{}
+	if len(m) != 4097 {
+		t.Fatalf("map has %d entries, want 4097", len(m))
+	}
+}
+
+// BenchmarkAllocBudget measures an allocation in a domain with a budget
+// it does not reach.
+func BenchmarkAllocBudget(b *testing.B) {
+	d := goplus.NewAllocDomain()
+	d.SetBudget(math.MaxUint64)
+	d.Run(func() {
+		for b.Loop() {
+			allocSinks[0] = make([]byte, 64)
+		}
 	})
 }

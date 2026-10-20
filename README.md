@@ -12,7 +12,7 @@ Each release tracks an upstream Go release and keeps its version number.
 `go version` names both:
 
 ```
-go version go1.27.2 windows/amd64 (plus v1.27.2)
+go version go1.27.3 windows/amd64 (plus v1.27.3)
 ```
 
 ### What the fork adds
@@ -90,8 +90,8 @@ GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -buildmode=plugin \
 ### Building this fork
 
 This is the trendvidia "plus" fork of Go (`go version` reports
-`… (plus <fork release>)`, e.g. `go version go1.27.2 darwin/arm64 (plus
-v1.27.2)` — the leading version stays canonical upstream Go). When building the toolchain from source, run `make.bash`
+`… (plus <fork release>)`, e.g. `go version go1.27.3 darwin/arm64 (plus
+v1.27.3)` — the leading version stays canonical upstream Go). When building the toolchain from source, run `make.bash`
 with **`CGO_ENABLED` unset** in the environment:
 
 ```

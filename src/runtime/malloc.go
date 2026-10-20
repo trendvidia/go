@@ -1091,9 +1091,12 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	}
 
 	// Count the allocation for the goroutine's goplus.AllocDomain, if
-	// any. The size-specialised functions above count their own.
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	// any, and refuse it past the domain's budget. The size-specialised
+	// functions above count their own. Every large allocation comes this
+	// way, so a single huge request is refused before memory is asked of
+	// the OS.
+	if d := getg().allocDomain; d != nil && d.add(size, 0) {
+		goplusPanicAllocBudget()
 	}
 
 	// It's possible for any malloc to trigger sweeping, which may in

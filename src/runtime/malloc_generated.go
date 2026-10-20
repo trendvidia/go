@@ -32,8 +32,9 @@ func mallocgcSmallScanNoHeaderSC1(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -189,8 +190,9 @@ func mallocgcSmallScanNoHeaderSC2(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -346,8 +348,9 @@ func mallocgcSmallScanNoHeaderSC3(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -503,8 +506,9 @@ func mallocgcSmallScanNoHeaderSC4(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -660,8 +664,9 @@ func mallocgcSmallScanNoHeaderSC5(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -817,8 +822,9 @@ func mallocgcSmallScanNoHeaderSC6(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -974,8 +980,9 @@ func mallocgcSmallScanNoHeaderSC7(size uintptr, typ *_type, needzero bool) unsaf
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1130,8 +1137,9 @@ func mallocgcTinySC2(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1243,8 +1251,9 @@ func mallocgcSmallNoScanSC2(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1346,8 +1355,9 @@ func mallocgcSmallNoScanSC3(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1449,8 +1459,9 @@ func mallocgcSmallNoScanSC4(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1552,8 +1563,9 @@ func mallocgcSmallNoScanSC5(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1655,8 +1667,9 @@ func mallocgcSmallNoScanSC6(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1758,8 +1771,9 @@ func mallocgcSmallNoScanSC7(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 1) {
+		releasem(mp)
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1853,8 +1867,8 @@ func mallocgcTinySlowPath(size uintptr, typ *_type, needzero bool) unsafe.Pointe
 		return mallocgcSmallNoScanSC2(size, typ, needzero)
 	}
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 0) {
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -1998,8 +2012,8 @@ func mallocgcSmallScanSlowPath(size uintptr, typ *_type, needzero bool, spc span
 
 	var mp *m
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 0) {
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()
@@ -2179,8 +2193,8 @@ func mallocgcSmallNoScanSlowPath(size uintptr, typ *_type, needzero bool, spc sp
 
 	var mp *m
 
-	if d := getg().allocDomain; d != nil {
-		d.add(size)
+	if d := getg().allocDomain; d != nil && d.add(size, 0) {
+		goplusPanicAllocBudget()
 	}
 
 	lockRankMayQueueFinalizer()

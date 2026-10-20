@@ -65,4 +65,5 @@ package goplus
 // Level 5: [StackGuardOffset], [YieldEntry].
 // Level 6: [AllocDomain].
 // Level 7: [Layout].
-const JIT = 7
+// Level 8: [AllocDomain.SetBudget], [ErrAllocBudget].
+const JIT = 8

@@ -94,11 +94,13 @@ func mallocStub(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		}
 
 		// Count the allocation for the goroutine's goplus.AllocDomain,
-		// if any. Not before the check above: the slow path counts the
-		// allocations it is handed, so counting here too would count
-		// them twice.
-		if d := getg().allocDomain; d != nil {
-			d.add(size)
+		// if any, and refuse it past the domain's budget, after
+		// releasing the m. Not before the check above: the slow path
+		// counts the allocations it is handed, so counting here too
+		// would count them twice.
+		if d := getg().allocDomain; d != nil && d.add(size, 1) {
+			releasem(mp)
+			goplusPanicAllocBudget()
 		}
 
 		// It's possible for any malloc to trigger sweeping, which may
@@ -124,9 +126,10 @@ func mallocStub(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		}
 
 		// Count the allocation for the goroutine's goplus.AllocDomain,
-		// if any. Not before the redirect above, which counts its own.
-		if d := getg().allocDomain; d != nil {
-			d.add(size)
+		// if any, and refuse it past the domain's budget. Not before
+		// the redirect above, which counts its own.
+		if d := getg().allocDomain; d != nil && d.add(size, 0) {
+			goplusPanicAllocBudget()
 		}
 
 		// It's possible for any malloc to trigger sweeping, which may

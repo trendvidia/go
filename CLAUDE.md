@@ -14,7 +14,7 @@ the full backlog. Upstream Go's own
 conventions govern everything this fork does not change — when in doubt,
 match what the surrounding upstream code does.
 
-The fork's marker is the version string: `go1.27.2 (plus <release>)`.
+The fork's marker is the version string: `go1.27.3 (plus <release>)`.
 
 ## Layout that matters here
 

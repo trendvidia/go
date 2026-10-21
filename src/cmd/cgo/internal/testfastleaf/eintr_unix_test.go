@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestFastLeafNoEINTR makes fastleaf C calls that sleep, on a goroutine
@@ -30,14 +31,20 @@ import (
 // around every call, which costs 20 to 70 times the call itself, so the
 // test bounds the residual instead.
 func TestFastLeafNoEINTR(t *testing.T) {
-	leaf, plain := countEINTR(t, testfastleaf.SleepLeaf), countEINTR(t, testfastleaf.SleepPlain)
-	t.Logf("interrupted sleeps out of 200: fastleaf %d, ordinary cgo %d", leaf, plain)
-	if leaf > 20 {
-		t.Errorf("%d of 200 fastleaf sleeps were interrupted by a signal, more than the 10%% a missed suppression race allows", leaf)
+	leaf, leafN := countEINTR(t, testfastleaf.SleepLeaf)
+	plain, plainN := countEINTR(t, testfastleaf.SleepPlain)
+	t.Logf("interrupted sleeps: fastleaf %d of %d, ordinary cgo %d of %d", leaf, leafN, plain, plainN)
+	if leaf*10 > leafN {
+		t.Errorf("%d of %d fastleaf sleeps were interrupted by a signal, more than the 10%% a missed suppression race allows", leaf, leafN)
 	}
 }
 
-func countEINTR(t *testing.T, sleep func(int) bool) int {
+// countEINTR makes 2ms sleeps until it has made at least 200 and at
+// least 20 collections have overlapped them, and returns how many were
+// interrupted, out of how many. Waiting for the collections rather than
+// for a fixed number of sleeps keeps a slow, loaded machine from
+// failing the marker (trendvidia/go#81).
+func countEINTR(t *testing.T, sleep func(int) bool) (interrupted, sleeps int) {
 	var stop atomic.Bool
 	var gcs atomic.Int64
 	var wg sync.WaitGroup
@@ -49,18 +56,19 @@ func countEINTR(t *testing.T, sleep func(int) bool) int {
 			gcs.Add(1)
 		}
 	}()
-	interrupted := 0
-	for range 200 {
+	deadline := time.Now().Add(time.Minute)
+	for sleeps < 200 || gcs.Load() < 20 {
+		if time.Now().After(deadline) {
+			stop.Store(true)
+			wg.Wait()
+			t.Fatalf("after %d sleeps only %d collections had overlapped them", sleeps, gcs.Load())
+		}
 		if sleep(2_000_000) { // 2ms
 			interrupted++
 		}
+		sleeps++
 	}
 	stop.Store(true)
 	wg.Wait()
-	// A positive marker: the sleeps overlapped many collections, each of
-	// which scans this goroutine's stack.
-	if gcs.Load() < 20 {
-		t.Fatalf("only %d collections overlapped the sleeps", gcs.Load())
-	}
-	return interrupted
+	return interrupted, sleeps
 }

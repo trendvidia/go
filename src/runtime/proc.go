@@ -853,6 +853,7 @@ func getGodebugEarly() (string, bool) {
 //
 // The new G calls runtime·main.
 func schedinit() {
+	setThreadStartPCs()
 	lockInit(&sched.lock, lockRankSched)
 	lockInit(&sched.sysmonlock, lockRankSysmon)
 	lockInit(&sched.deferlock, lockRankDefer)
@@ -2942,7 +2943,7 @@ func newm1(mp *m) {
 		var ts cgothreadstart
 		ts.g.set(mp.g0)
 		ts.tls = (*uint64)(unsafe.Pointer(&mp.tls[0]))
-		ts.fn = unsafe.Pointer(abi.FuncPCABI0(mstart))
+		ts.fn = unsafe.Pointer(cgoThreadEntry(abi.FuncPCABI0(mstart)))
 		if msanenabled {
 			msanwrite(unsafe.Pointer(&ts), unsafe.Sizeof(ts))
 		}

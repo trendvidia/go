@@ -181,7 +181,7 @@ func newosproc(mp *m) {
 	var oset sigset
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
 	ret := retryOnEAGAIN(func() int32 {
-		r := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(abi.FuncPCABI0(mstart)))
+		r := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(threadStart(abi.FuncPCABI0(mstart))))
 		// clone returns positive TID, negative errno.
 		// We don't care about the TID.
 		if r >= 0 {
@@ -1010,3 +1010,6 @@ func parseRelease(rel string) (major, minor, patch int, ok bool) {
 func (kv kernelVersion) GE(x, y int) bool {
 	return kv.major > x || (kv.major == x && kv.minor >= y)
 }
+
+// osThreadStartPC is where newosproc starts a thread (see plugin_sched.go).
+func osThreadStartPC() uintptr { return abi.FuncPCABI0(mstart) }

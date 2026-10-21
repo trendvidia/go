@@ -970,8 +970,14 @@ func (ctxt *Link) linksetup() {
 		// Set runtime.disableMemoryProfiling bool if
 		// runtime.memProfileInternal is not retained in the binary after
 		// deadcode (and we're not dynamically linking).
+		//
+		// go-plus: a goplus.SampleTag reads the profiler's samples without
+		// reading the profile, so a program that creates one keeps
+		// sampling on too.
 		memProfile := ctxt.loader.Lookup("runtime.memProfileInternal", abiInternalVer)
-		if memProfile != 0 && !ctxt.loader.AttrReachable(memProfile) && !ctxt.DynlinkingGo() {
+		sampleTag := ctxt.loader.Lookup("goplus.runtime_newSampleTag", abiInternalVer)
+		sampleTagUsed := sampleTag != 0 && ctxt.loader.AttrReachable(sampleTag)
+		if memProfile != 0 && !ctxt.loader.AttrReachable(memProfile) && !sampleTagUsed && !ctxt.DynlinkingGo() {
 			memProfSym := ctxt.loader.LookupOrCreateSym("runtime.disableMemoryProfiling", 0)
 			sb := ctxt.loader.MakeSymbolUpdater(memProfSym)
 			sb.SetType(sym.SNOPTRDATA)

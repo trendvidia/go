@@ -2702,15 +2702,19 @@ type specialprofile struct {
 	_       sys.NotInHeap
 	special special
 	b       *bucket
+	tag     *goplusSampleTag // goplus.SampleTag the sample counts toward, or nil; a GC root
+	weight  int64            // bytes the sample added to tag.live
 }
 
 // Set the heap profile bucket associated with addr to b.
-func setprofilebucket(p unsafe.Pointer, b *bucket) {
+func setprofilebucket(p unsafe.Pointer, b *bucket, tag *goplusSampleTag, weight int64) {
 	lock(&mheap_.speciallock)
 	s := (*specialprofile)(mheap_.specialprofilealloc.alloc())
 	unlock(&mheap_.speciallock)
 	s.special.kind = _KindSpecialProfile
 	s.b = b
+	s.tag = tag
+	s.weight = weight
 	if !addspecial(p, &s.special, false) {
 		throw("setprofilebucket: profile already set")
 	}
@@ -2791,6 +2795,11 @@ func freeSpecial(s *special, p unsafe.Pointer, size uintptr) {
 	case _KindSpecialProfile:
 		sp := (*specialprofile)(unsafe.Pointer(s))
 		mProf_Free(sp.b)
+		if sp.tag != nil {
+			sp.tag.live.Add(-sp.weight)
+			sp.tag.samples.Add(-1)
+			sp.tag = nil
+		}
 		lock(&mheap_.speciallock)
 		mheap_.specialprofilealloc.free(unsafe.Pointer(sp))
 		unlock(&mheap_.speciallock)

@@ -66,4 +66,5 @@ package goplus
 // Level 6: [AllocDomain].
 // Level 7: [Layout].
 // Level 8: [AllocDomain.SetBudget], [ErrAllocBudget].
-const JIT = 8
+// Level 9: [SampleTag].
+const JIT = 9

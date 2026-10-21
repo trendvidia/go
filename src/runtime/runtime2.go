@@ -564,6 +564,7 @@ type g struct {
 	cgoCtxt         []uintptr          // cgo traceback context
 	labels          unsafe.Pointer     // profiler labels
 	allocDomain     *goplusAllocDomain // goplus.AllocDomain counting this goroutine's allocations, or nil; inherited like labels
+	sampleTag       *goplusSampleTag   // goplus.SampleTag this goroutine's sampled allocations count toward, or nil; inherited like labels
 	timer           *timer             // cached timer for time.Sleep
 	sleepWhen       int64              // when to sleep until
 	selectDone      atomic.Uint32      // are we participating in a select and did someone win the race?

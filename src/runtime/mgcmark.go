@@ -461,6 +461,13 @@ func markrootSpans(gcw *gcWork, shard int) {
 					scanblock(uintptr(unsafe.Pointer(&spw.handle)), goarch.PtrSize, &oneptrmask[0], gcw, nil)
 				case _KindSpecialCleanup:
 					gcScanCleanup((*specialCleanup)(unsafe.Pointer(sp)), gcw)
+				case _KindSpecialProfile:
+					// A goplus.SampleTag lives as long as any of its
+					// samples, which subtract from it when freed.
+					spp := (*specialprofile)(unsafe.Pointer(sp))
+					if spp.tag != nil {
+						scanblock(uintptr(unsafe.Pointer(&spp.tag)), goarch.PtrSize, &oneptrmask[0], gcw, nil)
+					}
 				}
 			}
 			unlock(&s.speciallock)

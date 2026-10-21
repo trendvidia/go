@@ -430,7 +430,7 @@ func mProf_PostSweep() {
 }
 
 // Called by malloc to record a profiled block.
-func mProf_Malloc(mp *m, p unsafe.Pointer, size uintptr) {
+func mProf_Malloc(mp *m, p unsafe.Pointer, size uintptr, rate int) {
 	if mp.profStack == nil {
 		// mp.profStack is nil if we happen to sample an allocation during the
 		// initialization of mp. This case is rare, so we just ignore such
@@ -455,8 +455,9 @@ func mProf_Malloc(mp *m, p unsafe.Pointer, size uintptr) {
 	// the profiler locks. This reduces potential contention and chances of
 	// deadlocks. Since the object must be alive during the call to
 	// mProf_Malloc, it's fine to do this non-atomically.
+	tag, weight := goplusSampleAlloc(mp, size, rate)
 	systemstack(func() {
-		setprofilebucket(p, b)
+		setprofilebucket(p, b, tag, weight)
 	})
 }
 

@@ -344,6 +344,34 @@ func main() {
 			"524288",
 		},
 		{
+			// go-plus: a sample tag keeps the profiler sampling.
+			"with_goplus_sampletag",
+			`
+package main
+import "goplus"
+import "runtime"
+func main() {
+	_ = goplus.NewSampleTag()
+	println(runtime.MemProfileRate)
+}
+`,
+			"524288",
+		},
+		{
+			// go-plus: importing goplus without a sample tag does not.
+			"with_goplus_no_sampletag",
+			`
+package main
+import "goplus"
+import "runtime"
+func main() {
+	_ = goplus.NewAllocDomain()
+	println(runtime.MemProfileRate)
+}
+`,
+			"0",
+		},
+		{
 			"with_memprofile_runtime_pprof",
 			`
 package main

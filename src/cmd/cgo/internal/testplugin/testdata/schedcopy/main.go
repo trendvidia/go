@@ -11,9 +11,9 @@
 // Each cycle opens the plugin, runs Spin on every P while another
 // goroutine forces collections (each stack scan preempts the spinning
 // goroutines), waits until every goroutine is back in host code, closes
-// the plugin, and then wakes every thread. Before the fix about one
-// cycle in five or eight left a thread in the plugin's scheduler, so 40
-// cycles all but always faulted. It prints "schedcopy: done" as its last
+// the plugin, and then wakes every thread. Before the fix, 40 cycles
+// faulted in 10 of 10 runs on darwin/arm64 and in 4 of 5 on
+// linux/amd64, so it runs 80. It prints "schedcopy: done" as its last
 // line so the harness can tell a fault from a finished run.
 package main
 
@@ -88,7 +88,7 @@ func cycle(procs int) {
 }
 
 func main() {
-	for range 40 {
+	for range 80 {
 		cycle(4)
 	}
 	fmt.Println("schedcopy: done")

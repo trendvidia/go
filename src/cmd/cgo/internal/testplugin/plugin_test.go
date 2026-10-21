@@ -1156,7 +1156,8 @@ func TestCloseZeroValue(t *testing.T) {
 // TestCloseSchedulerCopy checks that no thread is left in a plugin's
 // copy of the scheduler when the plugin is closed (trendvidia/go#79):
 // such a thread faults when it wakes. Before the fix the fixture faulted
-// in 10 of 10 runs on darwin/arm64.
+// in 10 of 10 runs on darwin/arm64 (at 40 cycles) and in 8 of 8 on
+// linux/amd64 (at 80).
 func TestCloseSchedulerCopy(t *testing.T) {
 	globalSkip(t)
 	out := run(t, "./schedcopy.exe")

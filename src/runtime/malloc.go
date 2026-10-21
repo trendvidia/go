@@ -2247,9 +2247,16 @@ func profilealloc(mp *m, x unsafe.Pointer, size uintptr) {
 	if c == nil {
 		throw("profilealloc called without a P or outside bootstrapping")
 	}
+	// The rate this sample was drawn at. The first allocation after
+	// MemProfileRate changes is sampled to pick up the new rate: it is
+	// sampled with certainty, as at a rate of 1.
+	rate := c.memProfRate
+	if rate != MemProfileRate {
+		rate = 1
+	}
 	c.memProfRate = MemProfileRate
 	c.nextSample = nextSample()
-	mProf_Malloc(mp, x, size)
+	mProf_Malloc(mp, x, size, rate)
 }
 
 // nextSample returns the next sampling point for heap profiling. The goal is

@@ -11,3 +11,6 @@ func AllocDomainCounter(d *AllocDomain) unsafe.Pointer { return d.d }
 
 // LayoutType returns the runtime type behind l.
 func LayoutType(l *Layout) unsafe.Pointer { return l.typ }
+
+// SampleTagState returns the runtime object that holds t's estimate.
+func SampleTagState(t *SampleTag) unsafe.Pointer { return t.t }

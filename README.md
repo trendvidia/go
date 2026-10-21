@@ -205,7 +205,11 @@ Windows is not affected: a Windows plugin links against the host and
 carries no copy of the runtime. Until the fix lands, a host on linux or
 darwin can start the workers itself by calling `runtime.GC()` once before
 it opens any plugin (measured clean on linux/amd64); raising `GOMAXPROCS`
-after that can still let a plugin start more of them.
+after that can still let a plugin start more of them. A rarer crash inside
+`Close` itself, where an idle runtime thread returns into the image being
+unloaded, has been seen once on darwin CI
+([#79](https://github.com/trendvidia/go/issues/79)); its cause is not yet
+confirmed, and the workaround above is not known to prevent it.
 
 **Execution traces with `GODEBUG=traceallocfree=1` crash after a plugin
 is closed** ([#67](https://github.com/trendvidia/go/issues/67)). The trace

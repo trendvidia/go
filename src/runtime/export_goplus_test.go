@@ -5,3 +5,6 @@
 package runtime
 
 var GoplusSampleWeight = goplusSampleWeight
+
+// Fastexprand draws the gap to the heap profiler's next sample.
+func Fastexprand(mean int) int32 { return fastexprand(mean) }

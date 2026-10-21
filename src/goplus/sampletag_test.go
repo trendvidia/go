@@ -19,6 +19,12 @@ func tagSamples(t *goplus.SampleTag) int64 {
 	return (*[2]int64)(goplus.SampleTagState(t))[1]
 }
 
+// sampleSink keeps an allocation on the heap: the first allocation after
+// MemProfileRate changes is sampled, and a test that changes the rate
+// makes it here rather than inside a tag. (A local would be allocated on
+// the stack and take no sample.)
+var sampleSink []byte
+
 // withMemProfileRate runs the test at sampling rate r.
 func withMemProfileRate(t *testing.T, r int) {
 	prev := runtime.MemProfileRate
@@ -168,8 +174,7 @@ func TestSampleTagOutlivesHandle(t *testing.T) {
 func TestSampleTagNotSampling(t *testing.T) {
 	withMemProfileRate(t, 0)
 	onOneP(func() {
-		sink := make([]byte, 64) // takes the sample a rate change forces
-		runtime.KeepAlive(sink)
+		sampleSink = make([]byte, 64) // takes the sample a rate change forces
 		tag := goplus.NewSampleTag()
 		var keep []byte
 		tag.Run(func() {
@@ -191,18 +196,32 @@ func TestSampleTagNotSampling(t *testing.T) {
 // leaving it out would lose a large object the sampler would have taken
 // anyway.
 func TestSampleTagRateChange(t *testing.T) {
-	withMemProfileRate(t, 1<<30) // samples a 1 MiB object 1 time in 1000
+	// The sampler's mean gap is capped at 112 MiB, so at these rates a
+	// 1 MiB object is sampled about 1 time in 112 unless a change forces it.
+	withMemProfileRate(t, 1<<30)
 	onOneP(func() {
-		sink := make([]byte, 64) // takes the sample this change forces
-		runtime.KeepAlive(sink)
-		tag := goplus.NewSampleTag()
-		runtime.MemProfileRate = 1 << 29 // the cleanup restores the test's rate
-		var keep []byte
-		tag.Run(func() { keep = make([]byte, 1<<20) })
-		if l := tag.Live(); l != 1<<20 {
-			t.Errorf("estimate %d after a rate change, want the first allocation's size, %d", l, 1<<20)
+		sampleSink = make([]byte, 64) // takes the sample this change forces
+		// Another goroutine on the P can allocate between the change and
+		// the allocation and take the forced sample: then try again.
+		for attempt := range 10 {
+			tag := goplus.NewSampleTag()
+			// Alternate the rate so each attempt changes it; the cleanup
+			// restores the test's rate.
+			runtime.MemProfileRate = 1 << 29 << (attempt % 2)
+			var keep []byte
+			tag.Run(func() { keep = make([]byte, 1<<20) })
+			runtime.KeepAlive(keep)
+			l := tag.Live()
+			if l == 0 {
+				t.Logf("attempt %d: the forced sample went to another allocation", attempt)
+				continue
+			}
+			if l != 1<<20 {
+				t.Errorf("estimate %d after a rate change, want the first allocation's size, %d", l, 1<<20)
+			}
+			return
 		}
-		runtime.KeepAlive(keep)
+		t.Fatal("no attempt sampled the first allocation after a rate change")
 	})
 }
 

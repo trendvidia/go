@@ -33,10 +33,14 @@ type goplusSampleTag struct {
 // on average: size divided by the probability that it was sampled, the
 // scaling runtime/pprof applies to heap samples (scaleHeapSample). At a
 // rate of 1 every allocation is sampled and the weight is its size.
+//
+// The sampler draws at most every maxSampleMean bytes on average, however
+// high the rate (see fastexprand), so a higher rate is weighted as that.
 func goplusSampleWeight(size uintptr, rate int) int64 {
 	if rate <= 1 {
 		return int64(size)
 	}
+	rate = min(rate, maxSampleMean)
 	x := float64(size) / float64(rate)
 	return int64(float64(size)/goplusOneMinusExpNeg(x) + 0.5)
 }

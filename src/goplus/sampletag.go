@@ -28,6 +28,13 @@ import "unsafe"
 // only on those of a tag. At a rate of 0 nothing is sampled and the
 // estimate stays 0.
 //
+// The tiny allocator packs pointer-free allocations under 16 bytes, from
+// any goroutine on the same P, into shared 16-byte blocks, and the
+// profiler samples a block as a whole. A sampled block counts toward the
+// goroutine that started it, and stays counted while any allocation in
+// it lives, whoever made that one. With [SetNoTinyAlloc], each such
+// allocation of a goroutine gets a slot of its own, counted toward it alone.
+//
 // A free is subtracted when the collector sweeps the object, not when
 // the last reference to it is dropped. So between collections the
 // estimate also counts the tag's garbage: it reads high, never low.
@@ -39,7 +46,8 @@ import "unsafe"
 // or a function started by a timer, for example, runs outside the tag.
 //
 // Tagging costs nothing on an allocation the profiler does not sample,
-// and an atomic add on one it does, at the sample and again at the free.
+// and two atomic adds to the tag on one it does, at the sample and again
+// at the free.
 //
 // A tag must be created with [NewSampleTag]; the zero value is not a
 // tag, and its methods panic.

@@ -2278,14 +2278,19 @@ func nextSample() int64 {
 	return int64(fastexprand(MemProfileRate))
 }
 
+// maxSampleMean is the largest mean fastexprand draws from. A
+// MemProfileRate above it samples at this rate; goplusSampleWeight
+// weights samples by it too.
+const maxSampleMean = 0x7000000
+
 // fastexprand returns a random number from an exponential distribution with
 // the specified mean.
 func fastexprand(mean int) int32 {
 	// Avoid overflow. Maximum possible step is
 	// -ln(1/(1<<randomBitCount)) * mean, approximately 20 * mean.
 	switch {
-	case mean > 0x7000000:
-		mean = 0x7000000
+	case mean > maxSampleMean:
+		mean = maxSampleMean
 	case mean == 0:
 		return 0
 	}

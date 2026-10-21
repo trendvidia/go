@@ -76,6 +76,52 @@ static void pluginReserveRange(uintptr_t base, uintptr_t size) {
 	}
 }
 
+// pluginOpenCopy loads a fresh copy of path. A closed plugin's image
+// stays mapped (pluginCloseHandle does not dlclose), and dlopen of a
+// file that is still loaded returns that image without running its
+// initializers again, so a re-Open must load a file the loader has not
+// seen: a copy with its own inode. The copy is unlinked once loaded;
+// the mapping keeps it alive.
+static uintptr_t pluginOpenCopy(const char* path, char** err) {
+	static char tmpl[PATH_MAX];
+	const char* dir = getenv("TMPDIR");
+	if (dir == NULL || dir[0] == 0) {
+		dir = "/tmp";
+	}
+	snprintf(tmpl, sizeof tmpl, "%s/goplugin-XXXXXX", dir);
+	int out = mkstemp(tmpl);
+	if (out < 0) {
+		*err = "plugin: cannot create a copy to re-open";
+		return 0;
+	}
+	FILE* in = fopen(path, "rb");
+	if (in == NULL) {
+		close(out);
+		unlink(tmpl);
+		*err = "plugin: cannot read the plugin to re-open it";
+		return 0;
+	}
+	char buf[65536];
+	size_t n;
+	int ok = 1;
+	while ((n = fread(buf, 1, sizeof buf, in)) > 0) {
+		if (write(out, buf, n) != (ssize_t)n) {
+			ok = 0;
+			break;
+		}
+	}
+	fclose(in);
+	close(out);
+	if (!ok) {
+		unlink(tmpl);
+		*err = "plugin: cannot write a copy to re-open";
+		return 0;
+	}
+	uintptr_t h = pluginOpen(tmpl, err);
+	unlink(tmpl);
+	return h;
+}
+
 static int pluginCloseHandle(uintptr_t h, char** err) {
 	// dlclose returns 0 on success, non-zero on failure with the
 	// reason retrievable via dlerror. After a successful return the
@@ -148,7 +194,12 @@ func open(name string) (*Plugin, error) {
 		return p, nil
 	}
 	var cErr *C.char
-	h := C.pluginOpen((*C.char)(unsafe.Pointer(&cPath[0])), &cErr)
+	var h C.uintptr_t
+	if retired[filepath] {
+		h = C.pluginOpenCopy((*C.char)(unsafe.Pointer(&cPath[0])), &cErr)
+	} else {
+		h = C.pluginOpen((*C.char)(unsafe.Pointer(&cPath[0])), &cErr)
+	}
 	if h == 0 {
 		pluginsMu.Unlock()
 		return nil, errors.New(`plugin.Open("` + name + `"): ` + C.GoString(cErr))
@@ -311,21 +362,25 @@ func lookup(p *Plugin, symName string) (Symbol, error) {
 // short-circuit on the cached closed *Plugin.
 //
 // Caller (closePlugin) holds pluginsMu.
+// retired holds the paths whose plugin was closed. Their image stays
+// mapped, so Open loads a copy of the file instead. Guarded by
+// pluginsMu.
+var retired = map[string]bool{}
+
 func unloadPlugin(p *Plugin, base, size uintptr) error {
 	if p.handle == 0 {
 		return nil
 	}
-	var cErr *C.char
-	if C.pluginCloseHandle(C.uintptr_t(p.handle), &cErr) != 0 {
-		return errors.New(C.GoString(cErr))
-	}
-	// Reserve what the image occupied so the loader cannot reuse it
-	// for the next plugin (trendvidia/go-archive#123). base/size are the
-	// module's own bounds, captured before the runtime unlinked it.
-	C.pluginReserveRange(C.uintptr_t(base), C.uintptr_t(size))
+	// PROTOTYPE (trendvidia/go#79, option 3): the image stays mapped.
+	// A runtime thread can be asleep in the plugin's own copy of the
+	// scheduler, which the plugin's code calls directly, and it returns
+	// into the image when it wakes: unmapping the image faults it.
+	// Keeping the image also means nothing else can be placed in its
+	// range, so pluginReserveRange is not needed.
 	for path, q := range plugins {
 		if q == p {
 			delete(plugins, path)
+			retired[path] = true
 			break
 		}
 	}

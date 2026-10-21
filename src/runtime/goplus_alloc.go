@@ -25,9 +25,13 @@ type goplusAllocDomain struct {
 		_ [cpu.CacheLinePadSize - 8]byte
 	}
 
-	// budget is the most the domain may allocate, or 0 for no limit.
+	// budget is the most the domain may allocate, or goplusNoBudget.
 	budget atomic.Uint64
 }
+
+// goplusNoBudget is the budget of a domain with no limit, math.MaxUint64.
+// A budget of 0 is a limit like any other: nothing may be allocated.
+const goplusNoBudget = ^uint64(0)
 
 // goplusBudgetGranule is how often a stripe checks the domain's budget:
 // each time its count crosses a multiple of the granule, and on every
@@ -53,7 +57,7 @@ func (d *goplusAllocDomain) add(n uintptr, held int32) bool {
 	}
 	s := &d.stripes[i].n
 	v := s.Add(int64(n))
-	if d.budget.Load() == 0 {
+	if d.budget.Load() == goplusNoBudget {
 		return false
 	}
 	if n < goplusBudgetGranule && (v-uint64(n))/goplusBudgetGranule == v/goplusBudgetGranule {
@@ -69,7 +73,7 @@ func (d *goplusAllocDomain) add(n uintptr, held int32) bool {
 //go:noinline
 func (d *goplusAllocDomain) refuse(s *atomic.Uint64, n uintptr, held int32) bool {
 	budget := d.budget.Load()
-	if budget == 0 || goplus_allocDomainTotal(unsafe.Pointer(d)) <= budget {
+	if budget == goplusNoBudget || goplus_allocDomainTotal(unsafe.Pointer(d)) <= budget {
 		return false
 	}
 	// An allocation that cannot panic is allowed, and stays counted: the
@@ -142,7 +146,9 @@ func goplus_allocBudgetError() error {
 
 //go:linkname goplus_newAllocDomain goplus.runtime_newAllocDomain
 func goplus_newAllocDomain() unsafe.Pointer {
-	return unsafe.Pointer(new(goplusAllocDomain))
+	d := new(goplusAllocDomain)
+	d.budget.Store(goplusNoBudget)
+	return unsafe.Pointer(d)
 }
 
 // goplus_setAllocDomain puts the calling goroutine in domain d (nil for

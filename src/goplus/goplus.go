@@ -67,4 +67,6 @@ package goplus
 // Level 7: [Layout].
 // Level 8: [AllocDomain.SetBudget], [ErrAllocBudget].
 // Level 9: [SampleTag].
-const JIT = 9
+// Level 10: [AllocDomain.SetBudget] takes [math.MaxUint64] for no budget;
+// 0 is a budget with nothing left, where before it removed the budget.
+const JIT = 10

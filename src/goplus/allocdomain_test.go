@@ -464,9 +464,34 @@ func TestAllocBudgetChange(t *testing.T) {
 	}
 	d.SetBudget(1 << 20) // lower it below what is allocated
 	checkBudgetPanic(t, runRefused(d, big))
-	d.SetBudget(0) // no budget
+	d.SetBudget(math.MaxUint64) // no budget
 	if r := runRefused(d, func() { allocExact(0, 8, 1<<20) }); r != nil {
 		t.Fatalf("allocation with no budget panicked: %v", r)
+	}
+}
+
+// TestAllocBudgetZero checks that a budget of 0 has nothing left, and
+// that a new domain has no budget.
+func TestAllocBudgetZero(t *testing.T) {
+	big := func() { allocExact(0, 1, 1<<20) }
+
+	// A new domain, never given a budget, refuses nothing.
+	d := goplus.NewAllocDomain()
+	if r := runRefused(d, func() { allocExact(0, 8, 1<<20) }); r != nil {
+		t.Fatalf("allocation in a new domain panicked: %v", r)
+	}
+
+	// 0 on a domain that has allocated: the next checked one is refused.
+	d.SetBudget(0)
+	checkBudgetPanic(t, runRefused(d, big))
+
+	// 0 on a domain that has allocated nothing: a large allocation is
+	// checked on its own, and refused.
+	d = goplus.NewAllocDomain()
+	d.SetBudget(0)
+	checkBudgetPanic(t, runRefused(d, big))
+	if n := d.Allocated(); n != 0 {
+		t.Fatalf("domain with a budget of 0 counted %d bytes, want 0: a refusal is not counted", n)
 	}
 }
 
@@ -503,10 +528,10 @@ func TestAllocBudgetMapGrowth(t *testing.T) {
 }
 
 // BenchmarkAllocBudget measures an allocation in a domain with a budget
-// it does not reach.
+// it does not reach. (math.MaxUint64 would be no budget at all.)
 func BenchmarkAllocBudget(b *testing.B) {
 	d := goplus.NewAllocDomain()
-	d.SetBudget(math.MaxUint64)
+	d.SetBudget(math.MaxUint64 - 1)
 	d.Run(func() {
 		for b.Loop() {
 			allocSinks[0] = make([]byte, 64)

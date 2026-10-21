@@ -33,7 +33,7 @@ type AllocDomain struct {
 	d unsafe.Pointer
 }
 
-// NewAllocDomain returns a new domain with a count of zero.
+// NewAllocDomain returns a new domain with a count of zero and no budget.
 func NewAllocDomain() *AllocDomain {
 	return &AllocDomain{d: runtime_newAllocDomain()}
 }
@@ -59,8 +59,10 @@ func (d *AllocDomain) Allocated() uint64 {
 var ErrAllocBudget error = runtime_allocBudgetError()
 
 // SetBudget sets the most d may allocate, in the bytes [AllocDomain.Allocated]
-// counts; 0 removes the budget. It may be called at any time, including
-// while goroutines of d run, to grant more or less.
+// counts. [math.MaxUint64] removes the budget, and is the budget of a new
+// domain. 0 is a budget with nothing left: d's next checked allocation is
+// refused. (Before [JIT] level 10, 0 removed the budget.) It may be called
+// at any time, including while goroutines of d run, to grant more or less.
 //
 // An allocation by a goroutine of d that takes d past its budget is
 // refused: the allocation panics with [ErrAllocBudget], which the

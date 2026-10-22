@@ -814,7 +814,7 @@ func gcStart(trigger gcTrigger) {
 		}
 	}
 
-	gcBgMarkStartWorkers()
+	schedGCStartWorkers()
 
 	systemstack(gcResetMarkState)
 

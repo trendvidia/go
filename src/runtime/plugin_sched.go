@@ -58,3 +58,8 @@ func cgoThreadEntry(own uintptr) uintptr {
 	}
 	return own
 }
+
+// schedGCStartWorkers is how gcStart starts the background mark
+// workers. A plugin's copy of gcStart reads the host's value, so the
+// workers are created by, and run, the host's code (trendvidia/go#68).
+var schedGCStartWorkers = gcBgMarkStartWorkers

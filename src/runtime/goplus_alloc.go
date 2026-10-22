@@ -74,13 +74,12 @@ func (d *goplusAllocDomain) add(n uintptr, held int32) bool {
 func (d *goplusAllocDomain) refuse(s *atomic.Uint64, n uintptr, held int32) bool {
 	// An allocation that cannot panic is allowed, and stays counted: the
 	// domain's next allocation that can panic is refused instead. So is
-	// one by a goroutine that is not inside a Run call of its own: one
-	// that Run's function started has no recover around it, and a panic
-	// there would end the process (trendvidia/go#84). These are checked
-	// before the stripes are summed, which they make pointless.
+	// one by a goroutine whose panic would not reach a caller of Run (see
+	// goplusRefusable). These are checked before the stripes are summed,
+	// which they make pointless.
 	gp := getg()
 	mp := gp.m
-	if gp != mp.curg || !gp.goplusInRun || mp.locks != held || mp.mallocing != 0 || mp.preemptoff != "" || mp.dying != 0 {
+	if gp != mp.curg || mp.locks != held || mp.mallocing != 0 || mp.preemptoff != "" || mp.dying != 0 || !goplusRefusable(gp, d) {
 		return false
 	}
 	budget := d.budget.Load()
@@ -92,6 +91,40 @@ func (d *goplusAllocDomain) refuse(s *atomic.Uint64, n uintptr, held int32) bool
 	}
 	s.Add(-int64(n))
 	return true
+}
+
+// goplusRefusable reports whether d may refuse an allocation by gp, a
+// goroutine counted in d: whether the panic would unwind out of a call
+// to d.Run, where the code that called Run can recover it.
+//
+// That holds for a goroutine inside a Run call of its own. It does not
+// for one that Run's function started: nothing around that goroutine
+// recovers, and a panic there would end the process (trendvidia/go#84).
+// A coroutine, the goroutine an iter.Pull iterator runs on, is a third
+// case (trendvidia/go#88). It runs only while the goroutine that called
+// next or stop waits for it, and iter.Pull hands its panics to that
+// goroutine, so it may be refused when that goroutine may be refused in
+// d. The waiting goroutine is held in the coro until the coroutine
+// switches back, and may itself be a coroutine.
+func goplusRefusable(gp *g, d *goplusAllocDomain) bool {
+	// Each step is a coroutine and the goroutine waiting on it. Only a
+	// misused coro can make the chain loop, which the bound stops; a
+	// chain longer than any recursion of iter.Pull reaches is left
+	// unrefused.
+	for range 1 << 16 {
+		if gp.goplusInRun {
+			return gp.allocDomain == d
+		}
+		c := gp.goplusCoro
+		if c == nil {
+			return false
+		}
+		gp = c.gp.ptr()
+		if gp == nil {
+			return false
+		}
+	}
+	return false
 }
 
 // goplusInMapWrite reports whether the current goroutine is allocating

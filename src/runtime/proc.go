@@ -4554,6 +4554,7 @@ func gdestroy(gp *g) {
 	gp.labels = nil
 	gp.allocDomain = nil
 	gp.goplusInRun = false
+	gp.goplusCoro = nil
 	gp.sampleTag = nil
 	gp.timer = nil
 	gp.bubble = nil
@@ -5475,6 +5476,7 @@ func newproc1(fn *funcval, callergp *g, callerpc uintptr, parked bool, waitreaso
 	// A new goroutine is in its parent's domain but not inside its Run
 	// call, so the budget never refuses it (trendvidia/go#84).
 	newg.goplusInRun = false
+	newg.goplusCoro = nil
 
 	if goexperiment.RuntimeSecret && callergp.secret > 0 {
 		// while it might seem weird to have a non-zero gp.secret value

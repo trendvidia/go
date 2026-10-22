@@ -59,6 +59,7 @@ func newcoro(f func(*coro)) *coro {
 		}
 	})
 	gp.coroarg = c
+	gp.goplusCoro = c
 	c.gp.set(gp)
 	return c
 }

@@ -18,6 +18,9 @@ const Version = 27
 // builds, which a program reads through [runtime/debug.ReadBuildInfo]
 // and `go version -m` prints.
 //
+// PlusRevision, the Git commit the toolchain is built from, is written
+// to zplus.go by cmd/dist (mkzgoplus).
+//
 // Bump it on every go-plus release, before tagging. It is not part of
 // [Version] or VERSION because a release letter (v1.27.3b) does not fit
 // Go's version grammar: "go1.27.3b" parses as malformed and compares

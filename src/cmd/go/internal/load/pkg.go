@@ -2531,6 +2531,9 @@ func (p *Package) setBuildInfo(ctx context.Context, f *modfetch.Fetcher, autoVCS
 	// tell itself from a stock build of the same Go release.
 	// runtime.Version() stays the upstream form, which tools parse.
 	appendSetting("goplus", goversion.PlusRelease)
+	if goversion.PlusRevision != "" {
+		appendSetting("goplus.revision", goversion.PlusRevision)
+	}
 
 	// Add VCS status if all conditions are true:
 	//

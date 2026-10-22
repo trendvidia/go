@@ -317,6 +317,8 @@ pkg uuid, method (UUID) String() string #62026
 pkg uuid, type UUID [16]uint8 #62026
 pkg goplus, const JIT = 13 #91
 pkg goplus, const JIT ideal-int #10
+pkg goplus, func Release() string #91
+pkg goplus, func Revision() string #91
 pkg goplus, func ObjectExtent(unsafe.Pointer) (unsafe.Pointer, uintptr, bool) #10
 pkg goplus, func SetNoTinyAlloc(bool) bool #15
 pkg goplus, func WriteBarrierEntry(int) uintptr #9

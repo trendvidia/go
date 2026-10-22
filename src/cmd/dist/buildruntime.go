@@ -26,6 +26,30 @@ func mkzversion(dir, file string) {
 	writefile(buf.String(), file, writeSkipSame)
 }
 
+// mkzgoplus writes internal/goversion/zplus.go (go-plus):
+//
+//	package goversion
+//	const PlusRevision = <git commit the toolchain is built from>
+//
+// The commit is the full hash of HEAD, with "+dirty" appended when
+// tracked files differ from it, or "" when $GOROOT is not a Git
+// checkout (a source archive).
+func mkzgoplus(dir, file string) {
+	rev := ""
+	if isGitRepo() {
+		rev = chomp(run(goroot, CheckExit, "git", "rev-parse", "HEAD"))
+		if chomp(run(goroot, CheckExit, "git", "status", "--porcelain", "--untracked-files=no")) != "" {
+			rev += "+dirty"
+		}
+	}
+	var buf strings.Builder
+	writeHeader(&buf)
+	fmt.Fprintf(&buf, "package goversion\n\n")
+	fmt.Fprintf(&buf, "// PlusRevision is the Git commit this go-plus toolchain was built from.\n")
+	fmt.Fprintf(&buf, "const PlusRevision = %q\n", rev)
+	writefile(buf.String(), file, writeSkipSame)
+}
+
 // mkbuildcfg writes internal/buildcfg/zbootstrap.go:
 //
 //	package buildcfg

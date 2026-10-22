@@ -134,6 +134,7 @@ func main() {
 		"src/cmd/go/internal/cfg/zdefaultcc.go",
 		"src/go/build/zcgo.go",
 		"src/internal/runtime/sys/zversion.go",
+		"src/internal/goversion/zplus.go", // go-plus
 		"src/time/tzdata/zzipdata.go",
 
 		// Generated during cmd/dist by bootstrapBuildTools.

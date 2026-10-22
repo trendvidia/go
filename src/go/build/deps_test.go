@@ -127,7 +127,8 @@ var depsRules = `
 	< RUNTIME;
 
 	# goplus is the go-plus fork's runtime API for the govm JIT.
-	RUNTIME < goplus;
+	# internal/goversion holds the release and commit it reports.
+	RUNTIME, internal/goversion < goplus;
 
 	RUNTIME
 	< sort

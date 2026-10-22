@@ -5,26 +5,59 @@
 package goplus_test
 
 import (
-	"internal/goversion"
+	"goplus"
 	"internal/testenv"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"testing"
 )
 
+var revisionRE = regexp.MustCompile(`^[0-9a-f]{40}(\+dirty)?$`)
+
+// TestRelease checks the form of Release and Revision, and that Revision
+// names a commit of the checkout the toolchain was built from.
+func TestRelease(t *testing.T) {
+	if r := goplus.Release(); !strings.HasPrefix(r, "v") {
+		t.Errorf("Release() = %q, want a release tag such as v1.27.3b", r)
+	}
+
+	rev := goplus.Revision()
+	if rev != "" && !revisionRE.MatchString(rev) {
+		t.Fatalf("Revision() = %q, want a full commit hash, optionally followed by +dirty", rev)
+	}
+
+	goroot := testenv.GOROOT(t)
+	if _, err := os.Stat(filepath.Join(goroot, ".git")); err != nil {
+		if rev != "" {
+			t.Logf("Revision() = %q, GOROOT %s is not a Git checkout; not checking the commit", rev, goroot)
+		}
+		return
+	}
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("GOROOT is a Git checkout but git is not available: %v", err)
+	}
+	if rev == "" {
+		t.Fatalf("Revision() is empty, but the toolchain's GOROOT %s is a Git checkout", goroot)
+	}
+	sha := strings.TrimSuffix(rev, "+dirty")
+	cmd := exec.Command(git, "cat-file", "-e", sha+"^{commit}")
+	cmd.Dir = goroot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("Revision() = %q is not a commit of %s: %v\n%s", rev, goroot, err, out)
+	}
+}
+
 // TestReleaseInBuildInfo checks that a program built with no build tags,
-// and not importing goplus, can read the go-plus release from its own
-// build information (JIT level 13).
+// and not importing goplus, can read the go-plus release and revision
+// from its own build information (JIT level 13).
 func TestReleaseInBuildInfo(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	t.Parallel()
-
-	if !strings.HasPrefix(goversion.PlusRelease, "v") {
-		t.Fatalf("goversion.PlusRelease = %q, want a release tag such as v1.27.3b", goversion.PlusRelease)
-	}
 
 	dir := t.TempDir()
 	const prog = `package main
@@ -41,12 +74,10 @@ func main() {
 		return
 	}
 	for _, s := range info.Settings {
-		if s.Key == "goplus" {
-			fmt.Println("goplus=" + s.Value)
-			return
+		if s.Key == "goplus" || s.Key == "goplus.revision" {
+			fmt.Println(s.Key + "=" + s.Value)
 		}
 	}
-	fmt.Println("no goplus setting")
 }
 `
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(prog), 0o666); err != nil {
@@ -66,24 +97,29 @@ func main() {
 	if err != nil {
 		t.Fatalf("running the built program: %v\n%s", err, out)
 	}
-	want := "goplus=" + goversion.PlusRelease
-	if got := strings.TrimSpace(string(out)); got != want {
-		t.Errorf("program built with no tags read %q from its build info, want %q", got, want)
+	want := []string{"goplus=" + goplus.Release()}
+	if rev := goplus.Revision(); rev != "" {
+		want = append(want, "goplus.revision="+rev)
+	}
+	if got := strings.TrimSpace(string(out)); got != strings.Join(want, "\n") {
+		t.Errorf("program built with no tags read from its build info:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
 	}
 
-	// go version -m reads the same setting from outside the binary.
+	// go version -m reads the same settings from outside the binary.
 	vm := testenv.Command(t, testenv.GoToolPath(t), "version", "-m", exe)
 	vout, err := vm.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go version -m: %v\n%s", err, vout)
 	}
-	if !strings.Contains(string(vout), "\tbuild\t"+want+"\n") {
-		t.Errorf("go version -m does not show build %s:\n%s", want, vout)
+	for _, w := range want {
+		if !strings.Contains(string(vout), "\tbuild\t"+w+"\n") {
+			t.Errorf("go version -m does not show build %s:\n%s", w, vout)
+		}
 	}
 }
 
-// TestReleaseInOwnBuildInfo checks the same for this test binary, which
-// go test builds: the setting is not limited to go build.
+// TestReleaseInOwnBuildInfo checks the release setting for this test
+// binary, which go test builds: the setting is not limited to go build.
 func TestReleaseInOwnBuildInfo(t *testing.T) {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
@@ -91,8 +127,8 @@ func TestReleaseInOwnBuildInfo(t *testing.T) {
 	}
 	for _, s := range info.Settings {
 		if s.Key == "goplus" {
-			if s.Value != goversion.PlusRelease {
-				t.Errorf("build setting goplus=%q, want %q", s.Value, goversion.PlusRelease)
+			if s.Value != goplus.Release() {
+				t.Errorf("build setting goplus=%q, want %q", s.Value, goplus.Release())
 			}
 			return
 		}

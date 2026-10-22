@@ -29,6 +29,7 @@ func TestDeadcode(t *testing.T) {
 		{"ifacemethod4", nil, []string{"main.T.M"}},
 		{"ifacemethod5", []string{"main.S.M"}, nil},
 		{"ifacemethod6", []string{"main.S.M"}, []string{"main.S.N"}},
+		{"ifacemethod7", []string{"main.S.M"}, []string{"main.S.N"}},
 		{"structof_funcof", []string{"main.S.M"}, []string{"main.S.N"}},
 		{"globalmap", []string{"main.small", "main.effect"},
 			[]string{"main.large"}},

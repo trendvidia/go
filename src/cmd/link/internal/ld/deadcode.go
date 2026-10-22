@@ -5,6 +5,7 @@
 package ld
 
 import (
+	"bytes"
 	"cmd/internal/goobj"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
@@ -24,10 +25,12 @@ type deadcodePass struct {
 	ldr  *loader.Loader
 	wq   heap // work queue, using min-heap for better locality
 
-	ifaceMethod        map[methodsig]bool // methods called from reached interface call sites
-	genericIfaceMethod map[string]bool    // names of methods called from reached generic interface call sites
-	markableMethods    []methodref        // methods of reached types
-	reflectSeen        bool               // whether we have seen a reflect method call
+	ifaceMethod        map[methodsig]bool    // methods called from reached interface call sites
+	ifaceMethodTagless map[string]bool       // the same, keyed by taglessSigKey
+	taglessSig         map[loader.Sym]string // taglessSigKey's type strings, by signature type symbol
+	genericIfaceMethod map[string]bool       // names of methods called from reached generic interface call sites
+	markableMethods    []methodref           // methods of reached types
+	reflectSeen        bool                  // whether we have seen a reflect method call
 	dynlink            bool
 
 	methodsigstmp []methodsig // scratch buffer for decoding method signatures
@@ -38,6 +41,8 @@ type deadcodePass struct {
 func (d *deadcodePass) init() {
 	d.ldr.InitReachable()
 	d.ifaceMethod = make(map[methodsig]bool)
+	d.ifaceMethodTagless = make(map[string]bool)
+	d.taglessSig = make(map[loader.Sym]string)
 	d.genericIfaceMethod = make(map[string]bool)
 	if buildcfg.Experiment.FieldTrack {
 		d.ldr.Reachparent = make([]loader.Sym, d.ldr.NSym())
@@ -282,6 +287,9 @@ func (d *deadcodePass) flood() {
 					d.ctxt.Logf("reached iface method: %v\n", m)
 				}
 				d.ifaceMethod[m] = true
+				if k, ok := d.taglessSigKey(m); ok {
+					d.ifaceMethodTagless[k] = true
+				}
 				continue
 			case objabi.R_USENAMEDMETHOD:
 				name := d.decodeGenericIfaceMethod(d.ldr, r.Sym())
@@ -497,7 +505,7 @@ func deadcode(ctxt *Link) {
 		// in the last pass.
 		rem := d.markableMethods[:0]
 		for _, m := range d.markableMethods {
-			if (d.reflectSeen && (m.isExported() || d.dynlink)) || d.ifaceMethod[m.m] || d.genericIfaceMethod[m.m.name] {
+			if (d.reflectSeen && (m.isExported() || d.dynlink)) || d.ifaceMethod[m.m] || d.genericIfaceMethod[m.m.name] || d.ifaceMethodTaglessCalled(m.m) {
 				d.markMethod(m)
 			} else {
 				rem = append(rem, m)
@@ -520,6 +528,66 @@ func deadcode(ctxt *Link) {
 type methodsig struct {
 	name string
 	typ  loader.Sym // type descriptor symbol of the function
+}
+
+// An interface method call can reach a method whose signature differs
+// from the call's only in struct tags: converting between pointer or
+// channel types whose element types are identical but for tags is legal,
+// and a value of one interface type can then be used as the other
+// (trendvidia/go#85). The signatures' type symbols differ, so ifaceMethod
+// misses the match, and the method would be dropped while an itab still
+// points at it.
+//
+// taglessSigKey keys a signature by its method name and its type string
+// with the struct tags removed. Types identical but for tags have equal
+// keys. Types that are not identical can have equal keys too (a type
+// string names a package, not its path), which only keeps a method that
+// could have been dropped.
+func (d *deadcodePass) taglessSigKey(m methodsig) (string, bool) {
+	str, ok := d.taglessSig[m.typ]
+	if !ok {
+		if len(d.ldr.Data(m.typ)) != 0 {
+			str = stripStructTags(decodetypeStr(d.ldr, d.ctxt.Arch, m.typ))
+		}
+		d.taglessSig[m.typ] = str
+	}
+	if str == "" {
+		return "", false
+	}
+	return m.name + " " + str, true
+}
+
+// ifaceMethodTaglessCalled reports whether a reached interface call site
+// calls a method with m's name and m's signature ignoring struct tags.
+func (d *deadcodePass) ifaceMethodTaglessCalled(m methodsig) bool {
+	if len(d.ifaceMethodTagless) == 0 {
+		return false
+	}
+	k, ok := d.taglessSigKey(m)
+	return ok && d.ifaceMethodTagless[k]
+}
+
+// stripStructTags removes the struct tags from a type string, such as
+// `struct { X int "json:\"x\"" }`. A type string quotes nothing but tags,
+// each preceded by a space, with Go's escaping.
+func stripStructTags(s string) string {
+	if !strings.Contains(s, `"`) {
+		return s
+	}
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '"' {
+			b = append(b, s[i])
+			continue
+		}
+		b = bytes.TrimSuffix(b, []byte(" "))
+		for i++; i < len(s) && s[i] != '"'; i++ {
+			if s[i] == '\\' {
+				i++
+			}
+		}
+	}
+	return string(b)
 }
 
 // methodref holds the relocations from a receiver type symbol to its

@@ -197,14 +197,20 @@ opened under two spellings of a Windows drive letter (`C:\` vs `c:\`)
 loads twice. Canonicalise paths before calling `Open`.
 
 **On linux and darwin, a goroutine that a plugin's copy of a shared
-package starts can outlive `Close`** ([#68](https://github.com/trendvidia/go/issues/68)).
-A plugin there carries its own copy of each package it shares with the
-host, and calls that copy directly. The runtime's garbage collector
-workers and its scheduler are routed back to the host, so a collection
-or a preemption in plugin code no longer leaves a runtime thread or
-worker in the image. Other background goroutines that a package starts
-the first time it is used, such as `os/signal`'s, may still run the
-plugin's code; none has been seen to crash. Windows is not
+package starts can outlive `Close` and crash the host**
+([#68](https://github.com/trendvidia/go/issues/68)). A plugin there
+carries its own copy of each package it shares with the host, and calls
+that copy directly. The runtime's own background goroutines (the garbage
+collector's mark workers, and the goroutines that run finalizers and
+cleanups) and its scheduler are routed back to the host, so a
+collection, a finalizer, a cleanup or a preemption in plugin code no
+longer leaves a thread or goroutine in the image. Other packages are not
+routed. If a package that the host and the plugin share starts a
+background goroutine the first time it is used, and the plugin is the
+first to use it, that goroutine runs the plugin's code; the first
+collection after `Close` crashes with `fatal error: unknown pc`
+(measured on darwin/arm64 with a test package). A host can avoid this
+by using such a package once before it opens any plugin. Windows is not
 affected: a Windows plugin links against the host and carries no copy
 of the runtime.
 

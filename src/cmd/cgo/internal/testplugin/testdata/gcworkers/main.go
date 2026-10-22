@@ -10,8 +10,11 @@
 //
 // The host makes sure no collection has run before the plugin's, so the
 // plugin's is the one that starts the workers. It then closes the
-// plugin and collects again. It prints "gcworkers: done" as its last
-// line so the harness can tell a fault from a finished run.
+// plugin and collects again. Run with the argument "maxprocs", the host
+// instead starts one worker itself, at GOMAXPROCS 1, and raises
+// GOMAXPROCS before the plugin's collection, which then has to start
+// the rest. It prints "gcworkers: done" as its last line so the harness
+// can tell a fault from a finished run.
 package main
 
 import (
@@ -42,6 +45,16 @@ func main() {
 	if n := numGC(); n != 0 {
 		fail("%d collections ran before the plugin's; the host started the workers", n)
 	}
+	var want uint32 = 1
+	if len(os.Args) > 1 && os.Args[1] == "maxprocs" {
+		// Workers are never stopped, so the host's collection at
+		// GOMAXPROCS 1 leaves exactly one, and the plugin's starts the
+		// other three.
+		runtime.GOMAXPROCS(1)
+		runtime.GC()
+		runtime.GOMAXPROCS(4)
+		want = 2
+	}
 
 	p, err := plugin.Open("gcworkers-plugin" + pluginExt)
 	if err != nil {
@@ -52,8 +65,8 @@ func main() {
 		fail("Lookup(Collect): %v", err)
 	}
 	s.(func())()
-	if n := numGC(); n != 1 {
-		fail("after the plugin's collection NumGC = %d, want 1", n)
+	if n := numGC(); n != want {
+		fail("after the plugin's collection NumGC = %d, want %d", n, want)
 	}
 
 	if err := p.Close(); err != nil {

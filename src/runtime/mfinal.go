@@ -530,8 +530,9 @@ okarg:
 	}
 	nret = alignUp(nret, goarch.PtrSize)
 
-	// make sure we have a finalizer goroutine
-	createfing()
+	// make sure we have a finalizer goroutine, through a variable; see
+	// plugin_sched.go
+	startFing()
 
 	callerpc := sys.GetCallerPC()
 	systemstack(func() {

@@ -91,14 +91,14 @@ func TestAllocDomainSmall(t *testing.T) {
 func TestAllocDomainSlowPath(t *testing.T) {
 	testenv.MustHaveExec(t)
 	cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t),
-		"-test.run=^(TestAllocDomainSmall|TestAllocDomainMatchesMemStats|TestAllocBudgetSmall)$", "-test.v", "-test.count=1"))
+		"-test.run=^(TestAllocDomainSmall|TestAllocDomainMatchesMemStats|TestAllocBudgetSmall|TestAllocBudgetStartedGoroutine)$", "-test.v", "-test.count=1"))
 	cmd.Env = append(cmd.Environ(), "GODEBUG=inittrace=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	// Require each test to have run, not merely nothing to have failed.
-	for _, name := range []string{"TestAllocDomainSmall", "TestAllocDomainMatchesMemStats", "TestAllocBudgetSmall"} {
+	for _, name := range []string{"TestAllocDomainSmall", "TestAllocDomainMatchesMemStats", "TestAllocBudgetSmall", "TestAllocBudgetStartedGoroutine"} {
 		if !strings.Contains(string(out), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass in the child process:\n%s", name, out)
 		}
@@ -428,16 +428,15 @@ func TestAllocBudgetConcurrent(t *testing.T) {
 	d.SetBudget(budget)
 	var wg sync.WaitGroup
 	refused := make([]any, workers)
-	d.Run(func() {
-		for w := range workers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() { refused[w] = recover() }()
-				allocExact(w, 1<<30, 128)
-			}()
-		}
-	})
+	// Each worker enters d itself: the budget refuses only a goroutine
+	// inside a call to Run, not one that Run's function started.
+	for w := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			refused[w] = runRefused(d, func() { allocExact(w, 1<<30, 128) })
+		}()
+	}
 	wg.Wait()
 	for _, r := range refused {
 		checkBudgetPanic(t, r)
@@ -472,6 +471,75 @@ func TestAllocBudgetChange(t *testing.T) {
 
 // TestAllocBudgetZero checks that a budget of 0 has nothing left, and
 // that a new domain has no budget.
+// TestAllocBudgetStartedGoroutine checks that the budget refuses only a
+// goroutine that is inside a call to Run (trendvidia/go#84). A goroutine
+// Run's function starts is counted in the domain but never refused,
+// while Run runs and after it returns: it has no recover, and a refusal
+// there used to end the process. When that goroutine calls Run itself,
+// it is refused inside the call, and not after it.
+func TestAllocBudgetStartedGoroutine(t *testing.T) {
+	const budget = 1 << 20
+	// past allocates well past the budget, in small objects and in one
+	// large one, which take different paths through the allocator.
+	past := func(w int) {
+		allocExact(w, 1000, 4096)
+		allocExact(w, 1, 4<<20)
+	}
+	// unrefused runs f and returns what it panicked with, if anything.
+	unrefused := func(f func()) (r any) {
+		defer func() { r = recover() }()
+		f()
+		return nil
+	}
+
+	d := goplus.NewAllocDomain()
+	d.SetBudget(budget)
+	release := make(chan bool)
+	during := make(chan any)
+	after := make(chan [3]any, 1)
+	var duringR any
+	refusedCaller := runRefused(d, func() {
+		// Started here, allocating only after Run has returned.
+		go func() {
+			<-release
+			var rs [3]any
+			rs[0] = unrefused(func() { past(2) })
+			rs[1] = runRefused(d, func() { past(2) })
+			rs[2] = unrefused(func() { past(2) })
+			after <- rs
+		}()
+		// Started while Run runs, and done before it returns.
+		go func() { during <- unrefused(func() { past(1) }) }()
+		duringR = <-during
+		// The caller itself is still refused.
+		past(0)
+	})
+	if duringR != nil {
+		t.Fatalf("goroutine started while Run ran was refused: %v", duringR)
+	}
+	checkBudgetPanic(t, refusedCaller)
+
+	before := d.Allocated()
+	close(release)
+	var rs [3]any
+	select {
+	case rs = <-after:
+	case <-time.After(time.Minute):
+		t.Fatal("goroutine that outlived Run did not finish within a minute")
+	}
+	if rs[0] != nil {
+		t.Fatalf("goroutine that outlived Run was refused: %v", rs[0])
+	}
+	checkBudgetPanic(t, rs[1]) // inside its own call to d.Run
+	if rs[2] != nil {
+		t.Fatalf("goroutine was still refused after its own Run returned: %v", rs[2])
+	}
+	// Positive marker: it allocated past the budget, and was counted.
+	if n, want := d.Allocated()-before, uint64(2*(1000*4096+4<<20)); n < want {
+		t.Fatalf("domain counted %d bytes from the goroutine that outlived Run, want at least %d", n, want)
+	}
+}
+
 func TestAllocBudgetZero(t *testing.T) {
 	big := func() { allocExact(0, 1, 1<<20) }
 

@@ -81,12 +81,16 @@ var ErrAllocBudget error = runtime_allocBudgetError()
 // bound them; [AllocDomain.Allocated] still includes what they allocate.
 // (Before [JIT] level 11, the budget refused every goroutine of d.)
 //
-// A single large request is refused before any memory is requested from
-// the operating system, so a call such as strings.Repeat that asks for
-// more than the machine has is refused rather than fatal. Small
-// allocations are checked against the budget every 64 KiB, per P, so d
-// can pass its budget by up to 64 KiB times the number of Ps its
-// goroutines allocate on before one is refused.
+// A single large request inside Run is refused before any memory is
+// requested from the operating system, so a call such as strings.Repeat
+// that asks for more than the machine has is refused rather than fatal.
+// The same call in a goroutine that is not inside Run is let through,
+// and is fatal. Small allocations are checked against the budget each
+// time d allocates another 64 KiB on a P, and the first checked one made
+// inside Run after d is past its budget is refused. While only
+// goroutines inside Run allocate, d can pass its budget by up to 64 KiB
+// times the number of Ps they allocate on before one is refused; the
+// goroutines outside Run can take it past by any amount.
 //
 // An allocation that cannot panic is let through and counted, and the
 // next one that can is refused instead. These are allocations the

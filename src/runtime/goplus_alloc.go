@@ -72,18 +72,19 @@ func (d *goplusAllocDomain) add(n uintptr, held int32) bool {
 //
 //go:noinline
 func (d *goplusAllocDomain) refuse(s *atomic.Uint64, n uintptr, held int32) bool {
-	budget := d.budget.Load()
-	if budget == goplusNoBudget || goplus_allocDomainTotal(unsafe.Pointer(d)) <= budget {
-		return false
-	}
 	// An allocation that cannot panic is allowed, and stays counted: the
 	// domain's next allocation that can panic is refused instead. So is
 	// one by a goroutine that is not inside a Run call of its own: one
 	// that Run's function started has no recover around it, and a panic
-	// there would end the process (trendvidia/go#84).
+	// there would end the process (trendvidia/go#84). These are checked
+	// before the stripes are summed, which they make pointless.
 	gp := getg()
 	mp := gp.m
 	if gp != mp.curg || !gp.goplusInRun || mp.locks != held || mp.mallocing != 0 || mp.preemptoff != "" || mp.dying != 0 {
+		return false
+	}
+	budget := d.budget.Load()
+	if budget == goplusNoBudget || goplus_allocDomainTotal(unsafe.Pointer(d)) <= budget {
 		return false
 	}
 	if goplusInMapWrite() {

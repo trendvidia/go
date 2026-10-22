@@ -51,6 +51,15 @@ func NewAllocDomain() *AllocDomain {
 // recover it. A goroutine of d that later calls Run itself, on d or on
 // another domain, is inside that call until it returns, and the budget
 // of the domain it runs in may refuse it there.
+//
+// The body of an [iter.Pull] iterator runs on a goroutine of its own,
+// which stays in the domain it was created in. It runs only while the
+// goroutine that called next or stop waits for it, and its panics are
+// raised in that goroutine. So d's budget refuses the body while that
+// goroutine is inside a call to d.Run, and the refusal reaches the
+// caller of next or stop. It does not while that goroutine is outside
+// Run, or inside Run on another domain, for example when next is called
+// after the Run that created the iterator has returned.
 func (d *AllocDomain) Run(f func()) {
 	// A nil domain would take the goroutine out of any enclosing one.
 	prev, prevInRun := runtime_setAllocDomain(d.domain(), true)
@@ -79,7 +88,9 @@ var ErrAllocBudget error = runtime_allocBudgetError()
 // Goroutines of d that are not inside a call to Run, such as those a
 // call started, are counted and never refused, so the budget does not
 // bound them; [AllocDomain.Allocated] still includes what they allocate.
-// (Before [JIT] level 11, the budget refused every goroutine of d.)
+// (Before [JIT] level 11, the budget refused every goroutine of d.) The
+// body of an [iter.Pull] iterator counts as inside Run when the goroutine
+// that resumed it is; see [AllocDomain.Run]. (At level 11, it never did.)
 //
 // A single large request inside Run is refused before any memory is
 // requested from the operating system, so a call such as strings.Repeat

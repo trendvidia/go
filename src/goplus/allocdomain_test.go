@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"goplus"
 	"internal/testenv"
+	"iter"
 	"math"
 	"os/exec"
 	"runtime"
@@ -92,14 +93,14 @@ func TestAllocDomainSmall(t *testing.T) {
 func TestAllocDomainSlowPath(t *testing.T) {
 	testenv.MustHaveExec(t)
 	cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t),
-		"-test.run=^(TestAllocDomainSmall|TestAllocDomainMatchesMemStats|TestAllocBudgetSmall|TestAllocBudgetStartedGoroutine)$", "-test.v", "-test.count=1"))
+		"-test.run=^(TestAllocDomainSmall|TestAllocDomainMatchesMemStats|TestAllocBudgetSmall|TestAllocBudgetStartedGoroutine|TestAllocBudgetPull)$", "-test.v", "-test.count=1"))
 	cmd.Env = append(cmd.Environ(), "GODEBUG=inittrace=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	// Require each test to have run, not merely nothing to have failed.
-	for _, name := range []string{"TestAllocDomainSmall", "TestAllocDomainMatchesMemStats", "TestAllocBudgetSmall", "TestAllocBudgetStartedGoroutine"} {
+	for _, name := range []string{"TestAllocDomainSmall", "TestAllocDomainMatchesMemStats", "TestAllocBudgetSmall", "TestAllocBudgetStartedGoroutine", "TestAllocBudgetPull"} {
 		if !strings.Contains(string(out), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass in the child process:\n%s", name, out)
 		}
@@ -603,6 +604,234 @@ func TestAllocBudgetBesideStartedGoroutine(t *testing.T) {
 			t.Logf("caller refused after %d bytes of its own", own)
 		})
 	}
+}
+
+// TestAllocBudgetPull checks the budget on an iterator that iter.Pull
+// runs (trendvidia/go#88). Its body runs on a goroutine of its own, and
+// iter.Pull hands that goroutine's panics to whoever called next or
+// stop. So the body is refused exactly when that caller could be: it is
+// inside Run on the domain counting the body.
+func TestAllocBudgetPull(t *testing.T) {
+	const budget = 1 << 20
+	// past allocates well past the budget, in small objects and in one
+	// large one, which take different paths through the allocator.
+	past := func() {
+		allocExact(3, 1000, 4096)
+		allocExact(3, 1, 4<<20)
+	}
+	unrefused := func(f func()) (r any) {
+		defer func() { r = recover() }()
+		f()
+		return nil
+	}
+	// pulled returns an iterator that allocates past the budget before
+	// each value it yields, and once more when it is stopped.
+	pulled := func() (next func() (int, bool), stop func()) {
+		return iter.Pull(func(yield func(int) bool) {
+			for i := 0; ; i++ {
+				past()
+				if !yield(i) {
+					past()
+					return
+				}
+			}
+		})
+	}
+	drain := func(next func() (int, bool)) {
+		for i := 0; i < 64; i++ {
+			if _, ok := next(); !ok {
+				return
+			}
+		}
+	}
+
+	t.Run("next inside Run", func(t *testing.T) {
+		d := goplus.NewAllocDomain()
+		d.SetBudget(budget)
+		checkBudgetPanic(t, runRefused(d, func() {
+			next, stop := pulled()
+			defer stop()
+			drain(next)
+		}))
+	})
+
+	t.Run("stop inside Run", func(t *testing.T) {
+		d := goplus.NewAllocDomain()
+		checkBudgetPanic(t, runRefused(d, func() {
+			next, stop := pulled()
+			next()                     // no budget yet
+			d.SetBudget(d.Allocated()) // nothing more may be allocated
+			stop()                     // the body allocates once more
+		}))
+	})
+
+	t.Run("nested Pull inside Run", func(t *testing.T) {
+		d := goplus.NewAllocDomain()
+		d.SetBudget(budget)
+		checkBudgetPanic(t, runRefused(d, func() {
+			outer, stop := iter.Pull(func(yield func(int) bool) {
+				inner, stopInner := pulled()
+				defer stopInner()
+				for {
+					v, ok := inner()
+					if !ok || !yield(v) {
+						return
+					}
+				}
+			})
+			defer stop()
+			drain(outer)
+		}))
+	})
+
+	t.Run("next after Run returns", func(t *testing.T) {
+		// Created inside Run, resumed outside it: no caller of Run is
+		// left to recover a refusal, so none may happen, and the process
+		// carries on.
+		d := goplus.NewAllocDomain()
+		d.SetBudget(budget)
+		var next func() (int, bool)
+		var stop func()
+		d.Run(func() { next, stop = pulled() })
+		before := d.Allocated()
+		if r := unrefused(func() { drain(next); stop() }); r != nil {
+			t.Fatalf("iterator resumed outside Run was refused: %v", r)
+		}
+		// Positive marker: it allocated past the budget, and was counted.
+		if n, want := d.Allocated()-before, uint64(64*(1000*4096+4<<20)); n < want {
+			t.Fatalf("domain counted %d bytes from the iterator, want at least %d", n, want)
+		}
+	})
+
+	t.Run("next inside another domain's Run", func(t *testing.T) {
+		// The iterator stays in the domain it was created in, and the
+		// caller's Run on another domain does not make it refusable.
+		d := goplus.NewAllocDomain()
+		d.SetBudget(budget)
+		var next func() (int, bool)
+		var stop func()
+		d.Run(func() { next, stop = pulled() })
+		defer stop()
+		e := goplus.NewAllocDomain()
+		e.SetBudget(budget)
+		if r := runRefused(e, func() { drain(next) }); r != nil {
+			t.Fatalf("iterator of one domain was refused inside another's Run: %v", r)
+		}
+		if n := e.Allocated(); n > budget {
+			t.Fatalf("the caller's domain counted %d bytes of the iterator's", n)
+		}
+	})
+
+	t.Run("body inside its own Run", func(t *testing.T) {
+		// The body calls Run on e and yields from inside it. While the
+		// body is parked there, its caller is not in e: the caller's
+		// allocations are neither counted in e nor refused by it. When
+		// the body allocates past e's budget, the refusal reaches the
+		// caller of next.
+		e := goplus.NewAllocDomain()
+		e.SetBudget(budget)
+		next, stop := iter.Pull(func(yield func(int) bool) {
+			e.Run(func() {
+				if !yield(0) {
+					return
+				}
+				past()
+				yield(1)
+			})
+		})
+		defer stop()
+		d := goplus.NewAllocDomain() // no budget
+		var r1, r2 any
+		var inE uint64
+		d.Run(func() {
+			next()
+			inE = e.Allocated()
+			r1 = unrefused(past)
+			inE = e.Allocated() - inE
+			r2 = unrefused(func() { next() })
+		})
+		if r1 != nil {
+			t.Fatalf("caller was refused while the body was parked in e.Run: %v", r1)
+		}
+		if inE != 0 {
+			t.Fatalf("e counted %d bytes of the caller's while the body was parked in e.Run", inE)
+		}
+		if d.Allocated() < 1000*4096+4<<20 {
+			t.Fatalf("caller's domain counted %d bytes, want at least one past()", d.Allocated())
+		}
+		checkBudgetPanic(t, r2)
+	})
+
+	t.Run("refusal before the body's recover", func(t *testing.T) {
+		// The body allocates before iter.Pull's recover is in place: its
+		// yield closure escapes. A refusal there would never reach the
+		// caller: next would return as if the sequence were empty, and
+		// stop would die with "coroswitch on exited coro". Each attempt
+		// starts a fresh domain with nothing left and fills it to j
+		// 16-byte objects short of the first granule, so across the
+		// sweep the granule is crossed at each of the allocations the
+		// first next makes, in the caller and in the body.
+		pulls := map[string]func() (started *bool, next func() bool, stop func()){
+			"Pull": func() (*bool, func() bool, func()) {
+				started := new(bool)
+				next, stop := iter.Pull(func(yield func(int) bool) { *started = true; yield(1) })
+				return started, func() bool { _, ok := next(); return ok }, stop
+			},
+			"Pull2": func() (*bool, func() bool, func()) {
+				started := new(bool)
+				next, stop := iter.Pull2(func(yield func(int, int) bool) { *started = true; yield(1, 2) })
+				return started, func() bool { _, _, ok := next(); return ok }, stop
+			},
+		}
+		for name, pull := range pulls {
+			refused := 0
+			for j := 1; j <= 256; j++ {
+				d := goplus.NewAllocDomain()
+				d.SetBudget(0)
+				lost := false
+				r := runRefused(d, func() {
+					allocExact(0, budgetGranule/16-j, 16)
+					started, next, stop := pull()
+					if !next() && !*started {
+						lost = true // calling stop would end the process
+						return
+					}
+					stop()
+				})
+				if lost {
+					t.Fatalf("%s: %d objects short of the granule, the body was refused where no caller could recover it", name, j)
+				}
+				if r != nil {
+					checkBudgetPanic(t, r)
+					refused++
+				}
+			}
+			// Positive marker: the sweep did reach the granule.
+			if refused == 0 {
+				t.Fatalf("%s: no attempt crossed the granule", name)
+			}
+		}
+	})
+
+	t.Run("huge request", func(t *testing.T) {
+		// The request iterator's body makes would end the process with
+		// "fatal error: out of memory" if it were let through.
+		d := goplus.NewAllocDomain()
+		d.SetBudget(64 << 20)
+		const n = int(min(uint64(3)<<46, math.MaxInt>>1))
+		var s string
+		checkBudgetPanic(t, runRefused(d, func() {
+			next, stop := iter.Pull(func(yield func(int) bool) {
+				s = strings.Repeat("x", n)
+				yield(len(s))
+			})
+			defer stop()
+			next()
+		}))
+		if s != "" {
+			t.Fatalf("strings.Repeat returned %d bytes", len(s))
+		}
+	})
 }
 
 // TestAllocBudgetZero checks that a budget of 0 has nothing left, and

@@ -236,6 +236,13 @@ func newcoro(func(*coro)) *coro
 //go:linknamestd coroswitch runtime.coroswitch
 func coroswitch(*coro)
 
+// goplusCoroRecovers tells the goplus allocation budget that the calling
+// goroutine runs c's body and hands its panics to the goroutine waiting
+// on c, or with nil, that it no longer does (trendvidia/go#88).
+//
+//go:linknamestd goplusCoroRecovers runtime.goplusCoroRecovers
+func goplusCoroRecovers(*coro)
+
 // Pull converts the “push-style” iterator sequence seq
 // into a “pull-style” iterator accessed by the two functions
 // next and stop.
@@ -290,6 +297,7 @@ func Pull[V any](seq Seq[V]) (next func() (V, bool), stop func()) {
 		}
 		// Recover and propagate panics from seq.
 		defer func() {
+			goplusCoroRecovers(nil)
 			if p := recover(); p != nil {
 				pull.panicValue = p
 			} else if !pull.seqDone {
@@ -298,6 +306,9 @@ func Pull[V any](seq Seq[V]) (next func() (V, bool), stop func()) {
 			pull.done = true // Invalidate iterator
 			race.Release(unsafe.Pointer(&pull.racer))
 		}()
+		// Only from here on does a panic reach the caller of next or
+		// stop, so only from here may the goplus budget refuse the body.
+		goplusCoroRecovers(c)
 		seq(yield)
 		var v0 V
 		pull.v, pull.ok = v0, false
@@ -406,6 +417,7 @@ func Pull2[K, V any](seq Seq2[K, V]) (next func() (K, V, bool), stop func()) {
 		}
 		// Recover and propagate panics from seq.
 		defer func() {
+			goplusCoroRecovers(nil)
 			if p := recover(); p != nil {
 				pull.panicValue = p
 			} else if !pull.seqDone {
@@ -414,6 +426,9 @@ func Pull2[K, V any](seq Seq2[K, V]) (next func() (K, V, bool), stop func()) {
 			pull.done = true // Invalidate iterator.
 			race.Release(unsafe.Pointer(&pull.racer))
 		}()
+		// Only from here on does a panic reach the caller of next or
+		// stop, so only from here may the goplus budget refuse the body.
+		goplusCoroRecovers(c)
 		seq(yield)
 		var k0 K
 		var v0 V

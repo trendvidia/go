@@ -71,4 +71,7 @@ package goplus
 // 0 is a budget with nothing left, where before it removed the budget.
 // Level 11: an [AllocDomain]'s budget refuses only allocations made inside
 // [AllocDomain.Run]; goroutines a call starts are counted, never refused.
-const JIT = 11
+// Level 12: an [iter.Pull] iterator's body is refused while the goroutine
+// that called next or stop is inside Run on the body's domain; at level
+// 11 it never was, and before level 11 it always was.
+const JIT = 12

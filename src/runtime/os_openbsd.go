@@ -171,7 +171,7 @@ func newosproc(mp *m) {
 	var oset sigset
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
 	err := retryOnEAGAIN(func() int32 {
-		return pthread_create(&attr, abi.FuncPCABI0(mstart_stub), unsafe.Pointer(mp))
+		return pthread_create(&attr, threadStart(abi.FuncPCABI0(mstart_stub)), unsafe.Pointer(mp))
 	})
 	sigprocmask(_SIG_SETMASK, &oset, nil)
 	if err != 0 {
@@ -349,3 +349,6 @@ func libpreinit() {}
 func newosproc0(stacksize uintptr, fn unsafe.Pointer) {
 	throw("bad newosproc0")
 }
+
+// osThreadStartPC is where newosproc starts a thread (see plugin_sched.go).
+func osThreadStartPC() uintptr { return abi.FuncPCABI0(mstart_stub) }

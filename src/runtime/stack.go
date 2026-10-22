@@ -1166,12 +1166,14 @@ func newstack() {
 		// Set a flag indicated that we've been synchronously preempted.
 		gp.syncSafePoint = true
 
+		// Through variables, so that a plugin's copy of newstack enters
+		// the host's scheduler (see plugin_sched.go).
 		if gp.preemptStop {
-			preemptPark(gp) // never returns
+			schedPreemptPark(gp) // never returns
 		}
 
 		// Act like goroutine called runtime.Gosched.
-		gopreempt_m(gp) // never return
+		schedGopreemptM(gp) // never return
 	}
 
 	// Allocate a bigger segment and move the stack.

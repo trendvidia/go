@@ -4390,13 +4390,23 @@ func goschedguarded_m(gp *g) {
 	goschedImpl(gp, false)
 }
 
+// gopreempt_m is go:nowritebarrierrec because newstack, which is,
+// calls it through schedGopreemptM, and the compiler does not follow
+// that call when it checks newstack.
+//
+//go:nowritebarrierrec
 func gopreempt_m(gp *g) {
 	goschedImpl(gp, true)
 }
 
 // preemptPark parks gp and puts it in _Gpreempted.
 //
+// It is go:nowritebarrierrec because newstack, which is, calls it
+// through schedPreemptPark, and the compiler does not follow that call
+// when it checks newstack.
+//
 //go:systemstack
+//go:nowritebarrierrec
 func preemptPark(gp *g) {
 	status := readgstatus(gp)
 	if status&^_Gscan != _Grunning {

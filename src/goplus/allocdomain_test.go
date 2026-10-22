@@ -762,6 +762,57 @@ func TestAllocBudgetPull(t *testing.T) {
 		checkBudgetPanic(t, r2)
 	})
 
+	t.Run("refusal before the body's recover", func(t *testing.T) {
+		// The body allocates before iter.Pull's recover is in place: its
+		// yield closure escapes. A refusal there would never reach the
+		// caller: next would return as if the sequence were empty, and
+		// stop would die with "coroswitch on exited coro". Each attempt
+		// starts a fresh domain with nothing left and fills it to j
+		// 16-byte objects short of the first granule, so across the
+		// sweep the granule is crossed at each of the allocations the
+		// first next makes, in the caller and in the body.
+		pulls := map[string]func() (started *bool, next func() bool, stop func()){
+			"Pull": func() (*bool, func() bool, func()) {
+				started := new(bool)
+				next, stop := iter.Pull(func(yield func(int) bool) { *started = true; yield(1) })
+				return started, func() bool { _, ok := next(); return ok }, stop
+			},
+			"Pull2": func() (*bool, func() bool, func()) {
+				started := new(bool)
+				next, stop := iter.Pull2(func(yield func(int, int) bool) { *started = true; yield(1, 2) })
+				return started, func() bool { _, _, ok := next(); return ok }, stop
+			},
+		}
+		for name, pull := range pulls {
+			refused := 0
+			for j := 1; j <= 256; j++ {
+				d := goplus.NewAllocDomain()
+				d.SetBudget(0)
+				lost := false
+				r := runRefused(d, func() {
+					allocExact(0, budgetGranule/16-j, 16)
+					started, next, stop := pull()
+					if !next() && !*started {
+						lost = true // calling stop would end the process
+						return
+					}
+					stop()
+				})
+				if lost {
+					t.Fatalf("%s: %d objects short of the granule, the body was refused where no caller could recover it", name, j)
+				}
+				if r != nil {
+					checkBudgetPanic(t, r)
+					refused++
+				}
+			}
+			// Positive marker: the sweep did reach the granule.
+			if refused == 0 {
+				t.Fatalf("%s: no attempt crossed the granule", name)
+			}
+		}
+	})
+
 	t.Run("huge request", func(t *testing.T) {
 		// The request iterator's body makes would end the process with
 		// "fatal error: out of memory" if it were let through.

@@ -102,10 +102,13 @@ func (d *goplusAllocDomain) refuse(s *atomic.Uint64, n uintptr, held int32) bool
 // recovers, and a panic there would end the process (trendvidia/go#84).
 // A coroutine, the goroutine an iter.Pull iterator runs on, is a third
 // case (trendvidia/go#88). It runs only while the goroutine that called
-// next or stop waits for it, and iter.Pull hands its panics to that
-// goroutine, so it may be refused when that goroutine may be refused in
-// d. The waiting goroutine is held in the coro until the coroutine
-// switches back, and may itself be a coroutine.
+// next or stop waits for it, and once iter.Pull has its recover in place
+// it hands the body's panics to that goroutine and says so with
+// goplusCoroRecovers. From then on it may be refused when that goroutine
+// may be refused in d; before, as for any other coroutine, a panic would
+// unwind out of the coroutine unseen and leave its coro exited under the
+// waiting goroutine. The waiting goroutine is held in the coro until the
+// coroutine switches back, and may itself be a coroutine.
 func goplusRefusable(gp *g, d *goplusAllocDomain) bool {
 	// Each step is a coroutine and the goroutine waiting on it. Only a
 	// misused coro can make the chain loop, which the bound stops; a
@@ -125,6 +128,16 @@ func goplusRefusable(gp *g, d *goplusAllocDomain) bool {
 		}
 	}
 	return false
+}
+
+// goplusCoroRecovers records that the current goroutine runs the body of
+// coro c and hands its panics to the goroutine waiting on c, so that
+// goplusRefusable may follow c to that goroutine; nil undoes it. iter.Pull
+// and iter.Pull2 call it on either side of the body's recover.
+//
+//go:linknamestd goplusCoroRecovers
+func goplusCoroRecovers(c *coro) {
+	getg().goplusCoro = c
 }
 
 // goplusInMapWrite reports whether the current goroutine is allocating

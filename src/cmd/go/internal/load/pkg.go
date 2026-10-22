@@ -15,6 +15,7 @@ import (
 	"go/scanner"
 	"go/token"
 	"internal/godebug"
+	"internal/goversion"
 	"internal/platform"
 	"io/fs"
 	"os"
@@ -2526,6 +2527,10 @@ func (p *Package) setBuildInfo(ctx context.Context, f *modfetch.Fetcher, autoVCS
 	if key, val, _ := cfg.GetArchEnv(); key != "" && val != "" {
 		appendSetting(key, val)
 	}
+	// go-plus: name the fork release, so a program built with go-plus can
+	// tell itself from a stock build of the same Go release.
+	// runtime.Version() stays the upstream form, which tools parse.
+	appendSetting("goplus", goversion.PlusRelease)
 
 	// Add VCS status if all conditions are true:
 	//

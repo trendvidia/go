@@ -104,7 +104,7 @@ jobs:
           ..\bin\go.exe test -count=1 internal/buildcfg || exit /b 1
 
       # --- Verify the toolchain names the release it is being cut as ---
-      # forkVersionMarker in src/cmd/go/internal/version/version.go is a
+      # PlusRelease in src/internal/goversion/goversion.go is a
       # hardcoded constant whose own comment says "bump this on every fork
       # release". Nothing enforced it: forget the bump and the archives
       # ship reporting the PREVIOUS release, silently and durably, since
@@ -121,7 +121,7 @@ jobs:
             *"(plus ${{ inputs.tag }})"*)
               echo "ok: $got" ;;
             *)
-              echo "::error::built toolchain reports '$got', which does not name ${{ inputs.tag }}. Bump forkVersionMarker in src/cmd/go/internal/version/version.go, re-tag, and dispatch again."
+              echo "::error::built toolchain reports '$got', which does not name ${{ inputs.tag }}. Bump PlusRelease in src/internal/goversion/goversion.go, re-tag, and dispatch again."
               exit 1 ;;
           esac
 
@@ -132,7 +132,7 @@ jobs:
         run: |
           $got = & ..\bin\go.exe version
           if ($got -notlike "*(plus ${{ inputs.tag }})*") {
-            Write-Output "::error::built toolchain reports '$got', which does not name ${{ inputs.tag }}. Bump forkVersionMarker in src/cmd/go/internal/version/version.go, re-tag, and dispatch again."
+            Write-Output "::error::built toolchain reports '$got', which does not name ${{ inputs.tag }}. Bump PlusRelease in src/internal/goversion/goversion.go, re-tag, and dispatch again."
             exit 1
           }
           Write-Output "ok: $got"

@@ -3,17 +3,21 @@
 // license that can be found in the LICENSE file.
 
 // A plugin on linux and darwin carries its own copy of the runtime, and
-// its code calls that copy directly. Where such a call enters the
-// scheduler, the thread stays in the plugin's copy of it, sleeps there
-// when idle, and faults when it wakes after Plugin.Close has unmapped
-// the image (trendvidia/go#79).
+// its code calls that copy directly. Two kinds of such a call outlive
+// Plugin.Close, and fault after it has unmapped the image:
+//
+//   - one that enters the scheduler: the thread stays in the plugin's
+//     copy of it, and sleeps there when idle (trendvidia/go#79);
+//   - one that starts a long-lived runtime goroutine: the goroutine is
+//     created by the plugin's copy of newproc, so it runs or returns
+//     into the plugin's code (trendvidia/go#68).
 //
 // A plugin's reads of runtime package variables, unlike its calls,
-// bind to the host's variables. So the scheduler entry points that are
-// called directly go through the variables below: in a plugin they
-// hold the host's functions, and the thread runs the host's scheduler.
-// mcall already works this way, because the function it is given is a
-// variable read too.
+// bind to the host's variables. So the entry points of either kind that
+// are called directly go through the variables below: in a plugin they
+// hold the host's functions, and the thread or goroutine runs the
+// host's code. mcall already works this way, because the function it is
+// given is a variable read too.
 
 package runtime
 
@@ -58,3 +62,14 @@ func cgoThreadEntry(own uintptr) uintptr {
 	}
 	return own
 }
+
+// The runtime's long-lived goroutines that are started lazily, by
+// whichever code first needs them.
+var (
+	// gcStart's start of the background mark workers.
+	startMarkWorkers = gcBgMarkStartWorkers
+	// AddCleanup's start of the goroutines that run cleanups.
+	startCleanupGs = (*cleanupQueue).createGs
+	// SetFinalizer's start of the goroutine that runs finalizers.
+	startFing = createfing
+)

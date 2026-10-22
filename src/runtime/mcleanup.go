@@ -171,7 +171,7 @@ func AddCleanup[T, S any](ptr *T, cleanup func(S), arg S) Cleanup {
 
 	// Create another G if necessary.
 	if gcCleanups.needG() {
-		gcCleanups.createGs()
+		startCleanupGs(&gcCleanups) // through a variable; see plugin_sched.go
 	}
 
 	id := addCleanup(unsafe.Pointer(ptr), cleanupFn{

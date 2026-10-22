@@ -814,7 +814,7 @@ func gcStart(trigger gcTrigger) {
 		}
 	}
 
-	gcBgMarkStartWorkers()
+	startMarkWorkers() // through a variable; see plugin_sched.go
 
 	systemstack(gcResetMarkState)
 

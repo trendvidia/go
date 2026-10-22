@@ -235,6 +235,12 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "schedcopy.exe", "./schedcopy")
 	goCmdBuildPluginFor(nil, "schedcopy", "-o=schedcopy-plugin"+pluginSuffix, "./schedcopy/plugin")
 
+	goCmd(nil, "build", "-o", "gcworkers.exe", "./gcworkers")
+	goCmdBuildPluginFor(nil, "gcworkers", "-o=gcworkers-plugin"+pluginSuffix, "./gcworkers/plugin")
+
+	goCmd(nil, "build", "-o", "lazygs.exe", "./lazygs")
+	goCmdBuildPluginFor(nil, "lazygs", "-o=lazygs-plugin"+pluginSuffix, "./lazygs/plugin")
+
 	goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
 	goCmdBuildPluginFor(nil, "closeunmaps", "-o=closeunmaps-plugin1"+pluginSuffix, "./plugin1")
 
@@ -1144,15 +1150,6 @@ func TestCloseZeroValue(t *testing.T) {
 	}
 }
 
-// TestLookupOnCopy pins the Lookup half of the struct-copy contract
-// (trendvidia/go-archive#64): Lookup accepts a copy of an Open-returned
-// Plugin while the plugin is live, and returns an error — rather than
-// hashing symName against a syms map whose keys live in the unmapped
-// symbol table, or formatting a pluginpath header into unmapped
-// RODATA — once the original has been closed. A fault ends the
-// process without a clean exit code on every platform this runs on,
-// but the last line is required as well so a silent death cannot
-// pass as success.
 // TestCloseSchedulerCopy checks that no thread is left in a plugin's
 // copy of the scheduler when the plugin is closed (trendvidia/go#79):
 // such a thread faults when it wakes. Before the fix the fixture faulted
@@ -1166,6 +1163,56 @@ func TestCloseSchedulerCopy(t *testing.T) {
 	}
 }
 
+// TestCloseGCWorkers checks that the garbage collector's mark workers
+// do not run the plugin's code when a collection the plugin started is
+// what created them (trendvidia/go#68): after Close, the next collection
+// faulted. The second run has the host start one worker and raise
+// GOMAXPROCS first, so the plugin's collection starts only the extra
+// workers. Before the fix each run faulted in 20 of 20 on darwin/arm64.
+func TestCloseGCWorkers(t *testing.T) {
+	globalSkip(t)
+	for _, args := range [][]string{nil, {"maxprocs"}} {
+		out := run(t, "./gcworkers.exe", args...)
+		if !strings.Contains(out, "gcworkers: done") {
+			t.Fatalf("gcworkers.exe %v did not finish:\n%s", args, out)
+		}
+	}
+}
+
+// TestCloseLazyGoroutines checks that the goroutines that run finalizers
+// and cleanups are not left returning into the plugin's code when the
+// plugin's SetFinalizer and AddCleanup are what started them
+// (trendvidia/go#68): the first collection after Close threw "unknown
+// caller pc". Before the fix the fixture threw in 20 of 20 runs on
+// darwin/arm64, for either goroutine alone.
+func TestCloseLazyGoroutines(t *testing.T) {
+	globalSkip(t)
+	// The host must not import os, whose initialisation sets finalizers
+	// and so starts the finalizer goroutine with the host's code. On
+	// Windows package plugin imports os, and a plugin has no copy of the
+	// runtime to start one with.
+	if runtime.GOOS != "windows" {
+		for _, dep := range strings.Fields(goCmd(t, "list", "-deps", "./lazygs")) {
+			if dep == "os" {
+				t.Fatalf("lazygs imports os, so the host starts the finalizer goroutine")
+			}
+		}
+	}
+	out := run(t, "./lazygs.exe")
+	if !strings.Contains(out, "lazygs: done") {
+		t.Fatalf("lazygs.exe did not finish:\n%s", out)
+	}
+}
+
+// TestLookupOnCopy pins the Lookup half of the struct-copy contract
+// (trendvidia/go-archive#64): Lookup accepts a copy of an Open-returned
+// Plugin while the plugin is live, and returns an error — rather than
+// hashing symName against a syms map whose keys live in the unmapped
+// symbol table, or formatting a pluginpath header into unmapped
+// RODATA — once the original has been closed. A fault ends the
+// process without a clean exit code on every platform this runs on,
+// but the last line is required as well so a silent death cannot
+// pass as success.
 func TestLookupOnCopy(t *testing.T) {
 	globalSkip(t)
 	out := run(t, "./lookupcopy.exe")

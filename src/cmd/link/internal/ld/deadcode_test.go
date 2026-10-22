@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"internal/testenv"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -29,6 +30,7 @@ func TestDeadcode(t *testing.T) {
 		{"ifacemethod4", nil, []string{"main.T.M"}},
 		{"ifacemethod5", []string{"main.S.M"}, nil},
 		{"ifacemethod6", []string{"main.S.M"}, []string{"main.S.N"}},
+		{"ifacemethod7", []string{"main.S.M", "main.S.O"}, []string{"main.S.N", "main.S.L"}},
 		{"structof_funcof", []string{"main.S.M"}, []string{"main.S.N"}},
 		{"globalmap", []string{"main.small", "main.effect"},
 			[]string{"main.large"}},
@@ -54,5 +56,22 @@ func TestDeadcode(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStripStructTags(t *testing.T) {
+	q := strconv.Quote
+	tests := []struct{ in, want string }{
+		{"func(int) int", "func(int) int"},
+		{"struct { X int " + q(`json:"x"`) + " }", "struct { X int }"},
+		{
+			"func(struct { A int " + q(`a:"\\"`) + "; B string " + q("b:\"\t\u00fc\"") + " }) []struct { C int " + q(`c:""`) + " }",
+			"func(struct { A int; B string }) []struct { C int }",
+		},
+	}
+	for _, test := range tests {
+		if got := stripStructTags(test.in); got != test.want {
+			t.Errorf("stripStructTags(%s) = %s, want %s", test.in, got, test.want)
+		}
 	}
 }

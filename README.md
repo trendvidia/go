@@ -91,7 +91,20 @@ GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -buildmode=plugin \
 
 This is the trendvidia "plus" fork of Go (`go version` reports
 `… (plus <fork release>)`, e.g. `go version go1.27.3 darwin/arm64 (plus
-v1.27.3)` — the leading version stays canonical upstream Go). When building the toolchain from source, run `make.bash`
+v1.27.3)` — the leading version stays canonical upstream Go).
+
+A binary built with this fork records the fork release as the build
+setting `goplus` (`goplus=<fork release>`), and the Git commit the
+toolchain was built from as `goplus.revision` (absent for a toolchain
+built from a source archive; `+dirty` when built from modified sources).
+`go version -m` prints both, and the program reads them from
+`debug.ReadBuildInfo().Settings` without build tags or importing
+`goplus`; a program that imports it can call `goplus.Release()` and
+`goplus.Revision()`. `runtime.Version()` stays the upstream form
+(`go1.27.3`), so a program that checks only that cannot tell a go-plus
+build from a stock one. Releases up to and including v1.27.3b do not record it.
+
+When building the toolchain from source, run `make.bash`
 with **`CGO_ENABLED` unset** in the environment:
 
 ```

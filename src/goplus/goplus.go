@@ -74,4 +74,8 @@ package goplus
 // Level 12: an [iter.Pull] iterator's body is refused while the goroutine
 // that called next or stop is inside Run on the body's domain; at level
 // 11 it never was, and before level 11 it always was.
-const JIT = 12
+// Level 13: [Release], [Revision]. Every binary the go command builds
+// also records them as the build settings "goplus" and "goplus.revision",
+// which [runtime/debug.ReadBuildInfo] returns without importing this
+// package and `go version -m` prints. [runtime.Version] is unchanged.
+const JIT = 13

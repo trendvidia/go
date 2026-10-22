@@ -126,13 +126,15 @@ before merge; the owner merges.
 
 **Releases are cut by the owner**, and in this order:
 
-1. Bump `forkVersionMarker` in `src/cmd/go/internal/version/version.go`
-   to the new tag. It is a hardcoded constant — the release letter cannot
-   live in `VERSION`, because Go's version grammar rejects `go1.26.5a`
-   and would compare it as malformed, below plain `go1.26.5`. Forgetting
-   it ships a toolchain that reports the previous release for as long as
-   someone runs it; `release-binaries` now fails before packaging if the
-   built toolchain does not name the tag being built.
+1. Bump `PlusRelease` in `src/internal/goversion/goversion.go` to the
+   new tag. It is a hardcoded constant — the release letter cannot live
+   in `VERSION`, because Go's version grammar rejects `go1.26.5a` and
+   would compare it as malformed, below plain `go1.26.5`. It feeds both
+   the `(plus …)` marker `go version` prints and the `goplus=` build
+   setting every built binary records (#91). Forgetting it ships a
+   toolchain that reports the previous release for as long as someone
+   runs it; `release-binaries` now fails before packaging if the built
+   toolchain does not name the tag being built.
 2. Tag a commit whose `plugin-matrix` and `dist-test` runs are green **on
    the default branch**, not merely on the PR that merged into it.
 3. Create the GitHub release, then dispatch `release-binaries` with the

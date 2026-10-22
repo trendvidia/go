@@ -681,6 +681,7 @@ var gentab = []struct {
 }{
 	{"cmd/go/internal/cfg", "zdefaultcc.go", mkzdefaultcc},
 	{"internal/runtime/sys", "zversion.go", mkzversion},
+	{"internal/goversion", "zplus.go", mkzgoplus}, // go-plus
 	{"time/tzdata", "zzipdata.go", mktzdata},
 }
 

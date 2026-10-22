@@ -196,16 +196,17 @@ defect awaiting a fix.
 opened under two spellings of a Windows drive letter (`C:\` vs `c:\`)
 loads twice. Canonicalise paths before calling `Open`.
 
-**On linux and darwin, `Close` can crash a host that keeps the upgrade
-contract** ([#68](https://github.com/trendvidia/go/issues/68)). If code in
-the plugin starts a garbage collection, the plugin's own copy of the
-runtime creates the collector's background workers, and they run code in
-the plugin's image; after `Close` unmaps it, the next collection crashes.
-Windows is not affected: a Windows plugin links against the host and
-carries no copy of the runtime. Until the fix lands, a host on linux or
-darwin can start the workers itself by calling `runtime.GC()` once before
-it opens any plugin (measured clean on linux/amd64); raising `GOMAXPROCS`
-after that can still let a plugin start more of them.
+**On linux and darwin, a goroutine that a plugin's copy of a shared
+package starts can outlive `Close`** ([#68](https://github.com/trendvidia/go/issues/68)).
+A plugin there carries its own copy of each package it shares with the
+host, and calls that copy directly. The runtime's garbage collector
+workers and its scheduler are routed back to the host, so a collection
+or a preemption in plugin code no longer leaves a runtime thread or
+worker in the image. Other background goroutines that a package starts
+the first time it is used, such as `os/signal`'s, may still run the
+plugin's code; none has been seen to crash. Windows is not
+affected: a Windows plugin links against the host and carries no copy
+of the runtime.
 
 **Execution traces with `GODEBUG=traceallocfree=1` crash after a plugin
 is closed** ([#67](https://github.com/trendvidia/go/issues/67)). The trace

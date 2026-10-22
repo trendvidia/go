@@ -235,6 +235,9 @@ func testMain(m *testing.M) int {
 	goCmd(nil, "build", "-o", "schedcopy.exe", "./schedcopy")
 	goCmdBuildPluginFor(nil, "schedcopy", "-o=schedcopy-plugin"+pluginSuffix, "./schedcopy/plugin")
 
+	goCmd(nil, "build", "-o", "gcworkers.exe", "./gcworkers")
+	goCmdBuildPluginFor(nil, "gcworkers", "-o=gcworkers-plugin"+pluginSuffix, "./gcworkers/plugin")
+
 	goCmd(nil, "build", "-o", "closeunmaps.exe", "./closeunmaps")
 	goCmdBuildPluginFor(nil, "closeunmaps", "-o=closeunmaps-plugin1"+pluginSuffix, "./plugin1")
 
@@ -1163,6 +1166,19 @@ func TestCloseSchedulerCopy(t *testing.T) {
 	out := run(t, "./schedcopy.exe")
 	if !strings.Contains(out, "schedcopy: done") {
 		t.Fatalf("schedcopy.exe did not finish:\n%s", out)
+	}
+}
+
+// TestCloseGCWorkers checks that the garbage collector's mark workers
+// do not run the plugin's code when a collection the plugin started is
+// what created them (trendvidia/go#68): after Close, the next collection
+// faulted. Before the fix the fixture faulted in 20 of 20 runs on
+// darwin/arm64.
+func TestCloseGCWorkers(t *testing.T) {
+	globalSkip(t)
+	out := run(t, "./gcworkers.exe")
+	if !strings.Contains(out, "gcworkers: done") {
+		t.Fatalf("gcworkers.exe did not finish:\n%s", out)
 	}
 }
 

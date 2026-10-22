@@ -69,4 +69,6 @@ package goplus
 // Level 9: [SampleTag].
 // Level 10: [AllocDomain.SetBudget] takes [math.MaxUint64] for no budget;
 // 0 is a budget with nothing left, where before it removed the budget.
-const JIT = 10
+// Level 11: an [AllocDomain]'s budget refuses only allocations made inside
+// [AllocDomain.Run]; goroutines a call starts are counted, never refused.
+const JIT = 11

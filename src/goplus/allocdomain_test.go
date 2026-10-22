@@ -6,6 +6,7 @@ package goplus_test
 
 import (
 	"errors"
+	"fmt"
 	"goplus"
 	"internal/testenv"
 	"math"
@@ -91,14 +92,14 @@ func TestAllocDomainSmall(t *testing.T) {
 func TestAllocDomainSlowPath(t *testing.T) {
 	testenv.MustHaveExec(t)
 	cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t),
-		"-test.run=^(TestAllocDomainSmall|TestAllocDomainMatchesMemStats|TestAllocBudgetSmall)$", "-test.v", "-test.count=1"))
+		"-test.run=^(TestAllocDomainSmall|TestAllocDomainMatchesMemStats|TestAllocBudgetSmall|TestAllocBudgetStartedGoroutine)$", "-test.v", "-test.count=1"))
 	cmd.Env = append(cmd.Environ(), "GODEBUG=inittrace=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	// Require each test to have run, not merely nothing to have failed.
-	for _, name := range []string{"TestAllocDomainSmall", "TestAllocDomainMatchesMemStats", "TestAllocBudgetSmall"} {
+	for _, name := range []string{"TestAllocDomainSmall", "TestAllocDomainMatchesMemStats", "TestAllocBudgetSmall", "TestAllocBudgetStartedGoroutine"} {
 		if !strings.Contains(string(out), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass in the child process:\n%s", name, out)
 		}
@@ -428,16 +429,15 @@ func TestAllocBudgetConcurrent(t *testing.T) {
 	d.SetBudget(budget)
 	var wg sync.WaitGroup
 	refused := make([]any, workers)
-	d.Run(func() {
-		for w := range workers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() { refused[w] = recover() }()
-				allocExact(w, 1<<30, 128)
-			}()
-		}
-	})
+	// Each worker enters d itself: the budget refuses only a goroutine
+	// inside a call to Run, not one that Run's function started.
+	for w := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			refused[w] = runRefused(d, func() { allocExact(w, 1<<30, 128) })
+		}()
+	}
 	wg.Wait()
 	for _, r := range refused {
 		checkBudgetPanic(t, r)
@@ -467,6 +467,141 @@ func TestAllocBudgetChange(t *testing.T) {
 	d.SetBudget(math.MaxUint64) // no budget
 	if r := runRefused(d, func() { allocExact(0, 8, 1<<20) }); r != nil {
 		t.Fatalf("allocation with no budget panicked: %v", r)
+	}
+}
+
+// TestAllocBudgetStartedGoroutine checks that the budget refuses only a
+// goroutine that is inside a call to Run (trendvidia/go#84). A goroutine
+// Run's function starts is counted in the domain but never refused,
+// while Run runs and after it returns: it has no recover, and a refusal
+// there used to end the process. When that goroutine calls Run itself,
+// it is refused inside the call, and not after it, whether the refusal
+// is recovered inside the call or unwinds out of it.
+func TestAllocBudgetStartedGoroutine(t *testing.T) {
+	const budget = 1 << 20
+	// past allocates well past the budget, in small objects and in one
+	// large one, which take different paths through the allocator.
+	past := func(w int) {
+		allocExact(w, 1000, 4096)
+		allocExact(w, 1, 4<<20)
+	}
+	// unrefused runs f and returns what it panicked with, if anything.
+	unrefused := func(f func()) (r any) {
+		defer func() { r = recover() }()
+		f()
+		return nil
+	}
+
+	d := goplus.NewAllocDomain()
+	d.SetBudget(budget)
+	release := make(chan bool)
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll() // a failure before close(release) must not leak the goroutine
+	during := make(chan any)
+	after := make(chan [5]any, 1)
+	var duringR any
+	refusedCaller := runRefused(d, func() {
+		// Started here, allocating only after Run has returned.
+		go func() {
+			<-release
+			var rs [5]any
+			rs[0] = unrefused(func() { past(2) })
+			rs[1] = runRefused(d, func() { past(2) })
+			rs[2] = unrefused(func() { past(2) })
+			// The refusal unwinds out of Run, and is recovered by
+			// Run's caller, as an embedder's gate around Run does.
+			rs[3] = unrefused(func() { d.Run(func() { past(2) }) })
+			rs[4] = unrefused(func() { past(2) })
+			after <- rs
+		}()
+		// Started while Run runs, and done before it returns.
+		go func() { during <- unrefused(func() { past(1) }) }()
+		duringR = <-during
+		// The caller itself is still refused, also once a nested Run
+		// on another domain has returned to this one.
+		goplus.NewAllocDomain().Run(func() { allocExact(0, 1, 64) })
+		past(0)
+	})
+	if duringR != nil {
+		t.Fatalf("goroutine started while Run ran was refused: %v", duringR)
+	}
+	checkBudgetPanic(t, refusedCaller)
+
+	before := d.Allocated()
+	releaseAll()
+	var rs [5]any
+	select {
+	case rs = <-after:
+	case <-time.After(time.Minute):
+		t.Fatal("goroutine that outlived Run did not finish within a minute")
+	}
+	if rs[0] != nil {
+		t.Fatalf("goroutine that outlived Run was refused: %v", rs[0])
+	}
+	checkBudgetPanic(t, rs[1]) // inside its own call to d.Run
+	if rs[2] != nil {
+		t.Fatalf("goroutine was still refused after its own Run returned: %v", rs[2])
+	}
+	checkBudgetPanic(t, rs[3]) // unwinding out of its own call to d.Run
+	if rs[4] != nil {
+		t.Fatalf("goroutine was still refused after a refusal unwound out of its own Run: %v", rs[4])
+	}
+	// Positive marker: it allocated past the budget, and was counted.
+	if n, want := d.Allocated()-before, uint64(3*(1000*4096+4<<20)); n < want {
+		t.Fatalf("domain counted %d bytes from the goroutine that outlived Run, want at least %d", n, want)
+	}
+}
+
+// TestAllocBudgetBesideStartedGoroutine checks that a goroutine the
+// budget never refuses, allocating in the domain at the same time, does
+// not keep the budget from refusing the caller of Run: on one P, where
+// the two share the stripe whose granules decide when the budget is
+// checked, and on every P.
+func TestAllocBudgetBesideStartedGoroutine(t *testing.T) {
+	const budget = 1 << 20
+	for _, procs := range []int{1, runtime.GOMAXPROCS(0)} {
+		t.Run(fmt.Sprint("procs=", procs), func(t *testing.T) {
+			defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
+			d := goplus.NewAllocDomain()
+			d.SetBudget(budget)
+			stop, done := make(chan bool), make(chan bool)
+			d.Run(func() {
+				go func() {
+					defer close(done)
+					for {
+						select {
+						case <-stop:
+							return
+						default:
+						}
+						allocExact(1, 64, 1152)
+					}
+				}()
+			})
+			defer func() { close(stop); <-done }()
+			// Start the caller with the domain already past its budget, so
+			// that its first checked allocation must be refused.
+			for d.Allocated() <= 2*budget {
+				runtime.Gosched()
+			}
+			var own uint64
+			r := runRefused(d, func() {
+				for own < 1<<30 {
+					allocSinks[0] = make([]byte, 128)
+					own += 128
+				}
+			})
+			checkBudgetPanic(t, r)
+			// Its allocations are checked about every granule on each P, and
+			// the other goroutine's take a share of the checks but not of
+			// the caller's bytes between them. Eight granules a P is a
+			// bound it should not come near.
+			if limit := 8 * uint64(procs) * budgetGranule; own > limit {
+				t.Fatalf("caller allocated %d bytes before its refusal, want at most %d", own, limit)
+			}
+			t.Logf("caller refused after %d bytes of its own", own)
+		})
 	}
 }
 

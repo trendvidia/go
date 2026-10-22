@@ -24,7 +24,8 @@ import "unsafe"
 // The domain counts cumulative allocation, not live memory: bytes are
 // never subtracted when objects are freed.
 //
-// A domain can also refuse allocations past a budget; see
+// A domain can also refuse allocations past a budget, but only those a
+// goroutine makes while it is inside a call to [AllocDomain.Run]; see
 // [AllocDomain.SetBudget].
 //
 // A domain must be created with [NewAllocDomain]; the zero value is not
@@ -42,10 +43,18 @@ func NewAllocDomain() *AllocDomain {
 // d, then restores the goroutine's previous domain, if any. Goroutines f
 // starts are in d for their whole lives. Run may be nested; the
 // innermost domain counts.
+//
+// While f runs, d's budget may refuse the calling goroutine's
+// allocations. It never refuses those of a goroutine f starts, whether
+// or not Run has returned: that goroutine is counted in d but is not
+// inside the call, and a refusal would panic where no caller of Run can
+// recover it. A goroutine of d that later calls Run itself, on d or on
+// another domain, is inside that call until it returns, and the budget
+// of the domain it runs in may refuse it there.
 func (d *AllocDomain) Run(f func()) {
 	// A nil domain would take the goroutine out of any enclosing one.
-	prev := runtime_setAllocDomain(d.domain())
-	defer runtime_setAllocDomain(prev)
+	prev, prevInRun := runtime_setAllocDomain(d.domain(), true)
+	defer runtime_setAllocDomain(prev, prevInRun)
 	f()
 }
 
@@ -64,15 +73,24 @@ var ErrAllocBudget error = runtime_allocBudgetError()
 // refused. (Before [JIT] level 10, 0 removed the budget.) It may be called
 // at any time, including while goroutines of d run, to grant more or less.
 //
-// An allocation by a goroutine of d that takes d past its budget is
-// refused: the allocation panics with [ErrAllocBudget], which the
-// goroutine can recover, and is not counted. A single large request is
-// refused before any memory is requested from the operating system, so a
-// call such as strings.Repeat that asks for more than the machine has is
-// refused rather than fatal. Small allocations are checked against the
-// budget every 64 KiB, per P, so d can pass its budget by up to 64 KiB
-// times the number of Ps its goroutines allocate on before one is
-// refused.
+// An allocation that takes d past its budget, made by a goroutine while
+// it is inside a call to d.Run, is refused: the allocation panics with
+// [ErrAllocBudget], which the goroutine can recover, and is not counted.
+// Goroutines of d that are not inside a call to Run, such as those a
+// call started, are counted and never refused, so the budget does not
+// bound them; [AllocDomain.Allocated] still includes what they allocate.
+// (Before [JIT] level 11, the budget refused every goroutine of d.)
+//
+// A single large request inside Run is refused before any memory is
+// requested from the operating system, so a call such as strings.Repeat
+// that asks for more than the machine has is refused rather than fatal.
+// The same call in a goroutine that is not inside Run is let through,
+// and is fatal. Small allocations are checked against the budget each
+// time d allocates another 64 KiB on a P, and the first checked one made
+// inside Run after d is past its budget is refused. While only
+// goroutines inside Run allocate, d can pass its budget by up to 64 KiB
+// times the number of Ps they allocate on before one is refused; the
+// goroutines outside Run can take it past by any amount.
 //
 // An allocation that cannot panic is let through and counted, and the
 // next one that can is refused instead. These are allocations the
@@ -101,7 +119,7 @@ func (d *AllocDomain) domain() unsafe.Pointer {
 func runtime_newAllocDomain() unsafe.Pointer
 
 //go:linkname runtime_setAllocDomain
-func runtime_setAllocDomain(d unsafe.Pointer) (prev unsafe.Pointer)
+func runtime_setAllocDomain(d unsafe.Pointer, inRun bool) (prev unsafe.Pointer, prevInRun bool)
 
 //go:linkname runtime_allocDomainTotal
 func runtime_allocDomainTotal(d unsafe.Pointer) uint64

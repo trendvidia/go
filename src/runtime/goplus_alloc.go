@@ -72,15 +72,19 @@ func (d *goplusAllocDomain) add(n uintptr, held int32) bool {
 //
 //go:noinline
 func (d *goplusAllocDomain) refuse(s *atomic.Uint64, n uintptr, held int32) bool {
-	budget := d.budget.Load()
-	if budget == goplusNoBudget || goplus_allocDomainTotal(unsafe.Pointer(d)) <= budget {
-		return false
-	}
 	// An allocation that cannot panic is allowed, and stays counted: the
-	// domain's next allocation that can panic is refused instead.
+	// domain's next allocation that can panic is refused instead. So is
+	// one by a goroutine that is not inside a Run call of its own: one
+	// that Run's function started has no recover around it, and a panic
+	// there would end the process (trendvidia/go#84). These are checked
+	// before the stripes are summed, which they make pointless.
 	gp := getg()
 	mp := gp.m
-	if gp != mp.curg || mp.locks != held || mp.mallocing != 0 || mp.preemptoff != "" || mp.dying != 0 {
+	if gp != mp.curg || !gp.goplusInRun || mp.locks != held || mp.mallocing != 0 || mp.preemptoff != "" || mp.dying != 0 {
+		return false
+	}
+	budget := d.budget.Load()
+	if budget == goplusNoBudget || goplus_allocDomainTotal(unsafe.Pointer(d)) <= budget {
 		return false
 	}
 	if goplusInMapWrite() {
@@ -152,15 +156,17 @@ func goplus_newAllocDomain() unsafe.Pointer {
 }
 
 // goplus_setAllocDomain puts the calling goroutine in domain d (nil for
-// none) and returns its previous domain. newproc1 copies the domain to
-// the goroutines it starts.
+// none), marks whether it is inside a Run call, and returns what it
+// replaced. newproc1 copies the domain to the goroutines it starts, but
+// not the mark.
 //
 //go:linkname goplus_setAllocDomain goplus.runtime_setAllocDomain
-func goplus_setAllocDomain(d unsafe.Pointer) (prev unsafe.Pointer) {
+func goplus_setAllocDomain(d unsafe.Pointer, inRun bool) (prev unsafe.Pointer, prevInRun bool) {
 	gp := getg()
-	prev = unsafe.Pointer(gp.allocDomain)
+	prev, prevInRun = unsafe.Pointer(gp.allocDomain), gp.goplusInRun
 	gp.allocDomain = (*goplusAllocDomain)(d)
-	return prev
+	gp.goplusInRun = inRun
+	return prev, prevInRun
 }
 
 //go:linkname goplus_allocDomainTotal goplus.runtime_allocDomainTotal

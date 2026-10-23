@@ -164,23 +164,31 @@ func goplusInMapWrite() bool {
 		u.initAt(pc, sp, 0, gp, unwindSilentErrors)
 		for ; u.valid(); u.next() {
 			for iu, uf := newInlineUnwinder(u.frame.fn, u.symPC()); uf.valid(); uf = iu.next(uf) {
-				name := iu.srcFunc(uf).name()
-				if goplusMapWriter(name) {
-					inMap = true
-					return
-				}
-				// The first frame outside the runtime is the code that
-				// called into it, and no map write is in progress below
-				// it. The helpers goplusRuntimeOwned excludes are called
-				// by compiled code only, never during a map write, so
-				// they end the walk as well.
-				if !goplusRuntimeOwned(name) {
+				var done bool
+				if inMap, done = goplusMapWriteFrame(iu.srcFunc(uf).name()); done {
 					return
 				}
 			}
 		}
 	})
 	return inMap
+}
+
+// goplusMapWriteFrame is one step of goplusInMapWrite's walk, at a frame
+// of the function with symbol name name: whether the frame is a map write,
+// and whether the walk ends there.
+//
+// The first frame outside the runtime is the code that called into it,
+// and no map write is in progress below it. The stateless helpers the
+// stack limit may unwind through (goplusStatelessHelpers) do not end the
+// walk: runtime code calls them too, as map code calls convTstring to
+// build a key error, and a list kept for the stack limit must not decide
+// whether a map write is seen.
+func goplusMapWriteFrame(name string) (inMap, done bool) {
+	if goplusMapWriter(name) {
+		return true, true
+	}
+	return false, !goplusRuntimeCode(name)
 }
 
 // goplusMapWriter reports whether the function with symbol name name marks

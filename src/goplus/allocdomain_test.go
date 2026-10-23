@@ -893,8 +893,11 @@ func TestAllocBudgetMapGrowth(t *testing.T) {
 
 // TestAllocBudgetMapStructKey is TestAllocBudgetMapGrowth for a key type
 // the fast map routines do not handle, whose hash and equality functions
-// the compiler generates and the map calls while it is marked as being
-// written, and then clears the map in the same domain (trendvidia/go#96).
+// the compiler generates, and then clears the map in the same domain
+// (trendvidia/go#96). Today every allocation it makes over budget is a
+// growth under runtime.mapassign, which the check named before #96 too;
+// none lands under a generated function or under Clear, so the runtime's
+// TestGoplusInMapWrite is what pins the walk through those.
 func TestAllocBudgetMapStructKey(t *testing.T) {
 	type key struct {
 		s string

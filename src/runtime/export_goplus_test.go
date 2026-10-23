@@ -16,3 +16,15 @@ var GoplusRuntimeOwned = goplusRuntimeOwned
 func GoplusPanicSafeAt(pc uintptr) bool { return goplusPanicSafeAt(pc) }
 
 var GoplusMapWriter = goplusMapWriter
+
+// GoplusInMapWrite runs goplusInMapWrite's walk over a stack of functions
+// with the given symbol names, innermost first, and reports whether it
+// finds a map write.
+func GoplusInMapWrite(stack ...string) bool {
+	for _, name := range stack {
+		if inMap, done := goplusMapWriteFrame(name); done {
+			return inMap
+		}
+	}
+	return false
+}

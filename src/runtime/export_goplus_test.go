@@ -70,3 +70,20 @@ var (
 // GoplusRequestStop has the calling goroutine stop at its next function
 // call, at a synchronous safe point, as a preemption request would.
 func GoplusRequestStop() { getg().stackguard0 = stackPreempt }
+
+// GoplusStackSize returns the size of the calling goroutine's stack.
+func GoplusStackSize() uintptr {
+	gp := getg()
+	return gp.stack.hi - gp.stack.lo
+}
+
+// GoplusArmRestore leaves the calling goroutine as a recovery after a
+// refused stack growth does when the stop it asks for is lost: the
+// restore armed, with no stop pending.
+func GoplusArmRestore() {
+	gp := getg()
+	if gp.stackRestore == 0 {
+		gp.stackRestore = gp.stack.hi - gp.stack.lo
+	}
+	gp.restoreArmed = true
+}

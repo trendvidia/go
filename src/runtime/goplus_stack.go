@@ -28,25 +28,13 @@ const goplusNoMaxStack = ^uint64(0)
 // call whose callee needs the bigger stack: the panic is raised as though
 // that call had been to goplusPanicMaxStack (see goplusRaiseMaxStack).
 //
-// A growth that is past the limit but not safe to refuse is let through,
-// by the usual doubling, and the goroutine's next growth that is safe is
-// refused instead. The stack doubling then outruns the limit until a safe
-// growth catches it. In practice the growth that first crosses the limit
-// is almost always safe — it is a call by the recursing guest or library
-// code, not by the runtime — so the stack settles within one doubling of
-// the limit; see TestMaxStack* for the measured bound.
-//
-// The safety test is the one the allocation budget uses to refuse an
-// allocation (see goplusAllocDomain.refuse), because a refusal is a panic
-// at a call in both cases. gp must hold no runtime lock (mp.locks),
-// must not be allocating (mp.mallocing), must be preemptible
-// (mp.preemptoff) and running (mp.p), and must not be part-way through a
-// map write (goplusStackInMapWrite); a panic in any of those leaves
-// runtime state a later operation throws on. A runtime lock is covered by
-// mp.locks because lock2 raises it; a map write is not a lock, so it is
-// walked for separately. callerSP is the stack pointer at callerpc, for
-// that walk.
-func goplusRefuseStack(gp *g, newsize, callerpc, callerSP uintptr) bool {
+// A panic here is safe when the goroutine can take one at all
+// (goplusCanPanic, the test the allocation budget also applies) and the
+// call is made by code that expects a callee to panic (goplusPanicSafeAt).
+// A growth past the limit that is not safe to refuse is let through, by
+// the usual doubling, and the goroutine's next safe growth is refused
+// instead.
+func goplusRefuseStack(gp *g, newsize, callerpc uintptr) bool {
 	// goplusRaiseMaxStack knows how morestack leaves gp.sched on these
 	// architectures only. Elsewhere the limit is never enforced.
 	if goarch.ArchFamily != goarch.AMD64 && goarch.ArchFamily != goarch.ARM64 {
@@ -56,36 +44,93 @@ func goplusRefuseStack(gp *g, newsize, callerpc, callerSP uintptr) bool {
 	if d == nil || uint64(newsize) <= d.maxStack.Load() || !goplusRefusable(gp, d) {
 		return false
 	}
-	mp := gp.m
-	if mp.locks != 0 || mp.mallocing != 0 || mp.preemptoff != "" || mp.dying != 0 || mp.p == 0 {
+	if !goplusCanPanic(gp, 0) || gp.m.p == 0 {
 		return false
 	}
-	return !goplusStackInMapWrite(gp, callerpc, callerSP)
+	return goplusPanicSafeAt(callerpc)
 }
 
-// goplusStackInMapWrite reports whether gp is part-way through a map write
-// at the growth point newstack is handling, whose caller is at callerpc
-// with stack pointer callerSP. A map marks itself written for the whole
-// of an assignment or delete, its growth and rehash included, and a panic
-// there would leave it marked: its next write would throw "concurrent map
-// writes". Each allocation a map makes is bounded, so letting these
-// growths through cannot run the stack away.
+// goplusCanPanic reports whether gp, the goroutine on whose behalf the
+// runtime is allocating or growing a stack, can take a panic there: it
+// is its M's current user goroutine, it holds no runtime lock beyond the
+// held its caller took itself (lock2 counts each in m.locks), and it is
+// not allocating, unpreemptible or dying. Both refusals, of an allocation
+// past a domain's budget and of a stack growth past its limit, need it.
+func goplusCanPanic(gp *g, held int32) bool {
+	mp := gp.m
+	return gp == mp.curg && mp.locks == held && mp.mallocing == 0 && mp.preemptoff == "" && mp.dying == 0
+}
+
+// goplusPanicSafeAt reports whether a panic may be raised at the call
+// whose return address is pc, in place of the call.
 //
-// The runtime frames between the growing call and the code that called
-// into the map say whether the growth came from a map write. newstack
-// runs on the system stack, so the user stack is walked directly.
-func goplusStackInMapWrite(gp *g, callerpc, callerSP uintptr) bool {
-	var u unwinder
-	for u.initAt(callerpc, callerSP, 0, gp, unwindSilentErrors); u.valid(); u.next() {
-		for iu, uf := newInlineUnwinder(u.frame.fn, u.symPC()); uf.valid(); uf = iu.next(uf) {
-			name := iu.srcFunc(uf).name()
-			if stringslite.HasPrefix(name, "runtime.mapassign") || stringslite.HasPrefix(name, "runtime.mapdelete") {
-				return true
-			}
-			if !stringslite.HasPrefix(name, "runtime.") && !stringslite.HasPrefix(name, "internal/runtime/") {
-				return false
-			}
+// Go code expects any call to panic, but the runtime and the packages
+// that share its invariants do not: a panic in the middle of one of them
+// can leave a map marked as being written, a mutex with a waiter that is
+// never woken, or the panic machinery itself inconsistent, and each of
+// those later hangs or throws, which is what the limit exists to prevent.
+// So the call must not be made by such code, including code inlined at
+// pc. Map code marks a map written only while its own frames, or the
+// hash and equality functions it calls, are the callers, so this also
+// keeps a refusal out of a map write. Calls from a function the runtime
+// cannot find, such as generated code that is not registered, are not
+// refused either: the panic could not unwind through it.
+func goplusPanicSafeAt(pc uintptr) bool {
+	f := findfunc(pc - 1)
+	if !f.valid() {
+		return false
+	}
+	for iu, uf := newInlineUnwinder(f, pc-1); uf.valid(); uf = iu.next(uf) {
+		if goplusRuntimeOwned(iu.srcFunc(uf).name()) {
+			return false
 		}
+	}
+	return true
+}
+
+// goplusRuntimeOwned reports whether the function with symbol name name
+// belongs to the runtime or to a package whose state a panic at one of
+// its calls could leave inconsistent in a way that later hangs or throws.
+//
+// The runtime implements functions of other packages under their names,
+// by linkname, and names them pkg.runtime_X by convention
+// (sync.runtime_Semacquire, internal/poll.runtime_pollWait); those are
+// runtime code too.
+//
+// The checkptr functions are the exception. The compiler calls them in
+// every function it instruments for the race detector or -d=checkptr, so
+// a recursion's growth comes in one of them at every level; they only
+// read, and hold no state a panic could leave half-changed. Counting them
+// as runtime code would let every growth of such a recursion through, and
+// the stack would double past the limit to the process-wide maximum.
+func goplusRuntimeOwned(name string) bool {
+	if stringslite.HasPrefix(name, "runtime.checkptr") {
+		return false
+	}
+	for _, prefix := range [...]string{
+		"runtime.",
+		"internal/runtime/",
+		"sync.",
+		"internal/sync.",
+		// Hash and equality functions the compiler generates for types,
+		// which maps call while they are marked as being written.
+		"type:",
+	} {
+		if stringslite.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	// The last path element starts the package name; the function's own
+	// name follows the first dot after it.
+	rest := name
+	for i := len(name) - 1; i >= 0; i-- {
+		if name[i] == '/' {
+			rest = name[i+1:]
+			break
+		}
+	}
+	if dot := stringslite.IndexByte(rest, '.'); dot >= 0 {
+		return stringslite.HasPrefix(rest[dot+1:], "runtime_")
 	}
 	return false
 }
@@ -122,32 +167,41 @@ func goplusRaiseMaxStack(gp *g, oldsize uintptr) {
 // goplusRecovered is called by recovery for gp, which has recovered a
 // panic. If a stack growth was refused on gp since its stack was last
 // restored, it asks gp to stop at its next function call, where newstack
-// can shrink the stack it is running on (goplusRestoreStack).
+// can shrink the stack it is running on (goplusRestoreStack). It raises
+// the stack guard without setting gp.preempt, so that newstack resumes gp
+// after the shrink instead of descheduling it.
 func goplusRecovered(gp *g) {
 	if gp.stackRestore != 0 {
-		gp.preempt = true
 		gp.stackguard0 = stackPreempt
 	}
 }
 
 // goplusRestoreStack shrinks gp's stack, stopped at a synchronous safe
 // point by newstack, to the size it had before its last refused growth,
-// or to the smallest size between the two that holds what gp uses. gp
-// must be the current user goroutine.
-func goplusRestoreStack(gp *g) {
+// or to the smallest size between the two that holds what gp uses and the
+// frame of the function it is entering. gp must be the current user
+// goroutine. It reports whether a restore was pending, done or not.
+func goplusRestoreStack(gp *g) bool {
 	target := gp.stackRestore
-	if target == 0 || !isShrinkStackSafe(gp) || gp.m.libcallsp != 0 {
-		return
+	if target == 0 {
+		return false
+	}
+	if !isShrinkStackSafe(gp) || gp.m.libcallsp != 0 {
+		return true
 	}
 	gp.stackRestore = 0
 	size := gp.stack.hi - gp.stack.lo
 	used := gp.stack.hi - gp.sched.sp + stackGuard
+	if f := findfunc(gp.sched.pc); f.valid() {
+		used += uintptr(funcMaxSPDelta(f))
+	}
 	for target < size && used >= target {
 		target *= 2
 	}
 	if target < size {
 		copystack(gp, target)
 	}
+	return true
 }
 
 // goplusMaxStackError is the panic value of a refused stack growth;

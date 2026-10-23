@@ -8,3 +8,9 @@ var GoplusSampleWeight = goplusSampleWeight
 
 // Fastexprand draws the gap to the heap profiler's next sample.
 func Fastexprand(mean int) int32 { return fastexprand(mean) }
+
+var GoplusRuntimeOwned = goplusRuntimeOwned
+
+// GoplusPanicSafeAt reports whether the stack limit may refuse a call
+// whose return address is pc.
+func GoplusPanicSafeAt(pc uintptr) bool { return goplusPanicSafeAt(pc) }

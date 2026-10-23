@@ -141,7 +141,8 @@ var ErrMaxStack error = runtime_maxStackError()
 // and the limit applies to each separately.
 //
 // A stack grows by doubling, so the most a goroutine inside Run uses is
-// the largest power of two not above n. The growth that is refused
+// the largest power of two not above n. A limit below a goroutine's
+// current stack, 0 among them, refuses its next growth inside Run. The growth that is refused
 // still happens, to give the panic and the deferred calls it runs room,
 // and the stack is shrunk back once the panic is recovered. So the
 // process-wide maximum must be at least twice the limit: a growth past
@@ -156,6 +157,9 @@ var ErrMaxStack error = runtime_maxStackError()
 // that later ends the process; the growth is let through and the
 // goroutine's next growth from other code is refused instead. So is a
 // call from generated code the runtime has no [RegisterCode] record of.
+// The stack doubles at each growth let through, so a recursion each of
+// whose growths comes inside such code is not bounded by the limit, and
+// still ends at the process-wide maximum.
 //
 // As with [ErrAllocBudget], the panic can strike code that does not
 // expect one, at any call, and a goroutine that recovers ErrMaxStack

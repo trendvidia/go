@@ -82,8 +82,7 @@ func (d *goplusAllocDomain) refuse(s *atomic.Uint64, n uintptr, held int32) bool
 	// goplusRefusable). These are checked before the stripes are summed,
 	// which they make pointless.
 	gp := getg()
-	mp := gp.m
-	if gp != mp.curg || mp.locks != held || mp.mallocing != 0 || mp.preemptoff != "" || mp.dying != 0 || !goplusRefusable(gp, d) {
+	if !goplusCanPanic(gp, held) || !goplusRefusable(gp, d) {
 		return false
 	}
 	budget := d.budget.Load()

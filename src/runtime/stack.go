@@ -1158,13 +1158,19 @@ func newstack() {
 
 		// A recovered panic after a refused stack growth asked for this
 		// stop to shrink the stack back (see goplusRecovered).
-		goplusRestoreStack(gp)
+		restored := goplusRestoreStack(gp)
 
 		if gp.preemptShrink {
 			// We're at a synchronous safe point now, so
 			// do the pending stack shrink.
 			gp.preemptShrink = false
 			shrinkstack(gp)
+		}
+
+		// If the stop was only for that, resume rather than yield.
+		if restored && !gp.preempt {
+			gp.stackguard0 = gp.stack.lo + stackGuard
+			gogo(&gp.sched) // never return
 		}
 
 		// Set a flag indicated that we've been synchronously preempted.
@@ -1217,7 +1223,7 @@ func newstack() {
 	// goroutine panics with a recoverable error instead of running on to
 	// the process-wide maximum and throwing (trendvidia/go#94). The growth
 	// still happens, to give the panic and its deferred calls room.
-	refuse := stackguard0 != stackForceMove && goplusRefuseStack(gp, newsize, morebuf.pc, morebuf.sp)
+	refuse := stackguard0 != stackForceMove && goplusRefuseStack(gp, newsize, morebuf.pc)
 
 	// The goroutine must be executing in order to call newstack,
 	// so it must be Grunning (or Gscanrunning).

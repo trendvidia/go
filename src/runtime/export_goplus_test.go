@@ -62,4 +62,7 @@ func GoplusLateRefusalOnStack() bool {
 	return s != 0 && gp.stack.lo <= s && s < gp.stack.hi
 }
 
-var GoplusOrdinaryName = goplusOrdinaryName
+var (
+	GoplusOrdinaryName   = goplusOrdinaryName
+	GoplusOrdinaryCallee = goplusOrdinaryCallee
+)

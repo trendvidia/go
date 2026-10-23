@@ -86,7 +86,9 @@ package goplus
 // maximum; except in the race detector's pointer checks and in interface
 // assertions, switches and conversions, which were refused in place,
 // before their operation completed.
-// Level 16: a growth past the stack limit on entry to a function that the
-// runtime or sync calls back, a deferred call or a sync.Map.Range callback
-// say, is refused there; before, it was let through.
+// Level 16: a growth past the stack limit on entry to ordinary code that
+// the runtime or sync calls back, a deferred function or a sync.Map.Range
+// callback say, is refused there; before, it was let through or waited
+// for the runtime's call to return, and a recursion through the callback
+// ran on to the process-wide maximum.
 const JIT = 16

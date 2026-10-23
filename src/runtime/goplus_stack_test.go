@@ -161,7 +161,11 @@ func hookedHelper(n int) int {
 	return r
 }
 
-const lateHelperName = "runtime_test.hooked"
+// hookedPrefix starts the names of the functions the tests below have the
+// stack limit treat as runtime code: hookedHelper and hookedLockHelper,
+// and hookedLeaf, which they call, so that a growth there is not refused
+// in place as the entry of ordinary code that the runtime called.
+const hookedPrefix = "runtime_test.hooked"
 
 // hookedLeaf needs more stack than lateRecurse uses per level, so the
 // recursion's growths come here, whose caller is hookedHelper.
@@ -201,7 +205,7 @@ var (
 // the value Run panicked with, the stack where the panic was raised, and
 // how many refusals waited for a runtime call meanwhile.
 func runLate(t *testing.T, limit uint64) (p any, stack []string, late uint64) {
-	return runLateWith(t, limit, lateHelperName, func() { lateRecurse(0) })
+	return runLateWith(t, limit, hookedPrefix, func() { lateRecurse(0) })
 }
 
 func runLateWith(t *testing.T, limit uint64, helper string, recurse func()) (p any, stack []string, late uint64) {
@@ -407,8 +411,6 @@ func hookedLockHelper(n int) (int, float64, string, bool) {
 	return n * 3, float64(n) / 2, "", false
 }
 
-const lockHelperName = "runtime_test.hooked"
-
 var (
 	lockHeld bool
 	lockBad  string
@@ -435,7 +437,7 @@ func lockRecurse(n int) int {
 func TestGoplusMaxStackLateCannotPanic(t *testing.T) {
 	needMaxStack(t)
 	lockHeld, lockBad = false, ""
-	p, _, late := runLateWith(t, 1<<20, lockHelperName, func() { lockRecurse(0) })
+	p, _, late := runLateWith(t, 1<<20, hookedPrefix, func() { lockRecurse(0) })
 	if err, ok := p.(error); !ok || !errors.Is(err, goplus.ErrMaxStack) {
 		t.Fatalf("Run panicked with %v (%T), want goplus.ErrMaxStack", p, p)
 	}
@@ -740,6 +742,31 @@ func TestGoplusOrdinaryName(t *testing.T) {
 	} {
 		if got := runtime.GoplusOrdinaryName(tc.name); got != tc.want {
 			t.Errorf("goplusOrdinaryName(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestGoplusOrdinaryCallee checks the classification from the PCs newstack
+// sees: the callee's entry and the caller's return address. A call to
+// ordinary code is refused in place whatever its caller, unless the caller
+// is code the runtime cannot find, such as generated code with no
+// goplus.RegisterCode record: the panic could not unwind through it.
+func TestGoplusOrdinaryCallee(t *testing.T) {
+	entry := func(f any) uintptr { return reflect.ValueOf(f).Pointer() }
+	inside := func(f any) uintptr { return entry(f) + 1 }
+	for _, tc := range []struct {
+		what         string
+		pc, callerpc uintptr
+		want         bool
+	}{
+		{"test function called by sync", entry(lateRecurse), inside((*sync.Once).Do), true},
+		{"test function called by the runtime", entry(lateRecurse), inside(runtime.GC), true},
+		{"test function called by unknown code", entry(lateRecurse), 1, false},
+		{"sync function called by the runtime", entry((*sync.Mutex).Unlock), inside(runtime.GC), false},
+		{"unknown code called by the runtime", 1, inside(runtime.GC), false},
+	} {
+		if got := runtime.GoplusOrdinaryCallee(tc.pc, tc.callerpc); got != tc.want {
+			t.Errorf("goplusOrdinaryCallee(%s) = %v, want %v", tc.what, got, tc.want)
 		}
 	}
 }

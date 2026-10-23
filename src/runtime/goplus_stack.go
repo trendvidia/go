@@ -30,18 +30,17 @@ const goplusNoMaxStack = ^uint64(0)
 // callerpc is the return address of the call whose callee needs the
 // bigger stack. If the code that made that call expects a callee to panic
 // (goplusPanicSafeAt), or the callee is ordinary code that the runtime or
-// sync calls back (goplusOrdinaryCallee), and the goroutine can take a
-// panic at all
-// (goplusCanPanic, the test the allocation budget also applies), the
-// panic is raised as though that call had been to goplusPanicMaxStack.
-// Otherwise the call was made by the runtime, whose frames a panic must
-// not abandon, and the refusal waits for the runtime to return. Whether
-// the goroutine can take the panic is asked again then, by
-// goplusHijackReturn, and not here: runtime code that holds a lock while
-// it grows, as getitab does under itabLock, has released it by the time
-// it returns. A growth past the limit that neither can refuse is let
-// through, by the usual doubling, and the goroutine's next growth is
-// considered again.
+// sync called back (goplusOrdinaryCallee), the panic is
+// raised as though that call had been to goplusPanicMaxStack, provided
+// the goroutine can take a panic at all (goplusCanPanic, the test the
+// allocation budget also applies). Otherwise the call was made by the
+// runtime, whose frames a panic must not abandon, and the refusal waits
+// for the runtime to return. Whether the goroutine can take the panic is
+// asked again then, by goplusHijackReturn, and not here: runtime code
+// that holds a lock while it grows, as getitab does under itabLock, has
+// released it by the time it returns. A growth past the limit that
+// neither can refuse is let through, by the usual doubling, and the
+// goroutine's next growth is considered again.
 func goplusRefuseStack(gp *g, newsize, callerpc uintptr) (refuse, late bool) {
 	// goplusRaiseMaxStack knows how morestack leaves gp.sched, and
 	// goplusHijackReturn is written, on these architectures only.
@@ -89,9 +88,6 @@ func goplusOrdinaryCallee(pc, callerpc uintptr) bool {
 // goplusOrdinaryName reports whether the function with symbol name name is
 // ordinary code for goplusOrdinaryCallee.
 func goplusOrdinaryName(name string) bool {
-	if goplusTestRuntimeFunc != "" && stringslite.HasPrefix(name, goplusTestRuntimeFunc) {
-		return false
-	}
 	return name != "" && !goplusRuntimeOwned(name) &&
 		!stringslite.HasPrefix(name, "internal/") &&
 		!stringslite.HasPrefix(name, "sync/atomic.")
@@ -144,7 +140,7 @@ func goplusPanicSafeAt(pc uintptr) bool {
 // (sync.runtime_Semacquire, internal/poll.runtime_pollWait); those are
 // runtime code too.
 func goplusRuntimeOwned(name string) bool {
-	if goplusIsTestRuntimeFunc(name) {
+	if goplusTestHooked(name) {
 		return true
 	}
 	return goplusRuntimeCode(name)
@@ -311,7 +307,7 @@ func goplusRaiseMaxStackLate(gp *g, oldsize uintptr) {
 // other packages of the standard library call by name
 // (goplusLinknamedStd).
 func goplusLateRefusable(name string) bool {
-	if goplusIsTestRuntimeFunc(name) {
+	if goplusTestHooked(name) {
 		return true
 	}
 	rest, ok := stringslite.CutPrefix(name, "runtime.")
@@ -385,9 +381,9 @@ func goplusHijackSlot(gp *g) (slot, pc uintptr) {
 // wrong pointer.
 var goplusTestRuntimeFunc atomic.Pointer[string]
 
-// goplusIsTestRuntimeFunc reports whether name starts with
-// goplusTestRuntimeFunc's prefix.
-func goplusIsTestRuntimeFunc(name string) bool {
+// goplusTestHooked reports whether a test has the stack limit treat the
+// function with symbol name name as a runtime function (goplusTestRuntimeFunc).
+func goplusTestHooked(name string) bool {
 	p := goplusTestRuntimeFunc.Load()
 	return p != nil && stringslite.HasPrefix(name, *p)
 }

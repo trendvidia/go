@@ -88,6 +88,29 @@ func goplusPanicSafeAt(pc uintptr) bool {
 	return true
 }
 
+// goplusStatelessHelpers are name prefixes of runtime functions that a
+// refusal may unwind through, although they are runtime code: each is
+// called by compiled code for one operation, and leaves no shared state
+// part-way changed at any call it makes. The ones that take a lock, as
+// getitab does on a cache miss, hold it in m.locks, which goplusCanPanic
+// checks, so a refusal never lands while they hold it.
+//
+// Map reads are deliberately not here: they share their callees with map
+// writes, which must never be interrupted, and no growth has been seen to
+// land in one.
+var goplusStatelessHelpers = [...]string{
+	// Pointer checks the race detector and -d=checkptr insert.
+	"runtime.checkptr",
+	// Interface type assertions and switches, and the itab lookup
+	// behind them.
+	"runtime.assertE2I",
+	"runtime.typeAssert",
+	"runtime.interfaceSwitch",
+	"runtime.getitab",
+	// Conversions of a value to an interface.
+	"runtime.convT",
+}
+
 // goplusRuntimeOwned reports whether the function with symbol name name
 // belongs to the runtime or to a package whose state a panic at one of
 // its calls could leave inconsistent in a way that later hangs or throws.
@@ -97,15 +120,21 @@ func goplusPanicSafeAt(pc uintptr) bool {
 // (sync.runtime_Semacquire, internal/poll.runtime_pollWait); those are
 // runtime code too.
 //
-// The checkptr functions are the exception. The compiler calls them in
-// every function it instruments for the race detector or -d=checkptr, so
-// a recursion's growth comes in one of them at every level; they only
-// read, and hold no state a panic could leave half-changed. Counting them
-// as runtime code would let every growth of such a recursion through, and
-// the stack would double past the limit to the process-wide maximum.
+// The exceptions are the helpers the compiler calls from ordinary code
+// for a single operation that holds no state a panic could leave
+// half-changed (goplusStatelessHelpers). A recursion makes the same
+// calls at every level, so its growth tends to come in the same helper
+// every time, and which helper depends on the platform's frame sizes:
+// errors.Is grows in runtime.getitab under its interface assertion on
+// windows/arm64, and in runtime.checkptrBase under the race detector.
+// Counting such a helper as runtime code would let every growth of the
+// recursion through, and the stack would double past the limit to the
+// process-wide maximum.
 func goplusRuntimeOwned(name string) bool {
-	if stringslite.HasPrefix(name, "runtime.checkptr") {
-		return false
+	for _, prefix := range goplusStatelessHelpers {
+		if stringslite.HasPrefix(name, prefix) {
+			return false
+		}
 	}
 	for _, prefix := range [...]string{
 		"runtime.",

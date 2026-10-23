@@ -34,11 +34,23 @@ func TestGoplusRuntimeOwned(t *testing.T) {
 		{"os.runtime_args", true},
 		{"example.com/x.runtime_F", true},
 
-		// Instrumentation that only reads, called at every level of an
-		// instrumented recursion.
+		// Helpers compiled code calls for one stateless operation, which a
+		// recursion's growth can land in at every level.
 		{"runtime.checkptrAlignment", false},
 		{"runtime.checkptrStraddles", false},
 		{"runtime.checkptrBase", false},
+		{"runtime.assertE2I", false},
+		{"runtime.assertE2I2", false},
+		{"runtime.typeAssert", false},
+		{"runtime.interfaceSwitch", false},
+		{"runtime.getitab", false},
+		{"runtime.convT", false},
+		{"runtime.convTstring", false},
+		{"runtime.convT64", false},
+		// Close to the helpers, but still runtime code.
+		{"runtime.mapaccess1_faststr", true},
+		{"runtime.itabAdd", true},
+		{"runtime.growslice", true},
 
 		{"fmt.(*pp).printValue", false},
 		{"errors.is", false},

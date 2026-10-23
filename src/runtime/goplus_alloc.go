@@ -27,6 +27,10 @@ type goplusAllocDomain struct {
 
 	// budget is the most the domain may allocate, or goplusNoBudget.
 	budget atomic.Uint64
+
+	// maxStack is the largest stack a goroutine inside Run on the domain
+	// may grow to, or goplusNoMaxStack (see goplus_stack.go).
+	maxStack atomic.Uint64
 }
 
 // goplusNoBudget is the budget of a domain with no limit, math.MaxUint64.
@@ -78,8 +82,7 @@ func (d *goplusAllocDomain) refuse(s *atomic.Uint64, n uintptr, held int32) bool
 	// goplusRefusable). These are checked before the stripes are summed,
 	// which they make pointless.
 	gp := getg()
-	mp := gp.m
-	if gp != mp.curg || mp.locks != held || mp.mallocing != 0 || mp.preemptoff != "" || mp.dying != 0 || !goplusRefusable(gp, d) {
+	if !goplusCanPanic(gp, held) || !goplusRefusable(gp, d) {
 		return false
 	}
 	budget := d.budget.Load()
@@ -198,6 +201,7 @@ func goplus_allocBudgetError() error {
 func goplus_newAllocDomain() unsafe.Pointer {
 	d := new(goplusAllocDomain)
 	d.budget.Store(goplusNoBudget)
+	d.maxStack.Store(goplusNoMaxStack)
 	return unsafe.Pointer(d)
 }
 

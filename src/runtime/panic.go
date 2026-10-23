@@ -1404,6 +1404,9 @@ func recovery(gp *g) {
 		throw("bad recovery")
 	}
 
+	// After a refused stack growth, shrink the stack back (trendvidia/go#94).
+	goplusRecovered(gp)
+
 	// branch directly to the deferreturn
 	gp.sched.sp = sp
 	gp.sched.pc = gotoPc

@@ -119,6 +119,54 @@ func (d *AllocDomain) SetBudget(n uint64) {
 	runtime_setAllocDomainBudget(d.domain(), n)
 }
 
+// ErrMaxStack is the value of the panic that refuses a goroutine's stack
+// growth past its domain's stack limit. It is a [runtime.Error].
+var ErrMaxStack error = runtime_maxStackError()
+
+// SetMaxStack sets the largest stack, in bytes, that a goroutine may grow
+// to while it is inside a call to d.Run. [math.MaxUint64] removes the
+// limit, and is the limit of a new domain. It may be called at any time,
+// including while goroutines of d run; a goroutine already past the new
+// limit is refused at its next growth.
+//
+// A growth past the limit, made by a goroutine while it is inside a call
+// to d.Run, panics on that goroutine with [ErrMaxStack], which it can
+// recover, instead of running on until the process-wide maximum (see
+// [runtime/debug.SetMaxStack]) ends the process with a fatal "stack
+// overflow". The goroutines that are not inside Run are never refused,
+// as with [AllocDomain.SetBudget]; nor is a goroutine of d inside Run on
+// another domain, which that domain's limit governs. The body of an
+// [iter.Pull] iterator counts as inside Run when the goroutine that
+// resumed it is; see [AllocDomain.Run]. Each goroutine has its own stack,
+// and the limit applies to each separately.
+//
+// A stack grows by doubling, so the most a goroutine inside Run uses is
+// the largest power of two not above n. The growth that is refused
+// still happens, to give the panic and the deferred calls it runs room,
+// and the stack is shrunk back once the panic is recovered. So the
+// process-wide maximum must be at least twice the limit: a growth past
+// both still ends the process. Deferred calls that grow the stack past
+// the limit again, while that panic runs, are refused again, and each
+// refusal doubles the stack once more.
+//
+// The panic is raised at the call that needed more stack, as though the
+// called function had panicked before it ran its first statement. A call
+// made by the runtime, or by package sync, is not refused, because a
+// panic there could leave a map, a mutex or the runtime itself in a state
+// that later ends the process; the growth is let through and the
+// goroutine's next growth from other code is refused instead. So is a
+// call from generated code the runtime has no [RegisterCode] record of.
+//
+// As with [ErrAllocBudget], the panic can strike code that does not
+// expect one, at any call, and a goroutine that recovers ErrMaxStack
+// should treat the state it was changing as lost.
+//
+// The limit is enforced on amd64 and arm64. On other architectures
+// SetMaxStack records it, and stacks grow as though there were none.
+func (d *AllocDomain) SetMaxStack(n uint64) {
+	runtime_setAllocDomainMaxStack(d.domain(), n)
+}
+
 func (d *AllocDomain) domain() unsafe.Pointer {
 	if d.d == nil {
 		panic("goplus: AllocDomain not created by NewAllocDomain")
@@ -140,3 +188,9 @@ func runtime_setAllocDomainBudget(d unsafe.Pointer, n uint64)
 
 //go:linkname runtime_allocBudgetError
 func runtime_allocBudgetError() error
+
+//go:linkname runtime_setAllocDomainMaxStack
+func runtime_setAllocDomainMaxStack(d unsafe.Pointer, n uint64)
+
+//go:linkname runtime_maxStackError
+func runtime_maxStackError() error

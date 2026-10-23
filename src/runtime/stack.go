@@ -1156,6 +1156,10 @@ func newstack() {
 			throw("runtime: g is running but p is not")
 		}
 
+		// A recovered panic after a refused stack growth asked for this
+		// stop to shrink the stack back (see goplusRecovered).
+		goplusRestoreStack(gp)
+
 		if gp.preemptShrink {
 			// We're at a synchronous safe point now, so
 			// do the pending stack shrink.
@@ -1209,6 +1213,12 @@ func newstack() {
 		throw("stack overflow")
 	}
 
+	// Past a goplus.AllocDomain's stack limit, a growth is refused: the
+	// goroutine panics with a recoverable error instead of running on to
+	// the process-wide maximum and throwing (trendvidia/go#94). The growth
+	// still happens, to give the panic and its deferred calls room.
+	refuse := stackguard0 != stackForceMove && goplusRefuseStack(gp, newsize, morebuf.pc, morebuf.sp)
+
 	// The goroutine must be executing in order to call newstack,
 	// so it must be Grunning (or Gscanrunning).
 	casgstatus(gp, _Grunning, _Gcopystack)
@@ -1216,6 +1226,9 @@ func newstack() {
 	// The concurrent GC will not scan the stack while we are doing the copy since
 	// the gp is in a Gcopystack status.
 	copystack(gp, newsize)
+	if refuse {
+		goplusRaiseMaxStack(gp, oldsize)
+	}
 	if stackDebug >= 1 {
 		print("stack grow done\n")
 	}

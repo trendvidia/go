@@ -78,4 +78,5 @@ package goplus
 // also records them as the build settings "goplus" and "goplus.revision",
 // which [runtime/debug.ReadBuildInfo] returns without importing this
 // package and `go version -m` prints. [runtime.Version] is unchanged.
-const JIT = 13
+// Level 14: [AllocDomain.SetMaxStack], [ErrMaxStack].
+const JIT = 14

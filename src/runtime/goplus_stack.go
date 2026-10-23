@@ -391,15 +391,16 @@ func goplusTestHooked(name string) bool {
 // goplusRecovered is called by recovery for gp, which has recovered a
 // panic and is to resume in the frame whose stack pointer is sp. If a
 // stack growth was refused on gp since its stack was last restored, it
-// asks gp to stop at its next function call, where newstack can shrink
-// the stack it is running on (goplusRestoreStack). It raises the stack
-// guard without setting gp.preempt, so that newstack resumes gp after the
-// shrink instead of descheduling it.
+// arms the restore and asks gp to stop at its next function call, where
+// newstack can shrink the stack it is running on (goplusRestoreStack). It
+// raises the stack guard without setting gp.preempt, so that newstack
+// resumes gp after the shrink instead of descheduling it.
 //
 // A refusal still pending in a frame below sp is forgotten: that frame is
 // gone, and its return address will never be returned to.
 func goplusRecovered(gp *g, sp uintptr) {
 	if gp.stackRestore != 0 {
+		gp.restoreArmed = true
 		gp.stackguard0 = stackPreempt
 	}
 	if gp.goplusHijack.slot != 0 && gp.goplusHijack.slot < sp {
@@ -412,15 +413,35 @@ func goplusRecovered(gp *g, sp uintptr) {
 // or to the smallest size between the two that holds what gp uses and the
 // frame of the function it is entering. gp must be the current user
 // goroutine. It reports whether a restore was pending, done or not.
+//
+// The restore waits until a recovery arms it (goplusRecovered). Until
+// then the refused growth's panic is still running, on top of the frames
+// that filled the stack: shrinking at a stop for another reason, the
+// garbage collector's say, would leave the deferred calls almost no
+// stack, and their next growth would be refused again or, in code that
+// cannot be refused, let through past the limit (trendvidia/go#103).
+//
+// The target is at most the largest size within gp's domain's limit. A
+// growth past the limit that could not be refused leaves the stack bigger
+// than that, and a later refusal records that bigger size as the one to
+// return to: without the cap, the stack would never come back under the
+// limit, and each later growth past it would come only at the next
+// doubling.
 func goplusRestoreStack(gp *g) bool {
 	target := gp.stackRestore
-	if target == 0 {
+	if target == 0 || !gp.restoreArmed {
 		return false
 	}
 	if !isShrinkStackSafe(gp) || gp.m.libcallsp != 0 {
 		return true
 	}
 	gp.stackRestore = 0
+	gp.restoreArmed = false
+	if d := gp.allocDomain; d != nil {
+		for target > fixedStack && uint64(target) > d.maxStack.Load() {
+			target /= 2
+		}
+	}
 	size := gp.stack.hi - gp.stack.lo
 	used := gp.stack.hi - gp.sched.sp + stackGuard
 	if f := findfunc(gp.sched.pc); f.valid() {

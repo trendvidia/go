@@ -66,3 +66,7 @@ var (
 	GoplusOrdinaryName   = goplusOrdinaryName
 	GoplusOrdinaryCallee = goplusOrdinaryCallee
 )
+
+// GoplusRequestStop has the calling goroutine stop at its next function
+// call, at a synchronous safe point, as a preemption request would.
+func GoplusRequestStop() { getg().stackguard0 = stackPreempt }

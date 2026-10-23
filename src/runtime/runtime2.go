@@ -549,6 +549,7 @@ type g struct {
 	runningCleanups atomic.Bool
 	goplusNoTiny    bool // set by goplus.SetNoTinyAlloc: bypass the tiny allocator; inherited by new goroutines
 	cgoFastLeaf     bool // in a #cgo fastleaf call (cgocallLeaf), which must not call back into Go
+	restoreArmed    bool // a recovery asked newstack to restore the stack to stackRestore (goplusRecovered)
 	goplusInRun     bool // inside a goplus.AllocDomain.Run call, so its domain's budget may refuse this goroutine's allocations; not inherited
 	sig             uint32
 	secret          int32 // current nesting of runtime/secret.Do calls.

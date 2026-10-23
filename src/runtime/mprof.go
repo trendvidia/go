@@ -555,10 +555,10 @@ func saveblockevent(cycles, rate int64, skip int, which bucketType) {
 				// saveblockevent)
 				skip -= 1
 			}
-			nstk = fpTracebackPartialExpand(skip, unsafe.Pointer(getfp()), mp.profStack)
+			nstk = fpTracebackPartialExpand(gp, skip, unsafe.Pointer(getfp()), mp.profStack)
 		} else {
 			mp.profStack[0] = gp.m.curg.sched.pc
-			nstk = 1 + fpTracebackPartialExpand(skip, unsafe.Pointer(gp.m.curg.sched.bp), mp.profStack[1:])
+			nstk = 1 + fpTracebackPartialExpand(gp.m.curg, skip, unsafe.Pointer(gp.m.curg.sched.bp), mp.profStack[1:])
 		}
 	}
 
@@ -570,7 +570,8 @@ func saveblockevent(cycles, rate int64, skip int, which bucketType) {
 // This function will skip the given number of frames, properly accounting for
 // inlining, and save remaining frames as "physical" return addresses. The
 // consumer should later use CallersFrames or similar to expand inline frames.
-func fpTracebackPartialExpand(skip int, fp unsafe.Pointer, pcBuf []uintptr) int {
+// gp is the goroutine whose stack fp is on.
+func fpTracebackPartialExpand(gp *g, skip int, fp unsafe.Pointer, pcBuf []uintptr) int {
 	var n int
 	lastFuncID := abi.FuncIDNormal
 	skipOrAdd := func(retPC uintptr) bool {
@@ -584,7 +585,8 @@ func fpTracebackPartialExpand(skip int, fp unsafe.Pointer, pcBuf []uintptr) int 
 	}
 	for n < len(pcBuf) && fp != nil {
 		// return addr sits one word above the frame pointer
-		pc := *(*uintptr)(unsafe.Pointer(uintptr(fp) + goarch.PtrSize))
+		slot := uintptr(fp) + goarch.PtrSize
+		pc := goplusSlotReturnAddress(gp, slot, *(*uintptr)(unsafe.Pointer(slot)))
 
 		if skip > 0 {
 			callPC := pc - 1

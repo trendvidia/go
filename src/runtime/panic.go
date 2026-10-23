@@ -361,7 +361,7 @@ func deferproc(fn func()) {
 	d.link = gp._defer
 	gp._defer = d
 	d.fn = fn
-	d.pc = sys.GetCallerPC()
+	d.pc = goplusReturnAddress(gp, sys.GetCallerPC())
 	// We must not be preempted between calling GetCallerSP and
 	// storing it to d.sp because GetCallerSP's result is a
 	// uintptr stack pointer.
@@ -465,7 +465,7 @@ func deferrangefunc() any {
 	d := newdefer()
 	d.link = gp._defer
 	gp._defer = d
-	d.pc = sys.GetCallerPC()
+	d.pc = goplusReturnAddress(gp, sys.GetCallerPC())
 	// We must not be preempted between calling GetCallerSP and
 	// storing it to d.sp because GetCallerSP's result is a
 	// uintptr stack pointer.
@@ -1404,8 +1404,9 @@ func recovery(gp *g) {
 		throw("bad recovery")
 	}
 
-	// After a refused stack growth, shrink the stack back (trendvidia/go#94).
-	goplusRecovered(gp)
+	// After a refused stack growth, shrink the stack back (trendvidia/go#94),
+	// and forget a return address overwritten in a frame now unwound.
+	goplusRecovered(gp, sp)
 
 	// branch directly to the deferreturn
 	gp.sched.sp = sp

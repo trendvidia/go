@@ -1360,3 +1360,34 @@ TEXT runtime·panicBounds<ABIInternal>(SB),NOSPLIT,$144-0
 TEXT ·getfp<ABIInternal>(SB),NOSPLIT|NOFRAME,$0
 	MOVD R29, R0
 	RET
+
+// func goplusHijackReturn()
+// See goplus_stack.go. A function whose return address
+// goplusRaiseMaxStackLate overwrote returns here, with its caller's stack
+// pointer and its results in registers. Only R16, R17 and the link
+// register, which hold no result, are written before deciding; the
+// return keeps the rest.
+TEXT runtime·goplusHijackReturn(SB),NOSPLIT|NOFRAME|TOPFRAME,$0-0
+	MOVD	(g_goplusHijack+goplusHijack_pc)(g), R30
+	MOVD	ZR, (g_goplusHijack+goplusHijack_slot)(g)
+	MOVD	ZR, (g_goplusHijack+goplusHijack_pc)(g)
+	MOVD	ZR, (g_goplusHijack+goplusHijack_ret)(g)
+	// goplusCanPanic(g, 0) && g.m.p != 0
+	MOVD	g_m(g), R17
+	MOVD	m_curg(R17), R16
+	CMP	R16, g
+	BNE	resume
+	MOVW	m_locks(R17), R16
+	CBNZW	R16, resume
+	MOVW	m_mallocing(R17), R16
+	CBNZW	R16, resume
+	MOVD	(m_preemptoff+8)(R17), R16
+	CBNZ	R16, resume
+	MOVW	m_dying(R17), R16
+	CBNZW	R16, resume
+	MOVD	m_p(R17), R16
+	CBZ	R16, resume
+	// A call from the caller, at the return address in the link register.
+	B	runtime·goplusPanicMaxStack<ABIInternal>(SB)
+resume:
+	RET

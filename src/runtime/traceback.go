@@ -165,6 +165,11 @@ func (u *unwinder) initAt(pc0, sp0, lr0 uintptr, gp *g, flags unwindFlags) {
 		}
 	}
 
+	// A return address read from gp's stack (by GetCallerPC, into
+	// gp.syscallpc or a panic's start) may be one goplusRaiseMaxStackLate
+	// overwrote.
+	pc0 = goplusReturnAddress(gp, pc0)
+
 	var frame stkframe
 	frame.pc = pc0
 	frame.sp = sp0
@@ -378,6 +383,13 @@ func (u *unwinder) resolveInternal(innermost, isSyscall bool) {
 				lrPtr = frame.fp - goarch.PtrSize
 				frame.lr = *(*uintptr)(unsafe.Pointer(lrPtr))
 			}
+		}
+		// goplusRaiseMaxStackLate may have overwritten this frame's
+		// return address; every walk of a goroutine's stack reads the
+		// one it stood for. It is found by its place on the stack, so
+		// that a hijack made by a plugin's copy of the runtime is seen.
+		if h := &gp.goplusHijack; h.slot != 0 && (lrPtr == h.slot || frame.lr == h.ret) {
+			frame.lr = h.pc
 		}
 	}
 

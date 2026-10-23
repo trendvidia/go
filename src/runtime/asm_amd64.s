@@ -1666,3 +1666,33 @@ TEXT runtime·retpolineR15(SB),NOSPLIT|NOFRAME,$0; RETPOLINE(15)
 TEXT ·getfp<ABIInternal>(SB),NOSPLIT|NOFRAME,$0
 	MOVQ BP, AX
 	RET
+
+// func goplusHijackReturn()
+// See goplus_stack.go. A function whose return address
+// goplusRaiseMaxStackLate overwrote returns here, with its caller's stack
+// pointer and its results in registers. Only R12 and R13, which hold no
+// result, are written before deciding; the return keeps the rest.
+TEXT runtime·goplusHijackReturn(SB),NOSPLIT|NOFRAME|TOPFRAME,$0-0
+	MOVQ	(g_goplusHijack+goplusHijack_pc)(R14), R12
+	MOVQ	$0, (g_goplusHijack+goplusHijack_slot)(R14)
+	MOVQ	$0, (g_goplusHijack+goplusHijack_pc)(R14)
+	MOVQ	$0, (g_goplusHijack+goplusHijack_ret)(R14)
+	// goplusCanPanic(g, 0) && g.m.p != 0
+	MOVQ	g_m(R14), R13
+	CMPQ	m_curg(R13), R14
+	JNE	resume
+	CMPL	m_locks(R13), $0
+	JNE	resume
+	CMPL	m_mallocing(R13), $0
+	JNE	resume
+	CMPQ	(m_preemptoff+8)(R13), $0
+	JNE	resume
+	CMPL	m_dying(R13), $0
+	JNE	resume
+	CMPQ	m_p(R13), $0
+	JEQ	resume
+	// A call from the caller, at the return address.
+	PUSHQ	R12
+	JMP	runtime·goplusPanicMaxStack<ABIInternal>(SB)
+resume:
+	JMP	R12

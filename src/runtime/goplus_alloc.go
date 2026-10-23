@@ -179,10 +179,10 @@ func goplusInMapWrite() bool {
 // and whether the walk ends there.
 //
 // The first frame outside the runtime is the code that called into it,
-// and no map write is in progress below it. The stateless helpers the
-// stack limit may unwind through (goplusStatelessHelpers) do not end the
-// walk: runtime code calls them too, as map code calls convTstring to
-// build a key error, and a list kept for the stack limit must not decide
+// and no map write is in progress below it. Runtime helpers such as
+// convTstring do not end the walk: map code calls them too, as it does
+// to build a key error. The walk uses goplusRuntimeCode, not
+// goplusRuntimeOwned, so the stack limit's test hook cannot change
 // whether a map write is seen.
 func goplusMapWriteFrame(name string) (inMap, done bool) {
 	if goplusMapWriter(name) {

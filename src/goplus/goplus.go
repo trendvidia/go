@@ -79,4 +79,9 @@ package goplus
 // which [runtime/debug.ReadBuildInfo] returns without importing this
 // package and `go version -m` prints. [runtime.Version] is unchanged.
 // Level 14: [AllocDomain.SetMaxStack], [ErrMaxStack].
-const JIT = 14
+// Level 15: a growth past the stack limit inside runtime code that compiled
+// code called for an operation of the language, a type assertion or a map
+// assignment say, is refused as that code returns; before, it was let
+// through, and a recursion that grew there ran on to the process-wide
+// maximum.
+const JIT = 15

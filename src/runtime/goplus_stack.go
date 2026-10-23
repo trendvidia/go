@@ -11,6 +11,7 @@ package runtime
 import (
 	"internal/abi"
 	"internal/goarch"
+	"internal/runtime/atomic"
 	"internal/stringslite"
 	"unsafe"
 )
@@ -19,35 +20,40 @@ import (
 const goplusNoMaxStack = ^uint64(0)
 
 // goplusRefuseStack reports whether newstack must refuse the growth of
-// gp's stack to newsize, and raise goplusMaxStackError on gp instead of
-// growing.
+// gp's stack to newsize, and how: refuse is to raise goplusMaxStackError
+// on gp in place of the call that needs the stack (goplusRaiseMaxStack),
+// late is to raise it once the runtime code that made that call returns
+// to the code that called it (goplusRaiseMaxStackLate).
 //
 // It refuses when newsize is past gp's domain's limit, gp is inside a Run
 // call on that domain (goplusRefusable, as for the allocation budget),
-// and a panic raised here is safe. callerpc is the return address of the
-// call whose callee needs the bigger stack: the panic is raised as though
-// that call had been to goplusPanicMaxStack (see goplusRaiseMaxStack).
-//
-// A panic here is safe when the goroutine can take one at all
-// (goplusCanPanic, the test the allocation budget also applies) and the
-// call is made by code that expects a callee to panic (goplusPanicSafeAt).
-// A growth past the limit that is not safe to refuse is let through, by
-// the usual doubling, and the goroutine's next safe growth is refused
-// instead.
-func goplusRefuseStack(gp *g, newsize, callerpc uintptr) bool {
-	// goplusRaiseMaxStack knows how morestack leaves gp.sched on these
-	// architectures only. Elsewhere the limit is never enforced.
+// and the goroutine can take a panic at all (goplusCanPanic, the test the
+// allocation budget also applies). callerpc is the return address of the
+// call whose callee needs the bigger stack. If the code that made that
+// call expects a callee to panic (goplusPanicSafeAt), the panic is raised
+// as though that call had been to goplusPanicMaxStack. Otherwise the call
+// was made by the runtime, whose frames a panic must not abandon, and the
+// refusal waits for the runtime to return. A growth past the limit that
+// neither can refuse is let through, by the usual doubling, and the
+// goroutine's next growth is considered again.
+func goplusRefuseStack(gp *g, newsize, callerpc uintptr) (refuse, late bool) {
+	// goplusRaiseMaxStack knows how morestack leaves gp.sched, and
+	// goplusHijackReturn is written, on these architectures only.
+	// Elsewhere the limit is never enforced.
 	if goarch.ArchFamily != goarch.AMD64 && goarch.ArchFamily != goarch.ARM64 {
-		return false
+		return false, false
 	}
 	d := gp.allocDomain
 	if d == nil || uint64(newsize) <= d.maxStack.Load() || !goplusRefusable(gp, d) {
-		return false
+		return false, false
 	}
 	if !goplusCanPanic(gp, 0) || gp.m.p == 0 {
-		return false
+		return false, false
 	}
-	return goplusPanicSafeAt(callerpc)
+	if goplusPanicSafeAt(callerpc) {
+		return true, false
+	}
+	return false, true
 }
 
 // goplusCanPanic reports whether gp, the goroutine on whose behalf the
@@ -88,29 +94,6 @@ func goplusPanicSafeAt(pc uintptr) bool {
 	return true
 }
 
-// goplusStatelessHelpers are name prefixes of runtime functions that a
-// refusal may unwind through, although they are runtime code: each is
-// called by compiled code for one operation, and leaves no shared state
-// part-way changed at any call it makes. The ones that take a lock, as
-// getitab does on a cache miss, hold it in m.locks, which goplusCanPanic
-// checks, so a refusal never lands while they hold it.
-//
-// Map reads are deliberately not here: they share their callees with map
-// writes, which must never be interrupted, and no growth has been seen to
-// land in one.
-var goplusStatelessHelpers = [...]string{
-	// Pointer checks the race detector and -d=checkptr insert.
-	"runtime.checkptr",
-	// Interface type assertions and switches, and the itab lookup
-	// behind them.
-	"runtime.assertE2I",
-	"runtime.typeAssert",
-	"runtime.interfaceSwitch",
-	"runtime.getitab",
-	// Conversions of a value to an interface.
-	"runtime.convT",
-}
-
 // goplusRuntimeOwned reports whether the function with symbol name name
 // belongs to the runtime or to a package whose state a panic at one of
 // its calls could leave inconsistent in a way that later hangs or throws.
@@ -119,29 +102,15 @@ var goplusStatelessHelpers = [...]string{
 // by linkname, and names them pkg.runtime_X by convention
 // (sync.runtime_Semacquire, internal/poll.runtime_pollWait); those are
 // runtime code too.
-//
-// The exceptions are the helpers the compiler calls from ordinary code
-// for a single operation that holds no state a panic could leave
-// half-changed (goplusStatelessHelpers). A recursion makes the same
-// calls at every level, so its growth tends to come in the same helper
-// every time, and which helper depends on the platform's frame sizes:
-// errors.Is grows in runtime.getitab under its interface assertion on
-// windows/arm64, and in runtime.checkptrBase under the race detector.
-// Counting such a helper as runtime code would let every growth of the
-// recursion through, and the stack would double past the limit to the
-// process-wide maximum.
 func goplusRuntimeOwned(name string) bool {
-	for _, prefix := range goplusStatelessHelpers {
-		if stringslite.HasPrefix(name, prefix) {
-			return false
-		}
+	if name == goplusTestRuntimeFunc && name != "" {
+		return true
 	}
 	return goplusRuntimeCode(name)
 }
 
 // goplusRuntimeCode reports whether the function with symbol name name is
-// runtime code as goplusRuntimeOwned counts it, the stateless helpers
-// included.
+// runtime code as goplusRuntimeOwned counts it, without the test hook.
 func goplusRuntimeCode(name string) bool {
 	for _, prefix := range [...]string{
 		"runtime.",
@@ -200,15 +169,168 @@ func goplusRaiseMaxStack(gp *g, oldsize uintptr) {
 	}
 }
 
+// goplusHijack is a return address on a goroutine's stack that
+// goplusRaiseMaxStackLate overwrote, so that the function it belongs to
+// returns into goplusHijackReturn instead of to its caller.
+type goplusHijack struct {
+	slot uintptr // where on the stack the return address is; 0 if none
+	pc   uintptr // the return address, into the caller
+	ret  uintptr // what slot holds instead: the PC of goplusHijackReturn
+}
+
+// goplusRaiseMaxStackLate refuses a growth of gp's stack, stopped in
+// morestack and already grown, whose function was called by runtime code:
+// gp is to panic with goplusMaxStackError once the runtime returns to the
+// code that called it, as though that call had been to
+// goplusPanicMaxStack. oldsize is the size of gp's stack before it grew.
+//
+// A panic cannot be raised in the runtime frames, which may hold a map,
+// a lock or the panic machinery part-way changed. So they are left to
+// complete: the walk up gp's stack passes through them to the first call
+// made by code that expects a callee to panic (goplusPanicSafeAt), and
+// the return address of that call is overwritten with goplusHijackReturn,
+// which raises the panic there. The unwinder reads the return address it
+// stood for while it is pending (goplusReturnAddress), so the stack walks
+// of the garbage collector, stack copies, tracebacks and profiles see the
+// frames as they are.
+//
+// The runtime call completes before the panic, unlike a refusal in its
+// place, so the refusal waits only for functions that compiled code calls
+// to carry out an operation of the language (goplusLateRefusable). Their
+// effects, a value received from a channel or a key added to a map, are
+// complete before they return. Runtime API that other packages call by
+// name is left out: a call such as runtime.LockOSThread, or one by sync to
+// runtime_SemacquireMutex, acquires something its caller releases in a
+// deferred call that the call returning would precede, and a panic
+// between the two would keep it.
+//
+// When the walk finds no such call, the growth is let through and gp's
+// next growth is considered again. That includes a growth while a
+// refusal is already pending on gp: the runtime frames below it are
+// running code that called back into ordinary code, such as a deferred
+// call or a reflect call, whose own growths are refused in place.
+func goplusRaiseMaxStackLate(gp *g, oldsize uintptr) {
+	if gp.goplusHijack.slot != 0 {
+		return
+	}
+	var u unwinder
+	u.initAt(^uintptr(0), ^uintptr(0), ^uintptr(0), gp, unwindSilentErrors)
+	// The first frame is the function that needs the stack, called by the
+	// runtime: goplusPanicSafeAt said so of its return address.
+	for u.next(); u.valid(); u.next() {
+		frame := &u.frame
+		// A runtime frame, which is to complete. One the unwinder treats
+		// specially (gopanic, systemstack, mcall) ends the walk, and so
+		// does a frame of code that is not the runtime's, such as a
+		// function a runtime function was inlined into at its call.
+		// Wrappers are ordinary here: generated code, and deferreturn,
+		// which the toolchain marks as one.
+		if id := frame.fn.funcID; id != abi.FuncIDNormal && id != abi.FuncIDWrapper || frame.lr == 0 {
+			return
+		}
+		name := funcname(frame.fn)
+		if !goplusRuntimeOwned(name) {
+			return
+		}
+		if !goplusPanicSafeAt(frame.lr) {
+			continue
+		}
+		if !goplusLateRefusable(name) {
+			return
+		}
+		// Where the unwinder found frame.lr (see resolveInternal).
+		slot := frame.fp - goarch.PtrSize
+		if usesLR {
+			slot = frame.sp
+		}
+		if *(*uintptr)(unsafe.Pointer(slot)) != frame.lr {
+			return
+		}
+		ret := goplusHijackReturnPC()
+		gp.goplusHijack = goplusHijack{slot: slot, pc: frame.lr, ret: ret}
+		*(*uintptr)(unsafe.Pointer(slot)) = ret
+		goplusLateRefusals.Add(1)
+		if gp.stackRestore == 0 || oldsize < gp.stackRestore {
+			gp.stackRestore = oldsize
+		}
+		return
+	}
+}
+
+// goplusLateRefusable reports whether a refusal of a stack growth may wait
+// for the runtime function with symbol name name to return to its caller,
+// and be raised there (see goplusRaiseMaxStackLate). Those are the
+// functions compiled code calls to carry out an operation of the language:
+// runtime functions with unexported names that are neither methods nor
+// closures, such as runtime.assertE2I2, runtime.mapassign_faststr or
+// runtime.deferproc. Exported runtime functions, methods, and functions
+// the runtime implements for other packages are their API, which the
+// code calling them may pair with a release.
+func goplusLateRefusable(name string) bool {
+	if name == goplusTestRuntimeFunc && name != "" {
+		return true
+	}
+	rest, ok := stringslite.CutPrefix(name, "runtime.")
+	if !ok || rest == "" {
+		return false
+	}
+	if c := rest[0]; !('a' <= c && c <= 'z' || c == '_') {
+		return false
+	}
+	return stringslite.IndexByte(rest, '.') < 0
+}
+
+// goplusReturnAddress returns pc, a return address read from gp's stack,
+// or if goplusRaiseMaxStackLate overwrote it, the return address it stood
+// for. Each runtime function that reads its own return address after a
+// call that can grow the stack, and keeps it for later rather than only
+// for the race detector, passes it through here, as the unwinder does
+// (TestGoplusCallerPCReaders keeps the list).
+func goplusReturnAddress(gp *g, pc uintptr) uintptr {
+	if h := &gp.goplusHijack; h.slot != 0 && pc == h.ret {
+		return h.pc
+	}
+	return pc
+}
+
+// goplusLateRefusals counts the refusals goplusRaiseMaxStackLate has set
+// up, for tests to tell them from refusals in place.
+var goplusLateRefusals atomic.Uint64
+
+// goplusSlotReturnAddress returns pc, the return address at slot on gp's
+// stack, or if goplusRaiseMaxStackLate overwrote it, the return address
+// it stood for. It is for the frame-pointer walks, of the execution tracer
+// and the block and mutex profiles, which read return addresses without
+// the unwinder. gp may be nil.
+func goplusSlotReturnAddress(gp *g, slot, pc uintptr) uintptr {
+	if gp != nil && slot == gp.goplusHijack.slot {
+		return gp.goplusHijack.pc
+	}
+	return pc
+}
+
+// goplusTestRuntimeFunc is the symbol name of a function a test has the
+// stack limit treat as a runtime function that compiled code calls, so
+// that it can make each growth of a recursion come in a call from the
+// runtime on every platform. It is "" outside those tests.
+var goplusTestRuntimeFunc string
+
 // goplusRecovered is called by recovery for gp, which has recovered a
-// panic. If a stack growth was refused on gp since its stack was last
-// restored, it asks gp to stop at its next function call, where newstack
-// can shrink the stack it is running on (goplusRestoreStack). It raises
-// the stack guard without setting gp.preempt, so that newstack resumes gp
-// after the shrink instead of descheduling it.
-func goplusRecovered(gp *g) {
+// panic and is to resume in the frame whose stack pointer is sp. If a
+// stack growth was refused on gp since its stack was last restored, it
+// asks gp to stop at its next function call, where newstack can shrink
+// the stack it is running on (goplusRestoreStack). It raises the stack
+// guard without setting gp.preempt, so that newstack resumes gp after the
+// shrink instead of descheduling it.
+//
+// A refusal still pending in a frame below sp is forgotten: that frame is
+// gone, and its return address will never be returned to.
+func goplusRecovered(gp *g, sp uintptr) {
 	if gp.stackRestore != 0 {
 		gp.stackguard0 = stackPreempt
+	}
+	if gp.goplusHijack.slot != 0 && gp.goplusHijack.slot < sp {
+		gp.goplusHijack = goplusHijack{}
 	}
 }
 

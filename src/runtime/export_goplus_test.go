@@ -28,3 +28,25 @@ func GoplusInMapWrite(stack ...string) bool {
 	}
 	return false
 }
+
+var GoplusLateRefusable = goplusLateRefusable
+
+// GoplusLateRefusals returns how many stack-limit refusals have waited
+// for a runtime call to return.
+func GoplusLateRefusals() uint64 { return goplusLateRefusals.Load() }
+
+// SetGoplusTestRuntimeFunc has the stack limit treat the function with
+// symbol name name as a runtime function compiled code calls; "" undoes it.
+func SetGoplusTestRuntimeFunc(name string) { goplusTestRuntimeFunc = name }
+
+// GoplusLateRefusalPending reports whether a refusal is waiting for a
+// runtime call to return on the calling goroutine.
+func GoplusLateRefusalPending() bool { return getg().goplusHijack.slot != 0 }
+
+// GoplusLateRefusalOnStack reports whether the return address a pending
+// refusal overwrote is on the calling goroutine's current stack.
+func GoplusLateRefusalOnStack() bool {
+	gp := getg()
+	s := gp.goplusHijack.slot
+	return s != 0 && gp.stack.lo <= s && s < gp.stack.hi
+}

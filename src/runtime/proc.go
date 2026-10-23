@@ -4567,6 +4567,7 @@ func gdestroy(gp *g) {
 	gp.goplusInRun = false
 	gp.goplusCoro = nil
 	gp.stackRestore = 0
+	gp.goplusHijack = goplusHijack{}
 	gp.sampleTag = nil
 	gp.timer = nil
 	gp.bubble = nil
@@ -5490,6 +5491,7 @@ func newproc1(fn *funcval, callergp *g, callerpc uintptr, parked bool, waitreaso
 	newg.goplusInRun = false
 	newg.goplusCoro = nil
 	newg.stackRestore = 0
+	newg.goplusHijack = goplusHijack{}
 
 	if goexperiment.RuntimeSecret && callergp.secret > 0 {
 		// while it might seem weird to have a non-zero gp.secret value

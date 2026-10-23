@@ -84,7 +84,7 @@ func traceStack(skip int, gp *g, tab *traceStackTable) uint64 {
 		// Fast path: Unwind using frame pointers.
 		pcBuf[0] = uintptr(skip)
 		if getg() == gp {
-			nstk += fpTracebackPCs(unsafe.Pointer(getfp()), pcBuf[1:])
+			nstk += fpTracebackPCs(gp, unsafe.Pointer(getfp()), pcBuf[1:])
 		} else if gp != nil {
 			// Three cases:
 			//
@@ -104,7 +104,7 @@ func traceStack(skip int, gp *g, tab *traceStackTable) uint64 {
 			// information about where it stopped, and like case (1), we match gcallers here.
 			if gp.syscallsp != 0 {
 				pcBuf[1] = gp.syscallpc
-				nstk += 1 + fpTracebackPCs(unsafe.Pointer(gp.syscallbp), pcBuf[2:])
+				nstk += 1 + fpTracebackPCs(gp, unsafe.Pointer(gp.syscallbp), pcBuf[2:])
 			} else {
 				pcBuf[1] = gp.sched.pc
 				if gp.syncSafePoint {
@@ -119,9 +119,9 @@ func traceStack(skip int, gp *g, tab *traceStackTable) uint64 {
 					} else {
 						pcBuf[2] = *(*uintptr)(unsafe.Pointer(gp.sched.sp))
 					}
-					nstk += 2 + fpTracebackPCs(unsafe.Pointer(gp.sched.bp), pcBuf[3:])
+					nstk += 2 + fpTracebackPCs(gp, unsafe.Pointer(gp.sched.bp), pcBuf[3:])
 				} else {
-					nstk += 1 + fpTracebackPCs(unsafe.Pointer(gp.sched.bp), pcBuf[2:])
+					nstk += 1 + fpTracebackPCs(gp, unsafe.Pointer(gp.sched.bp), pcBuf[2:])
 				}
 			}
 		}
@@ -264,10 +264,14 @@ func tracefpunwindoff() bool {
 // returns the number of PCs written to pcBuf. The returned PCs correspond to
 // "physical frames" rather than "logical frames"; that is if A is inlined into
 // B, this will return a PC for only B.
-func fpTracebackPCs(fp unsafe.Pointer, pcBuf []uintptr) (i int) {
+//
+// gp is the goroutine whose stack fp is on, or nil if it is not a
+// goroutine's (see goplusSlotReturnAddress).
+func fpTracebackPCs(gp *g, fp unsafe.Pointer, pcBuf []uintptr) (i int) {
 	for i = 0; i < len(pcBuf) && fp != nil; i++ {
 		// return addr sits one word above the frame pointer
-		pcBuf[i] = *(*uintptr)(unsafe.Pointer(uintptr(fp) + goarch.PtrSize))
+		slot := uintptr(fp) + goarch.PtrSize
+		pcBuf[i] = goplusSlotReturnAddress(gp, slot, *(*uintptr)(unsafe.Pointer(slot)))
 		// follow the frame pointer to the next one
 		fp = unsafe.Pointer(*(*uintptr)(fp))
 	}

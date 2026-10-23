@@ -152,14 +152,24 @@ var ErrMaxStack error = runtime_maxStackError()
 //
 // The panic is raised at the call that needed more stack, as though the
 // called function had panicked before it ran its first statement. A call
-// made by the runtime, or by package sync, is not refused, because a
-// panic there could leave a map, a mutex or the runtime itself in a state
-// that later ends the process; the growth is let through and the
-// goroutine's next growth from other code is refused instead. So is a
-// call from generated code the runtime has no [RegisterCode] record of.
-// The stack doubles at each growth let through, so a recursion each of
-// whose growths comes inside such code is not bounded by the limit, and
-// still ends at the process-wide maximum.
+// made by the runtime, or by package sync, is not refused in place,
+// because a panic there could leave a map, a mutex or the runtime itself
+// in a state that later ends the process. When the runtime code was
+// called to carry out an operation of the language, such as a type
+// assertion, a map assignment, a channel receive or a defer statement,
+// the operation completes and the panic is raised as it returns, at the
+// statement that called it: a map then holds the key being assigned,
+// with the zero value, and a value received from a channel is lost.
+// (Before [JIT] level 15, the growth was let through.) Other growths
+// that cannot be refused are let through, and the goroutine's next growth
+// is considered again: those inside the runtime's API, such as
+// [runtime.LockOSThread], whose caller may release what it acquires in a
+// deferred call that the panic would precede, inside package sync, inside
+// a call that returns holding a runtime lock, and inside generated code
+// the runtime has no [RegisterCode] record of. The stack doubles at each
+// growth let through, so a recursion each of whose growths comes inside
+// such code is not bounded by the limit, and still ends at the
+// process-wide maximum.
 //
 // As with [ErrAllocBudget], the panic can strike code that does not
 // expect one, at any call, and a goroutine that recovers ErrMaxStack

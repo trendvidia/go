@@ -5,11 +5,12 @@
 package main
 
 // A recursion through cgo callbacks inside goplus.AllocDomain.Run: Go
-// calls C, which calls back Go, which calls C again. Each growth of the
-// goroutine's stack comes at the entry of the callback, whose caller is
-// the runtime's cgocallbackg1, so it is refused only by the rule for
-// ordinary code the runtime calls back (trendvidia/go#100); without it,
-// the recursion runs on to the process-wide maximum.
+// calls C, which calls back Go, which calls C again. The refusal's panic
+// must unwind through the C frames to Run's caller. The callback's large
+// frame puts most growths at its entry, whose caller is cgo's generated
+// wrapper, so it is refused as ordinary code calling ordinary code; it
+// passes without the rule for code the runtime calls back
+// (trendvidia/go#100) too.
 
 /*
 void goplusMaxStackCall(int);

@@ -29,7 +29,9 @@ const goplusNoMaxStack = ^uint64(0)
 // Run call on that domain (goplusRefusable, as for the allocation budget).
 // callerpc is the return address of the call whose callee needs the
 // bigger stack. If the code that made that call expects a callee to panic
-// (goplusPanicSafeAt), and the goroutine can take a panic at all
+// (goplusPanicSafeAt), or the callee is ordinary code that the runtime or
+// sync calls back (goplusOrdinaryCallee), and the goroutine can take a
+// panic at all
 // (goplusCanPanic, the test the allocation budget also applies), the
 // panic is raised as though that call had been to goplusPanicMaxStack.
 // Otherwise the call was made by the runtime, whose frames a panic must
@@ -51,10 +53,48 @@ func goplusRefuseStack(gp *g, newsize, callerpc uintptr) (refuse, late bool) {
 	if d == nil || uint64(newsize) <= d.maxStack.Load() || !goplusRefusable(gp, d) {
 		return false, false
 	}
-	if goplusPanicSafeAt(callerpc) {
+	if goplusPanicSafeAt(callerpc) || goplusOrdinaryCallee(gp.sched.pc, callerpc) {
 		return goplusCanPanic(gp, 0) && gp.m.p != 0, false
 	}
 	return false, true
+}
+
+// goplusOrdinaryCallee reports whether a panic may be raised in place of
+// a call from runtime or sync code because of what is called: the function
+// containing pc, which needs more stack, is ordinary code, and the caller,
+// whose return address is callerpc, is a function the runtime can unwind.
+//
+// Runtime and sync code that calls ordinary code calls a function it was
+// given: a deferred call, a function reflect calls, a cgo callback, the
+// function of a sync.Once, a sync.Map.Range callback, a sync.Pool's New.
+// That code may panic anyway, so its caller already survives a panic out
+// of the call, and a refusal there is that panic, before the function's
+// first statement. Where the runtime calls ordinary code that must not
+// panic, it holds a runtime lock (time's sendTime under the timer's
+// sendLock), which goplusCanPanic checks. Without this, a recursion
+// through such a callback grows at the callback's own entry at every level,
+// whose caller is runtime code, and is never refused (trendvidia/go#100).
+//
+// Not ordinary: the runtime's own code (goplusRuntimeOwned), and the std
+// packages the runtime and sync call directly, trusting them not to panic
+// (internal/..., sync/atomic).
+func goplusOrdinaryCallee(pc, callerpc uintptr) bool {
+	f := findfunc(pc)
+	if !f.valid() || !findfunc(callerpc-1).valid() {
+		return false
+	}
+	return goplusOrdinaryName(funcname(f))
+}
+
+// goplusOrdinaryName reports whether the function with symbol name name is
+// ordinary code for goplusOrdinaryCallee.
+func goplusOrdinaryName(name string) bool {
+	if goplusTestRuntimeFunc != "" && stringslite.HasPrefix(name, goplusTestRuntimeFunc) {
+		return false
+	}
+	return name != "" && !goplusRuntimeOwned(name) &&
+		!stringslite.HasPrefix(name, "internal/") &&
+		!stringslite.HasPrefix(name, "sync/atomic.")
 }
 
 // goplusCanPanic reports whether gp, the goroutine on whose behalf the
@@ -336,8 +376,8 @@ func goplusHijackSlot(gp *g) (slot, pc uintptr) {
 	return gp.goplusHijack.slot, gp.goplusHijack.pc
 }
 
-// goplusTestRuntimeFunc is the symbol name of a function a test has the
-// stack limit treat as a runtime function that compiled code calls, so
+// goplusTestRuntimeFunc is a symbol name prefix of functions a test has
+// the stack limit treat as runtime functions that compiled code calls, so
 // that it can make each growth of a recursion come in a call from the
 // runtime on every platform. It is nil outside those tests. It is set
 // while other goroutines may be refused, so it is read atomically: a
@@ -345,10 +385,11 @@ func goplusHijackSlot(gp *g) (slot, pc uintptr) {
 // wrong pointer.
 var goplusTestRuntimeFunc atomic.Pointer[string]
 
-// goplusIsTestRuntimeFunc reports whether name is goplusTestRuntimeFunc's.
+// goplusIsTestRuntimeFunc reports whether name starts with
+// goplusTestRuntimeFunc's prefix.
 func goplusIsTestRuntimeFunc(name string) bool {
 	p := goplusTestRuntimeFunc.Load()
-	return p != nil && *p == name
+	return p != nil && stringslite.HasPrefix(name, *p)
 }
 
 // goplusRecovered is called by recovery for gp, which has recovered a

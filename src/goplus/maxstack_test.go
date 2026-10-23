@@ -10,8 +10,10 @@ import (
 	"goplus"
 	"io"
 	"iter"
+	"reflect"
 	"runtime"
 	"runtime/debug"
+	"sync"
 	"testing"
 )
 
@@ -206,4 +208,73 @@ func TestMaxStackPull(t *testing.T) {
 		next()
 	})
 	wantMaxStack(t, p)
+}
+
+// callbackFrame is the stack each level of the callback recursions below
+// uses: more than the code that calls the callback, so each growth comes
+// at the callback's own entry, whose caller is sync or the runtime.
+const callbackFrame = 16 << 10
+
+var rangeMap sync.Map
+
+// rangeDeep recurses through sync.Map.Range: its callback is called by
+// internal/sync.
+//
+//go:noinline
+func rangeDeep(n int) {
+	rangeMap.Range(func(k, v any) bool {
+		var buf [callbackFrame - 64]byte
+		buf[n%len(buf)] = byte(n)
+		deepest = n
+		rangeDeep(n + 1)
+		return buf[(n+1)%len(buf)] == 0
+	})
+}
+
+// reflectDeep recurses through reflect.Value.Call, whose callee is called
+// by the runtime's reflectcall.
+//
+//go:noinline
+func reflectDeep(n int) int {
+	var buf [callbackFrame - 64]byte
+	buf[n%len(buf)] = byte(n)
+	deepest = n
+	reflect.ValueOf(reflectDeep).Call([]reflect.Value{reflect.ValueOf(n + 1)})
+	return int(buf[(n+1)%len(buf)])
+}
+
+// TestMaxStackCallbacks checks recursions whose every growth comes at the
+// entry of a function that sync or the runtime called back
+// (trendvidia/go#100): before, they were never refused and ran on to the
+// process-wide maximum. sync.Map must stay usable after the refusal.
+func TestMaxStackCallbacks(t *testing.T) {
+	needMaxStack(t)
+	const limit = 1 << 20
+	limitProcessStack(t, 16<<20)
+	rangeMap.Store("k", 1)
+	for _, tc := range []struct {
+		name string
+		f    func()
+	}{
+		{"sync.Map.Range", func() { rangeDeep(0) }},
+		{"reflect.Value.Call", func() { reflectDeep(0) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deepest = 0
+			d := goplus.NewAllocDomain()
+			d.SetMaxStack(limit)
+			wantMaxStack(t, runRefused(d, tc.f))
+			// The stack doubles, so the refusal comes between half the
+			// limit and the limit.
+			if used := deepest * callbackFrame; used < limit/2 || used > limit {
+				t.Errorf("recursion stopped at %d levels, about %d bytes of stack; want about %d to %d", deepest, used, limit/2, limit)
+			}
+		})
+	}
+	rangeMap.Store("after", 2)
+	n := 0
+	rangeMap.Range(func(k, v any) bool { n++; return true })
+	if n != 2 {
+		t.Errorf("sync.Map has %d entries after the refusal, want 2", n)
+	}
 }

@@ -163,7 +163,12 @@ var ErrMaxStack error = runtime_maxStackError()
 // (Before [JIT] level 15, the growth was let through, except in the
 // pointer checks of the race detector and in interface assertions,
 // switches and conversions, which were refused in place: their operation
-// did not complete.) Other growths
+// did not complete.) A function the runtime or package sync calls back,
+// such as a deferred call, a function [reflect.Value.Call] calls, or the
+// function given to [sync.Once.Do] or [sync.Map.Range], is refused at its
+// call like any other function, since the code calling it already expects
+// it may panic. (Before [JIT] level 16, a growth there was let through.)
+// Other growths
 // that cannot be refused are let through, and the goroutine's next growth
 // is considered again: those inside the runtime's API, such as
 // [runtime.LockOSThread], whose caller may release what it acquires in a

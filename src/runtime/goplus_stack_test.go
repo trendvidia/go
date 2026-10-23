@@ -138,19 +138,19 @@ func TestGoplusLateRefusable(t *testing.T) {
 	}
 }
 
-// lateHelper stands for a runtime function that compiled code calls: the
+// hookedHelper stands for a runtime function that compiled code calls: the
 // tests below have the stack limit treat it so, which makes every growth
-// of their recursion come in lateLeaf, called from the runtime, on every
+// of their recursion come in hookedLeaf, called from the runtime, on every
 // platform, whatever its frame sizes. Before trendvidia/go#97 such a
 // growth was let through at every level, and the recursion ran on to the
 // process-wide maximum.
 //
 //go:noinline
-func lateHelper(n int) int {
+func hookedHelper(n int) int {
 	if lateHold {
 		runtime.Acquirem()
 	}
-	r := lateLeaf(n)
+	r := hookedLeaf(n)
 	if lateHold {
 		runtime.Releasem()
 	}
@@ -161,13 +161,13 @@ func lateHelper(n int) int {
 	return r
 }
 
-const lateHelperName = "runtime_test.lateHelper"
+const lateHelperName = "runtime_test.hooked"
 
-// lateLeaf needs more stack than lateRecurse uses per level, so the
-// recursion's growths come here, whose caller is lateHelper.
+// hookedLeaf needs more stack than lateRecurse uses per level, so the
+// recursion's growths come here, whose caller is hookedHelper.
 //
 //go:noinline
-func lateLeaf(n int) int {
+func hookedLeaf(n int) int {
 	var buf [16 << 10]byte
 	buf[n%len(buf)] = byte(n)
 	if lateCheck != nil && runtime.GoplusLateRefusalPending() {
@@ -180,21 +180,21 @@ func lateLeaf(n int) int {
 // lateFrame is about the stack each level of lateRecurse uses.
 const lateFrame = 1 << 10
 
-// lateRecurse recurses forever, calling lateHelper at each level.
+// lateRecurse recurses forever, calling hookedHelper at each level.
 //
 //go:noinline
 func lateRecurse(n int) int {
 	var buf [lateFrame - 64]byte
 	buf[n%len(buf)] = byte(n)
 	lateLevels = n
-	return lateHelper(n) + lateRecurse(n+1) + int(buf[(n+1)%len(buf)])
+	return hookedHelper(n) + lateRecurse(n+1) + int(buf[(n+1)%len(buf)])
 }
 
 var (
 	lateLevels, lateReturns int
 	lateOwnPanic            bool
-	lateHold                bool   // lateHelper holds the M's lock count up while lateLeaf runs
-	lateCheck               func() // run once in lateLeaf while a refusal is pending
+	lateHold                bool   // hookedHelper holds the M's lock count up while hookedLeaf runs
+	lateCheck               func() // run once in hookedLeaf while a refusal is pending
 )
 
 // runLate runs lateRecurse inside Run on a domain with limit and returns
@@ -297,15 +297,15 @@ func TestGoplusMaxStackLate(t *testing.T) {
 	if late == 0 {
 		t.Fatalf("no refusal waited for a runtime call; the test does not test that")
 	}
-	// Raised as lateHelper returned, in lateRecurse at the call to it.
+	// Raised as hookedHelper returned, in lateRecurse at the call to it.
 	if got := below(stack, "runtime.goplusPanicMaxStack"); got != "runtime_test.lateRecurse" {
 		t.Errorf("ErrMaxStack raised in %q, want runtime_test.lateRecurse; stack:\n%v", got, stack)
 	}
 	if lateReturns != lateLevels+1 {
-		t.Errorf("lateHelper returned %d times in %d levels, want each call completed", lateReturns, lateLevels+1)
+		t.Errorf("hookedHelper returned %d times in %d levels, want each call completed", lateReturns, lateLevels+1)
 	}
-	// The growth past the limit comes where lateLeaf's frame no longer
-	// fits, and the refusal as lateHelper returns, at the same level.
+	// The growth past the limit comes where hookedLeaf's frame no longer
+	// fits, and the refusal as hookedHelper returns, at the same level.
 	if used := lateLevels * lateFrame; used < limit/2 || used > limit {
 		t.Errorf("recursion stopped at %d levels, about %d bytes of stack; want about %d to %d", lateLevels, used, limit/2, limit)
 	}
@@ -337,7 +337,7 @@ func TestGoplusMaxStackLateWalks(t *testing.T) {
 		t.Fatalf("Run panicked with %v (%T), want goplus.ErrMaxStack", p, p)
 	}
 	if len(walks) != 4 {
-		t.Fatalf("lateCheck ran %d walks, want 4: no refusal was pending in lateLeaf", len(walks))
+		t.Fatalf("lateCheck ran %d walks, want 4: no refusal was pending in hookedLeaf", len(walks))
 	}
 	if !moved {
 		t.Errorf("the stack did not move while the refusal was pending")
@@ -345,8 +345,8 @@ func TestGoplusMaxStackLateWalks(t *testing.T) {
 		t.Errorf("the overwritten return address was not moved with the stack")
 	}
 	for i, stack := range walks {
-		if got := below(stack, "runtime_test.lateHelper"); got != "runtime_test.lateRecurse" {
-			t.Errorf("walk %d: lateHelper called by %q, want runtime_test.lateRecurse; stack:\n%v", i, got, stack)
+		if got := below(stack, "runtime_test.hookedHelper"); got != "runtime_test.lateRecurse" {
+			t.Errorf("walk %d: hookedHelper called by %q, want runtime_test.lateRecurse; stack:\n%v", i, got, stack)
 		}
 		if !slices.Contains(stack, "goplus.(*AllocDomain).Run") {
 			t.Errorf("walk %d stops short of Run; stack:\n%v", i, stack)
@@ -392,13 +392,13 @@ func TestGoplusMaxStackLateOwnPanic(t *testing.T) {
 	}
 }
 
-// lockHelper is lateHelper with results in registers of each kind, and
+// hookedLockHelper is hookedHelper with results in registers of each kind, and
 // once, while a refusal is pending, it returns holding the M's lock count
 // up, as a runtime function that takes a lock for its caller would.
 //
 //go:noinline
-func lockHelper(n int) (int, float64, string, bool) {
-	r := lateLeaf(n)
+func hookedLockHelper(n int) (int, float64, string, bool) {
+	r := hookedLeaf(n)
 	if !lockHeld && runtime.GoplusLateRefusalPending() {
 		lockHeld = true
 		runtime.Acquirem()
@@ -407,7 +407,7 @@ func lockHelper(n int) (int, float64, string, bool) {
 	return n * 3, float64(n) / 2, "", false
 }
 
-const lockHelperName = "runtime_test.lockHelper"
+const lockHelperName = "runtime_test.hooked"
 
 var (
 	lockHeld bool
@@ -419,11 +419,11 @@ func lockRecurse(n int) int {
 	var buf [lateFrame - 64]byte
 	buf[n%len(buf)] = byte(n)
 	lateLevels = n
-	i, f, s, held := lockHelper(n)
+	i, f, s, held := hookedLockHelper(n)
 	if held {
 		runtime.Releasem()
 		if i != n*3 || f != float64(n)/2 || s != "held" {
-			lockBad = fmt.Sprintf("lockHelper(%d) returned %d, %v, %q; want %d, %v, %q", n, i, f, s, n*3, float64(n)/2, "held")
+			lockBad = fmt.Sprintf("hookedLockHelper(%d) returned %d, %v, %q; want %d, %v, %q", n, i, f, s, n*3, float64(n)/2, "held")
 		}
 	}
 	return i + lockRecurse(n+1) + int(buf[(n+1)%len(buf)])
@@ -440,7 +440,7 @@ func TestGoplusMaxStackLateCannotPanic(t *testing.T) {
 		t.Fatalf("Run panicked with %v (%T), want goplus.ErrMaxStack", p, p)
 	}
 	if !lockHeld {
-		t.Fatalf("lockHelper never returned holding a lock with a refusal pending")
+		t.Fatalf("hookedLockHelper never returned holding a lock with a refusal pending")
 	}
 	if lockBad != "" {
 		t.Error(lockBad)
@@ -707,6 +707,39 @@ func frameBelow(name string) (string, int) {
 		found = f.Function == name
 		if !more {
 			return "", 0
+		}
+	}
+}
+
+// TestGoplusOrdinaryName pins which callees a stack-limit refusal is
+// raised in place of whatever their caller, because the caller called
+// code it already expects may panic (trendvidia/go#100).
+func TestGoplusOrdinaryName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{"main.main", true},
+		{"main.(*T).String", true},
+		{"main.walk.func1", true},
+		{"time.sendTime", true}, // called under the timer's sendLock: goplusCanPanic refuses
+		{"reflect.Value.call", true},
+		{"example.com/sync.F", true},
+
+		{"runtime.mallocgc", false},
+		{"runtime.(*_panic).nextDefer", false},
+		{"sync.(*Once).doSlow", false},
+		{"sync.OnceFunc.func1", false},
+		{"internal/sync.(*HashTrieMap[go.shape.string,go.shape.int]).Range", false},
+		{"internal/chacha8rand.(*State).Refill", false},
+		{"internal/bytealg.IndexByteString", false},
+		{"sync/atomic.(*Value).Store", false},
+		{"type:.eq.main.T", false},
+		{"os.runtime_args", false},
+		{"", false},
+	} {
+		if got := runtime.GoplusOrdinaryName(tc.name); got != tc.want {
+			t.Errorf("goplusOrdinaryName(%q) = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

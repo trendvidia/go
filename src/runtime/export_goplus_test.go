@@ -14,3 +14,5 @@ var GoplusRuntimeOwned = goplusRuntimeOwned
 // GoplusPanicSafeAt reports whether the stack limit may refuse a call
 // whose return address is pc.
 func GoplusPanicSafeAt(pc uintptr) bool { return goplusPanicSafeAt(pc) }
+
+var GoplusMapWriter = goplusMapWriter

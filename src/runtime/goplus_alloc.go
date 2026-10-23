@@ -144,14 +144,18 @@ func goplusCoroRecovers(c *coro) {
 }
 
 // goplusInMapWrite reports whether the current goroutine is allocating
-// inside a map assignment. A map marks itself written for the whole of an
-// assignment, its growth included, and a panic there would leave it
+// inside a map write. A map marks itself written for the whole of a write,
+// an assignment's growth included, and a panic there would leave it
 // marked: its next write would throw "concurrent map writes". Each
 // allocation a map makes is bounded by its maximum table size, so letting
 // these through cannot admit one huge request.
 //
-// The runtime's frames between the allocator and the code that called
-// into it say whether the allocation came from a map assignment.
+// The frames between the allocator and the code that called into the
+// runtime say whether the allocation came from a map write. Today only an
+// assignment's growth allocates during one, but the walk recognises every
+// function that marks a map written (goplusMapWriter), and walks through
+// the hash and equality functions those call, so that an allocation added
+// to any of them upstream is let through too (trendvidia/go#96).
 func goplusInMapWrite() bool {
 	pc, sp, gp := sys.GetCallerPC(), sys.GetCallerSP(), getg()
 	inMap := false
@@ -161,17 +165,41 @@ func goplusInMapWrite() bool {
 		for ; u.valid(); u.next() {
 			for iu, uf := newInlineUnwinder(u.frame.fn, u.symPC()); uf.valid(); uf = iu.next(uf) {
 				name := iu.srcFunc(uf).name()
-				if stringslite.HasPrefix(name, "runtime.mapassign") {
+				if goplusMapWriter(name) {
 					inMap = true
 					return
 				}
-				if !stringslite.HasPrefix(name, "runtime.") && !stringslite.HasPrefix(name, "internal/runtime/") {
+				// The first frame outside the runtime is the code that
+				// called into it, and no map write is in progress below
+				// it. The helpers goplusRuntimeOwned excludes are called
+				// by compiled code only, never during a map write, so
+				// they end the walk as well.
+				if !goplusRuntimeOwned(name) {
 					return
 				}
 			}
 		}
 	})
 	return inMap
+}
+
+// goplusMapWriter reports whether the function with symbol name name marks
+// a map as being written while it runs: the map assignment entry points,
+// and the internal/runtime/maps methods behind delete, clear and the map
+// tests. TestGoplusMapWriter checks the list against every
+// function in internal/runtime/maps that sets the mark.
+func goplusMapWriter(name string) bool {
+	for _, prefix := range [...]string{
+		"runtime.mapassign",
+		"internal/runtime/maps.(*Map).PutSlot",
+		"internal/runtime/maps.(*Map).Delete",
+		"internal/runtime/maps.(*Map).Clear",
+	} {
+		if stringslite.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // goplusAllocBudgetError is the panic value of an allocation refused by

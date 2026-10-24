@@ -8,6 +8,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"goplus"
 	"iter"
 	"reflect"
@@ -467,17 +470,25 @@ func padStack(n int, f func()) {
 // the test looks for. scanLate returns at how many depths it was, and how
 // many refusals waited for a runtime call.
 //
-// The range starts at the shallowest depth where op is refused: a
-// goroutine's first stack is not a fixed size, since the runtime adapts
-// it to the stacks goroutines have used.
+// The range starts at the shallowest depth where op is refused, and ends
+// at the first depth where op is refused before it starts: a goroutine's
+// first stack is not a fixed size, since the runtime adapts it to the
+// stacks goroutines have used. The garbage collector is off during the
+// scan: a collection can change that size, shrink a stack while op runs,
+// or make an allocation take a deeper path, and each of those moves the
+// range off op (seen in all.bash on arm64 runners).
 func scanLate(t *testing.T, op func() (refused, mark bool)) (marks int, late uint64) {
 	needMaxStack(t)
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	old := debug.SetMaxStack(64 << 20)
 	defer debug.SetMaxStack(old)
 	d := goplus.NewAllocDomain()
 	d.SetMaxStack(0)
+	entered := false
 	at := func(n int) (refused, mark bool) {
 		done := make(chan struct{})
+		entered = false
 		go func() {
 			defer close(done)
 			defer func() {
@@ -485,7 +496,7 @@ func scanLate(t *testing.T, op func() (refused, mark bool)) (marks int, late uin
 					refused = true
 				}
 			}()
-			d.Run(func() { padStack(n, func() { refused, mark = op() }) })
+			d.Run(func() { padStack(n, func() { entered = true; refused, mark = op() }) })
 		}()
 		<-done
 		return refused, mark
@@ -506,10 +517,20 @@ func scanLate(t *testing.T, op func() (refused, mark bool)) (marks int, late uin
 			lo = mid + 1
 		}
 	}
+	// Scan on until op is refused before it starts. A call op makes can
+	// take a deeper path in one run than in the next (an allocation that
+	// refills its cache), which only moves lo shallower, so the scan
+	// still reaches each place in op.
 	before := runtime.GoplusLateRefusals()
-	for n := lo; n < lo+128; n++ {
+	for n := lo; ; n++ {
 		if _, mark := at(n); mark {
 			marks++
+		}
+		if !entered {
+			break
+		}
+		if n > lo+1<<16 {
+			t.Fatalf("op is still entered at depth %d, past where it is first refused at %d", n, lo)
 		}
 	}
 	return marks, runtime.GoplusLateRefusals() - before
@@ -613,27 +634,88 @@ func parkedCoroutines() int {
 // returned, it would come before iter.Pull returned the next and stop
 // functions that alone can end the coroutine newcoro made, which would
 // stay parked forever.
+//
+// A refusal at one of the allocations iter.Pull makes after newcoro
+// returns leaks the coroutine too (#106). That is not what this test
+// checks, so a scan that saw one is run again.
 func TestGoplusMaxStackLatePull(t *testing.T) {
-	before := parkedCoroutines()
-	inPull := 0
-	scanLate(t, func() (refused, mark bool) {
-		defer func() {
-			if p := recover(); p != nil {
-				if strings.HasPrefix(below(callerNames(0), "runtime.goplusPanicMaxStack"), "iter.Pull[") {
-					inPull++
+	last := newcoroLine(t)
+	for attempt := 1; ; attempt++ {
+		before := parkedCoroutines()
+		inPull, after := 0, 0
+		scanLate(t, func() (refused, mark bool) {
+			defer func() {
+				if p := recover(); p != nil {
+					if fn, line := frameBelow("runtime.goplusPanicMaxStack"); strings.HasPrefix(fn, "iter.Pull[") {
+						if line > last {
+							after++
+						} else {
+							inPull++
+						}
+					}
+					panic(p)
 				}
-				panic(p)
+			}()
+			next, stop := iter.Pull(func(yield func(int) bool) { yield(1) })
+			defer stop()
+			next()
+			return false, false
+		})
+		if after > 0 {
+			t.Logf("%d refusals came after newcoro returned (#106)", after)
+			if attempt == 5 {
+				t.Fatalf("each of %d scans had a refusal after newcoro returned", attempt)
 			}
-		}()
-		next, stop := iter.Pull(func(yield func(int) bool) { yield(1) })
-		defer stop()
-		next()
-		return false, false
-	})
-	if inPull == 0 {
-		t.Fatalf("no refusal came in iter.Pull; the scan does not test that")
+			continue
+		}
+		if inPull == 0 {
+			t.Fatalf("no refusal came in iter.Pull; the scan does not test that")
+		}
+		if n := parkedCoroutines() - before; n > 0 {
+			t.Errorf("%d coroutines left parked by %d refusals in iter.Pull", n, inPull)
+		}
+		return
 	}
-	if n := parkedCoroutines() - before; n > 0 {
-		t.Errorf("%d coroutines left parked by %d refusals in iter.Pull", n, inPull)
+}
+
+// newcoroLine returns the last line of the statement in iter.Pull that
+// calls newcoro.
+func newcoroLine(t *testing.T) int {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "../iter/iter.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "Pull" {
+			for _, st := range fd.Body.List {
+				if as, ok := st.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
+					if call, ok := as.Rhs[0].(*ast.CallExpr); ok {
+						if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "newcoro" {
+							return fset.Position(as.End()).Line
+						}
+					}
+				}
+			}
+		}
+	}
+	t.Fatal("iter.Pull no longer assigns the result of newcoro")
+	return 0
+}
+
+// frameBelow returns the function and line of the caller of the frame of
+// the named function on the calling goroutine's stack.
+func frameBelow(name string) (string, int) {
+	pcs := make([]uintptr, 1<<10)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(1, pcs)])
+	for found := false; ; {
+		f, more := frames.Next()
+		if found {
+			return f.Function, f.Line
+		}
+		found = f.Function == name
+		if !more {
+			return "", 0
+		}
 	}
 }

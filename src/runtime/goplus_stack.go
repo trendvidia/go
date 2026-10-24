@@ -196,14 +196,46 @@ func goplusRuntimeCode(name string) bool {
 // goplusRecovered), so that refusals do not leave it ever larger: without
 // that, the limit would next be enforced only at the next growth of the
 // bigger stack.
+//
+// The size to shrink back to is recorded by goplusRecordRestore.
 func goplusRaiseMaxStack(gp *g, oldsize uintptr) {
 	// gp.sched.ctxt, the closure context of the call, is left for gogo to
 	// load and clear: goplusPanicMaxStack ignores it, and newstack may not
 	// write a pointer with a write barrier.
 	gp.sched.pc = abi.FuncPCABIInternal(goplusPanicMaxStack)
+	goplusRecordRestore(gp, oldsize)
+}
+
+// goplusRecordRestore records, for a refusal of a growth of gp's stack
+// from oldsize, the size to shrink the stack back to once the refusal's
+// panic is recovered. Both refusals record it, in place
+// (goplusRaiseMaxStack) and late (goplusRaiseMaxStackLate).
+//
+// The size is at most the largest size within the limit of gp's domain,
+// the one refusing. A growth past the limit that could not be refused
+// leaves the stack bigger than that, and oldsize is then that bigger
+// size: without the cap, the stack would never come back under the
+// limit, and each later growth past it would come only at the next
+// doubling (trendvidia/go#103). The cap is taken here rather than at the
+// restore because the panic may be recovered outside Run, where gp has
+// another domain or none.
+//
+// A refusal also disarms a restore an earlier recovery asked for and that
+// has not run yet (see goplusRestoreStack): this panic is to run on top
+// of the frames that filled the stack. A late refusal that is then
+// dropped, because gp can no longer take a panic when the runtime returns
+// (goplusHijackReturn), leaves the restore disarmed: the stack stays as
+// grown, as after any growth let through, and since it is past the limit,
+// the next growth is refused and its recovery arms the restore again.
+func goplusRecordRestore(gp *g, oldsize uintptr) {
+	limit := gp.allocDomain.maxStack.Load()
+	for oldsize > fixedStack && uint64(oldsize) > limit {
+		oldsize /= 2
+	}
 	if gp.stackRestore == 0 || oldsize < gp.stackRestore {
 		gp.stackRestore = oldsize
 	}
+	gp.restoreArmed = false
 }
 
 // goplusHijack is a return address on a goroutine's stack that
@@ -288,9 +320,7 @@ func goplusRaiseMaxStackLate(gp *g, oldsize uintptr) {
 		gp.goplusHijack = goplusHijack{slot: slot, pc: frame.lr, ret: ret}
 		*(*uintptr)(unsafe.Pointer(slot)) = ret
 		goplusLateRefusals.Add(1)
-		if gp.stackRestore == 0 || oldsize < gp.stackRestore {
-			gp.stackRestore = oldsize
-		}
+		goplusRecordRestore(gp, oldsize)
 		return
 	}
 }
@@ -389,38 +419,64 @@ func goplusTestHooked(name string) bool {
 }
 
 // goplusRecovered is called by recovery for gp, which has recovered a
-// panic and is to resume in the frame whose stack pointer is sp. If a
-// stack growth was refused on gp since its stack was last restored, it
-// asks gp to stop at its next function call, where newstack can shrink
-// the stack it is running on (goplusRestoreStack). It raises the stack
-// guard without setting gp.preempt, so that newstack resumes gp after the
-// shrink instead of descheduling it.
+// panic, is to resume in the frame whose stack pointer is sp, and has
+// unwound gp._panic to the panics still running.
 //
 // A refusal still pending in a frame below sp is forgotten: that frame is
 // gone, and its return address will never be returned to.
+//
+// If a stack growth was refused on gp since its stack was last restored,
+// and no refusal's panic is still running, it arms the restore and asks
+// gp to stop at its next function call, where newstack can shrink the
+// stack it is running on (goplusRestoreStack). It raises the stack guard
+// without setting gp.preempt, so that newstack resumes gp after the
+// shrink instead of descheduling it.
+//
+// A panic recovered inside a deferred call that a refusal's panic is
+// running, as fmt and encoding/json do internally, does not arm the
+// restore: the frames that filled the stack are still under that call.
 func goplusRecovered(gp *g, sp uintptr) {
-	if gp.stackRestore != 0 {
-		gp.stackguard0 = stackPreempt
-	}
 	if gp.goplusHijack.slot != 0 && gp.goplusHijack.slot < sp {
 		gp.goplusHijack = goplusHijack{}
 	}
+	if gp.stackRestore == 0 {
+		return
+	}
+	for p := gp._panic; p != nil; p = p.link {
+		if _, ok := p.arg.(goplusMaxStackError); ok {
+			return
+		}
+	}
+	gp.restoreArmed = true
+	gp.stackguard0 = stackPreempt
 }
 
 // goplusRestoreStack shrinks gp's stack, stopped at a synchronous safe
-// point by newstack, to the size it had before its last refused growth,
+// point by newstack, to the size goplusRaiseMaxStack recorded for it,
 // or to the smallest size between the two that holds what gp uses and the
 // frame of the function it is entering. gp must be the current user
 // goroutine. It reports whether a restore was pending, done or not.
+//
+// The restore waits until a recovery arms it (goplusRecovered). Until
+// then the refused growth's panic is still running, on top of the frames
+// that filled the stack: shrinking at a stop for another reason, the
+// garbage collector's say, would leave the deferred calls almost no
+// stack, and their next growth would be refused again or, in code that
+// cannot be refused, let through past the limit (trendvidia/go#103).
+//
+// Where the stack cannot be shrunk yet, the restore stays armed and is
+// done at gp's next stop, for whatever reason: asking for a stop again
+// would send every one of gp's calls through morestack until then.
 func goplusRestoreStack(gp *g) bool {
 	target := gp.stackRestore
-	if target == 0 {
+	if target == 0 || !gp.restoreArmed {
 		return false
 	}
 	if !isShrinkStackSafe(gp) || gp.m.libcallsp != 0 {
 		return true
 	}
 	gp.stackRestore = 0
+	gp.restoreArmed = false
 	size := gp.stack.hi - gp.stack.lo
 	used := gp.stack.hi - gp.sched.sp + stackGuard
 	if f := findfunc(gp.sched.pc); f.valid() {

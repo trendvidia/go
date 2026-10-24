@@ -13,7 +13,7 @@ body:
     attributes:
       label: Go version
       description: The output of `go version`. For this fork it ends in `(plus <release>)`.
-      placeholder: go version go1.27.3 windows/amd64 (plus v1.27.3c)
+      placeholder: go version go1.27.3 windows/amd64 (plus v1.27.3d)
     validations:
       required: true
 

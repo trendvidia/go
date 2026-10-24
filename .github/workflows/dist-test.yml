@@ -74,7 +74,19 @@ jobs:
         with:
           msystem: CLANGARM64
           update: false
-          install: mingw-w64-clang-aarch64-clang
+      # MSYS2's own install refreshes its signing keys from a keyserver
+      # (etc/post-install/07-pacman-key.post); setup-msys2 turns that off.
+      # Without it, a package database signed by a key the image's keyring
+      # does not trust yet fails the sync ("signature from ... is unknown
+      # trust", #107), and with it this leg. So refresh the keys first, then
+      # sync and install. The refresh is bounded and only warns on failure:
+      # a keyserver that is down must not fail the leg either.
+      - name: Install clangarm64 after refreshing MSYS2's keys (Windows arm64)
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        shell: msys2 {0}
+        run: |
+          timeout 300 pacman-key --refresh-keys || echo "::warning::pacman-key --refresh-keys failed; syncing with the keys the image has"
+          pacman -Sy --noconfirm --needed mingw-w64-clang-aarch64-clang
       - name: Use clangarm64 for cgo (Windows arm64)
         if: runner.os == 'Windows' && runner.arch == 'ARM64'
         shell: pwsh

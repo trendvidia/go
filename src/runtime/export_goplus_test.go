@@ -4,6 +4,8 @@
 
 package runtime
 
+import "unsafe"
+
 var GoplusSampleWeight = goplusSampleWeight
 
 // Fastexprand draws the gap to the heap profiler's next sample.
@@ -86,4 +88,22 @@ func GoplusArmRestore() {
 		gp.stackRestore = gp.stack.hi - gp.stack.lo
 	}
 	gp.restoreArmed = true
+}
+
+// GoplusOrdinaryFunc finds the function with symbol name name in the
+// binary and reports whether the stack limit counts it as ordinary code
+// when the runtime calls it (goplusOrdinaryCallee). found is false if
+// the binary has no such function.
+func GoplusOrdinaryFunc(name string) (found, ordinary bool) {
+	for datap := &firstmoduledata; datap != nil; datap = datap.next {
+		for i := 0; i < len(datap.ftab)-1; i++ {
+			f := funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i].funcoff])), datap}
+			if funcname(f) == name {
+				// The caller only needs to be a function the runtime can
+				// find: f itself.
+				return true, goplusOrdinaryCallee(f.entry(), f.entry()+1)
+			}
+		}
+	}
+	return false, false
 }

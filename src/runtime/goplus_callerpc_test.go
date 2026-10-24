@@ -6,8 +6,10 @@ package runtime_test
 
 import (
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -388,4 +390,71 @@ func callsNamed(n ast.Node, name string) bool {
 		return !found
 	})
 	return found
+}
+
+// TestGoplusLinknamePushNotOrdinary checks that no function the runtime
+// defines under another package's name, by a push //go:linkname, counts
+// as ordinary code for the stack limit's callee rule (trendvidia/go#105).
+// Their names say another package, maps.clone or reflect.typedmemmove,
+// but they are runtime code: a refusal at their entry would raise a panic
+// in the runtime's frames if the runtime called one. Each such function
+// linked into this binary is checked.
+func TestGoplusLinknamePushNotOrdinary(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pushed []string
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		// Only files built here: a directive in sys_openbsd.go names
+		// syscall.syscall, which on other systems is package syscall's
+		// own function.
+		if ok, err := build.Default.MatchFile(".", name); err != nil {
+			t.Fatal(err)
+		} else if !ok {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.ParseComments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defined := map[string]bool{}
+		for _, decl := range f.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil && fn.Recv == nil {
+				defined[fn.Name.Name] = true
+			}
+		}
+		for _, cg := range f.Comments {
+			for _, c := range cg.List {
+				fields := strings.Fields(c.Text)
+				if len(fields) == 3 && fields[0] == "//go:linkname" && defined[fields[1]] && !strings.HasPrefix(fields[2], "runtime.") {
+					pushed = append(pushed, fields[2])
+				}
+			}
+		}
+	}
+	pushed = slices.Compact(slices.Sorted(slices.Values(pushed)))
+	// maps.Clone calls maps.clone, which is runtime.mapclone: this keeps
+	// one such function in the binary whatever else the tests use.
+	_ = maps.Clone(map[int]int{1: 1})
+	var linked []string
+	for _, name := range pushed {
+		found, ordinary := runtime.GoplusOrdinaryFunc(name)
+		if !found {
+			continue
+		}
+		linked = append(linked, name)
+		if ordinary {
+			t.Errorf("%s is runtime code under another package's name, and counts as ordinary code", name)
+		}
+	}
+	// Positive marker: maps.clone at least is linked in, by the reference
+	// above.
+	if !slices.Contains(linked, "maps.clone") {
+		t.Fatalf("maps.clone is not among the %d push-linknamed runtime functions found in the binary (%d in the source); the test does not test that", len(linked), len(pushed))
+	}
+	t.Logf("%d push-linknamed runtime functions in the source, %d in this binary", len(pushed), len(linked))
 }

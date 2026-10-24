@@ -1126,6 +1126,14 @@ func newstack() {
 			// Let the goroutine keep running for now.
 			// gp->preempt is set, so it will be preempted next time.
 			gp.stackguard0 = gp.stack.lo + stackGuard
+			// A stop a recovery asked for to restore the stack
+			// (goplusRecovered) is asked for again the same way, when
+			// the M can be preempted (releasem, unlock2, exitsyscall);
+			// without that the restore waits for the next refusal, and
+			// the stack ratchets past the limit (trendvidia/go#113).
+			if gp.restoreArmed {
+				gp.preempt = true
+			}
 			gogo(&gp.sched) // never return
 		}
 	}

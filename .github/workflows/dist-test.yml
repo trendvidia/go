@@ -68,18 +68,57 @@ jobs:
       # assemble arm64 (runtime/cgo's gcc_arm64.S fails in make.bat). Use
       # MSYS2's clangarm64 toolchain, which targets arm64 Windows and is what
       # the self-hosted arm64 box used.
+      # MSYS2 is fetched from its mirrors on every run, and either stage can
+      # fail on their side (#107): the setup, and the database sync. Each is
+      # tried again before the leg fails. The first setup may fail; the
+      # second runs only if it did.
       - uses: msys2/setup-msys2@v2
         id: msys2
         if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        continue-on-error: true
         with:
           msystem: CLANGARM64
           update: false
-          install: mingw-w64-clang-aarch64-clang
+      - uses: msys2/setup-msys2@v2
+        id: msys2retry
+        if: runner.os == 'Windows' && runner.arch == 'ARM64' && steps.msys2.outcome == 'failure'
+        with:
+          msystem: CLANGARM64
+          update: false
+      # MSYS2's own install refreshes its signing keys from a keyserver
+      # (etc/post-install/07-pacman-key.post); setup-msys2 turns that off.
+      # Without it, a package database signed by a key the image's keyring
+      # does not have yet fails the sync ("signature from ... is unknown
+      # trust", #107). So refresh the keys first; the refresh is bounded and
+      # only warns on failure, so a keyserver that is down cannot fail the
+      # leg. Then sync and install, up to three times. Before each retry the
+      # keyring is made again from scratch, from the keys MSYS2 ships, since
+      # a keyring whose setup went wrong gives the same "unknown trust" (a
+      # missing trust database reproduces #107's message exactly), and -Syy
+      # downloads the databases again. --init and --populate alone do not
+      # repair it: the local master key keeps no ultimate trust.
+      - name: Install clangarm64 after refreshing MSYS2's keys (Windows arm64)
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        shell: msys2 {0}
+        run: |
+          timeout 300 pacman-key --refresh-keys || echo "::warning::pacman-key --refresh-keys failed; syncing with the keys the image has"
+          for attempt in 1 2 3; do
+            if pacman -Syy --noconfirm --needed mingw-w64-clang-aarch64-clang; then
+              exit 0
+            fi
+            echo "::warning::MSYS2 sync or install failed (attempt $attempt of 3); making the keyring again and retrying"
+            rm -rf /etc/pacman.d/gnupg
+            pacman-key --init || true
+            pacman-key --populate msys2 || true
+            timeout 300 pacman-key --refresh-keys || true
+            sleep 15
+          done
+          exit 1
       - name: Use clangarm64 for cgo (Windows arm64)
         if: runner.os == 'Windows' && runner.arch == 'ARM64'
         shell: pwsh
         run: |
-          "${{ steps.msys2.outputs.msys2-location }}\clangarm64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          "${{ steps.msys2retry.outputs.msys2-location || steps.msys2.outputs.msys2-location }}\clangarm64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
           "CC=clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: CPU features (x64)
         if: runner.os == 'Linux' && runner.arch == 'X64'

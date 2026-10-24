@@ -25,4 +25,4 @@ const Version = 27
 // [Version] or VERSION because a release letter (v1.27.3b) does not fit
 // Go's version grammar: "go1.27.3b" parses as malformed and compares
 // below plain "go1.27.3".
-const PlusRelease = "v1.27.3c"
+const PlusRelease = "v1.27.3d"

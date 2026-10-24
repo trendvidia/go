@@ -197,23 +197,37 @@ func goplusRuntimeCode(name string) bool {
 // that, the limit would next be enforced only at the next growth of the
 // bigger stack.
 //
-// The size to shrink back to is at most the largest size within the
-// limit of gp's domain, the one refusing. A growth past the limit that
-// could not be refused leaves the stack bigger than that, and oldsize is
-// then that bigger size: without the cap, the stack would never come back
-// under the limit, and each later growth past it would come only at the
-// next doubling (trendvidia/go#103). The cap is taken here rather than at
-// the restore because the panic may be recovered outside Run, where gp
-// has another domain or none.
-//
-// A refusal also disarms a restore an earlier recovery asked for and that
-// has not run yet (see goplusRestoreStack): this panic is running now, on
-// top of the frames that filled the stack.
+// The size to shrink back to is recorded by goplusRecordRestore.
 func goplusRaiseMaxStack(gp *g, oldsize uintptr) {
 	// gp.sched.ctxt, the closure context of the call, is left for gogo to
 	// load and clear: goplusPanicMaxStack ignores it, and newstack may not
 	// write a pointer with a write barrier.
 	gp.sched.pc = abi.FuncPCABIInternal(goplusPanicMaxStack)
+	goplusRecordRestore(gp, oldsize)
+}
+
+// goplusRecordRestore records, for a refusal of a growth of gp's stack
+// from oldsize, the size to shrink the stack back to once the refusal's
+// panic is recovered. Both refusals record it, in place
+// (goplusRaiseMaxStack) and late (goplusRaiseMaxStackLate).
+//
+// The size is at most the largest size within the limit of gp's domain,
+// the one refusing. A growth past the limit that could not be refused
+// leaves the stack bigger than that, and oldsize is then that bigger
+// size: without the cap, the stack would never come back under the
+// limit, and each later growth past it would come only at the next
+// doubling (trendvidia/go#103). The cap is taken here rather than at the
+// restore because the panic may be recovered outside Run, where gp has
+// another domain or none.
+//
+// A refusal also disarms a restore an earlier recovery asked for and that
+// has not run yet (see goplusRestoreStack): this panic is to run on top
+// of the frames that filled the stack. A late refusal that is then
+// dropped, because gp can no longer take a panic when the runtime returns
+// (goplusHijackReturn), leaves the restore disarmed: the stack stays as
+// grown, as after any growth let through, and since it is past the limit,
+// the next growth is refused and its recovery arms the restore again.
+func goplusRecordRestore(gp *g, oldsize uintptr) {
 	limit := gp.allocDomain.maxStack.Load()
 	for oldsize > fixedStack && uint64(oldsize) > limit {
 		oldsize /= 2
@@ -306,9 +320,7 @@ func goplusRaiseMaxStackLate(gp *g, oldsize uintptr) {
 		gp.goplusHijack = goplusHijack{slot: slot, pc: frame.lr, ret: ret}
 		*(*uintptr)(unsafe.Pointer(slot)) = ret
 		goplusLateRefusals.Add(1)
-		if gp.stackRestore == 0 || oldsize < gp.stackRestore {
-			gp.stackRestore = oldsize
-		}
+		goplusRecordRestore(gp, oldsize)
 		return
 	}
 }

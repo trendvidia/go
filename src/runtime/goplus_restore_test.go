@@ -106,6 +106,13 @@ func isMaxStack(p any) bool {
 // again, or if the stack is not back within the limit after a recovery.
 func recoverRefusals(t *testing.T, atRefusal, inDefer func()) {
 	t.Helper()
+	recoverRefusalsOf(t, func() { restoreBig(0) }, atRefusal, inDefer)
+}
+
+// recoverRefusalsOf is recoverRefusals with refuse making the growth that
+// is refused, about 300 KiB past the frames the refusals fill.
+func recoverRefusalsOf(t *testing.T, refuse, atRefusal, inDefer func()) {
+	t.Helper()
 	var recovered []any
 	var sizes []uintptr
 	escaped := runRestore(t, func() {
@@ -117,10 +124,10 @@ func recoverRefusals(t *testing.T, atRefusal, inDefer func()) {
 					recovered = append(recovered, recover())
 				}()
 				// About 800 KiB of frames, then 300 KiB more: the growth
-				// to 2 MiB is refused, from ordinary code, in place.
+				// to 2 MiB is refused.
 				restorePad(800, func() {
 					atRefusal()
-					restoreBig(0)
+					refuse()
 				})
 			}()
 			restoreSmall() // the restore
@@ -277,5 +284,119 @@ func TestGoplusMaxStackRestoreCappedOutsideRun(t *testing.T) {
 	}
 	if size > restoreLimit {
 		t.Errorf("after the refusal was recovered outside Run, the stack is %d bytes, past the %d-byte limit", size, restoreLimit)
+	}
+}
+
+// hookedRestoreHelper stands for runtime code that compiled code calls, as
+// hookedHelper does: the late tests below have the stack limit treat the
+// functions whose names start with hookedPrefix so. Its growths come in
+// hookedRestoreLeaf, called by it, so they are refused late, as it
+// returns to its caller (trendvidia/go#97).
+//
+//go:noinline
+func hookedRestoreHelper() { hookedRestoreLeaf(0) }
+
+// hookedRestoreLeaf uses about 300 KiB of stack, in three frames, as
+// restoreBig does.
+//
+//go:noinline
+func hookedRestoreLeaf(n int) {
+	var buf [100 << 10]byte
+	restoreSink += restoreTouch(buf[:], n)
+	if n%3 != 2 {
+		hookedRestoreLeaf(n + 1)
+	}
+	restoreSink += restoreTouch(buf[:], n+1)
+}
+
+// recoverLateRefusals is recoverRefusals with each growth refused late,
+// as hookedRestoreHelper returns. It fails t unless every refusal was.
+func recoverLateRefusals(t *testing.T, atRefusal, inDefer func()) {
+	t.Helper()
+	runtime.SetGoplusTestRuntimeFunc(hookedPrefix)
+	defer runtime.SetGoplusTestRuntimeFunc("")
+	before := runtime.GoplusLateRefusals()
+	recoverRefusalsOf(t, hookedRestoreHelper, atRefusal, inDefer)
+	if late := runtime.GoplusLateRefusals() - before; late < 5 {
+		t.Fatalf("%d of the 5 refusals waited for a runtime call; the test does not test late refusals", late)
+	}
+}
+
+// TestGoplusMaxStackRestoreLateWaitsForRecovery is
+// TestGoplusMaxStackRestoreWaitsForRecovery with the refusals raised late.
+func TestGoplusMaxStackRestoreLateWaitsForRecovery(t *testing.T) {
+	needMaxStack(t)
+	recoverLateRefusals(t, func() {}, func() {
+		runtime.GoplusRequestStop()
+		restoreSmall() // the stop
+	})
+}
+
+// TestGoplusMaxStackRestoreLateDisarmedByRefusal is
+// TestGoplusMaxStackRestoreDisarmedByRefusal with the refusal raised late:
+// a late refusal must disarm a restore left armed, as one in place does.
+func TestGoplusMaxStackRestoreLateDisarmedByRefusal(t *testing.T) {
+	needMaxStack(t)
+	recoverLateRefusals(t, runtime.GoplusArmRestore, func() {
+		runtime.GoplusRequestStop()
+		restoreSmall() // the stop
+	})
+}
+
+// TestGoplusMaxStackRestoreLateNestedRecover is
+// TestGoplusMaxStackRestoreNestedRecover with the refusal raised late.
+func TestGoplusMaxStackRestoreLateNestedRecover(t *testing.T) {
+	needMaxStack(t)
+	recoverLateRefusals(t, func() {}, func() {
+		func() {
+			defer func() { recover() }()
+			panic("inner")
+		}()
+		restoreSmall() // where a restore armed by the inner recovery runs
+	})
+}
+
+// TestGoplusMaxStackRestoreLateCapped is TestGoplusMaxStackRestoreCapped
+// with the refusals raised late: the size a late refusal records to shrink
+// back to must be capped at the limit too.
+func TestGoplusMaxStackRestoreLateCapped(t *testing.T) {
+	needMaxStack(t)
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	runtime.SetGoplusTestRuntimeFunc(hookedPrefix)
+	defer runtime.SetGoplusTestRuntimeFunc("")
+	before := runtime.GoplusLateRefusals()
+	var depths []int
+	escaped := runRestore(t, func() {
+		growPastLimit()
+		for range 3 {
+			func() {
+				defer func() {
+					if p := recover(); !isMaxStack(p) {
+						panic(p)
+					}
+					depths = append(depths, lateLevels)
+				}()
+				lateRecurse(0)
+			}()
+		}
+	})
+	if escaped != nil {
+		t.Fatalf("Run panicked with %v", escaped)
+	}
+	if late := runtime.GoplusLateRefusals() - before; late < 3 {
+		t.Fatalf("%d of the 3 refusals waited for a runtime call; the test does not test late refusals", late)
+	}
+	if len(depths) != 3 {
+		t.Fatalf("%d refusals recovered, want 3", len(depths))
+	}
+	// A level of lateRecurse is about lateFrame, and its growths come in
+	// hookedLeaf, 16 KiB deeper, hence the slack.
+	if used := depths[0] * lateFrame; used <= restoreLimit {
+		t.Fatalf("the first recursion reached about %d bytes of stack, within the %d-byte limit: the growth past it was not let through", used, restoreLimit)
+	}
+	for i, n := range depths[1:] {
+		if used := n * lateFrame; used > restoreLimit {
+			t.Errorf("recursion %d reached about %d bytes of stack, past the %d-byte limit (all: %v)", i+2, used, restoreLimit, depths)
+		}
 	}
 }

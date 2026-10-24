@@ -400,3 +400,39 @@ func TestGoplusMaxStackRestoreLateCapped(t *testing.T) {
 		}
 	}
 }
+
+// TestGoplusMaxStackRestoreStopDropped has the stop a recovery asks for
+// arrive while the M cannot be preempted: the deferred call that recovers
+// the refusal still holds m.locks when recovery resumes the goroutine.
+// newstack lets such a stop go and resumes the goroutine, as it does for a
+// preemption request. The restore must still happen, at a later stop,
+// rather than be lost until the next refusal: lost at each of three
+// refusals in a row, the stack doubles to the process-wide maximum.
+func TestGoplusMaxStackRestoreStopDropped(t *testing.T) {
+	needMaxStack(t)
+	var sizes []uintptr
+	escaped := runRestore(t, func() {
+		for range 3 {
+			func() {
+				defer func() {
+					recover()
+					runtime.Acquirem() // held when recovery resumes the goroutine
+				}()
+				restorePad(800, func() { restoreBig(0) })
+			}()
+			restoreSmall() // the stop, at which the M cannot be preempted
+			runtime.Releasem()
+			restoreSmall()
+			restoreSmall()
+			sizes = append(sizes, runtime.GoplusStackSize())
+		}
+	})
+	if escaped != nil {
+		t.Fatalf("Run panicked with %v", escaped)
+	}
+	for i, size := range sizes {
+		if size > restoreLimit {
+			t.Errorf("after refusal %d was recovered with the stop dropped, the stack is %d bytes, past the %d-byte limit (all: %v)", i, size, restoreLimit, sizes)
+		}
+	}
+}

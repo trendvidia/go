@@ -145,7 +145,7 @@ func mapsSymbol(fd *ast.FuncDecl, linknames map[string]string) string {
 
 // TestGoplusInMapWrite checks the walk that finds a map write above an
 // allocation (trendvidia/go#96), on stacks of symbol names: it goes
-// through runtime code, the stateless helpers the stack limit excludes,
+// through runtime code, conversion and assertion helpers included,
 // and the hash and equality functions the compiler generates, and ends at
 // the first frame of any other code. No allocation lands under a helper
 // or a generated function during a map write today, so only such stacks

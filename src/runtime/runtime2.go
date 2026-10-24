@@ -568,6 +568,7 @@ type g struct {
 	goplusCoro      *coro              // the coro whose body this goroutine runs while that body hands its panics to the coro's waiter (goplusCoroRecovers); nil otherwise
 	sampleTag       *goplusSampleTag   // goplus.SampleTag this goroutine's sampled allocations count toward, or nil; inherited like labels
 	stackRestore    uintptr            // stack size to shrink back to once a panic is recovered, after a growth past its goplus.AllocDomain's limit was refused (goplusRaiseMaxStack); 0 if none
+	goplusHijack    goplusHijack       // a return address overwritten to raise a refusal of a stack growth as a runtime call returns (goplusHijackReturn); zero if none
 	timer           *timer             // cached timer for time.Sleep
 	sleepWhen       int64              // when to sleep until
 	selectDone      atomic.Uint32      // are we participating in a select and did someone win the race?

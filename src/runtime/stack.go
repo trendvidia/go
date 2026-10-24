@@ -990,6 +990,7 @@ func copystack(gp *g, newsize uintptr) {
 	adjustctxt(gp, &adjinfo)
 	adjustdefers(gp, &adjinfo)
 	adjustpanics(gp, &adjinfo)
+	adjustpointer(&adjinfo, unsafe.Pointer(&gp.goplusHijack.slot))
 	if adjinfo.sghi != 0 {
 		adjinfo.sghi += adjinfo.delta
 	}
@@ -1222,8 +1223,14 @@ func newstack() {
 	// Past a goplus.AllocDomain's stack limit, a growth is refused: the
 	// goroutine panics with a recoverable error instead of running on to
 	// the process-wide maximum and throwing (trendvidia/go#94). The growth
-	// still happens, to give the panic and its deferred calls room.
-	refuse := stackguard0 != stackForceMove && goplusRefuseStack(gp, newsize, morebuf.pc)
+	// still happens, to give the panic and its deferred calls room. When
+	// the function that needs the stack was called by runtime code, the
+	// panic is raised as that code returns to the code that called it
+	// (trendvidia/go#97).
+	refuse, late := false, false
+	if stackguard0 != stackForceMove {
+		refuse, late = goplusRefuseStack(gp, newsize, morebuf.pc)
+	}
 
 	// The goroutine must be executing in order to call newstack,
 	// so it must be Grunning (or Gscanrunning).
@@ -1234,6 +1241,8 @@ func newstack() {
 	copystack(gp, newsize)
 	if refuse {
 		goplusRaiseMaxStack(gp, oldsize)
+	} else if late {
+		goplusRaiseMaxStackLate(gp, oldsize)
 	}
 	if stackDebug >= 1 {
 		print("stack grow done\n")

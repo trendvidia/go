@@ -207,4 +207,3 @@ func TestMaxStackPull(t *testing.T) {
 	})
 	wantMaxStack(t, p)
 }
-

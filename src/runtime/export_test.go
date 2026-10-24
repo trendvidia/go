@@ -1892,7 +1892,7 @@ const TagAlign = tagAlign
 // FPCallers works like Callers and uses frame pointer unwinding to populate
 // pcBuf with the return addresses of the physical frames on the stack.
 func FPCallers(pcBuf []uintptr) int {
-	return fpTracebackPCs(unsafe.Pointer(getfp()), pcBuf)
+	return fpTracebackPCs(getg(), unsafe.Pointer(getfp()), pcBuf)
 }
 
 const FramePointerEnabled = framepointer_enabled

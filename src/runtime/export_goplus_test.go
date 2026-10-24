@@ -37,15 +37,16 @@ var GoplusLinknamedStd = goplusLinknamedStd[:]
 // for a runtime call to return.
 func GoplusLateRefusals() uint64 { return goplusLateRefusals.Load() }
 
-// SetGoplusTestRuntimeFunc has the stack limit treat the function with
-// symbol name name as a runtime function compiled code calls; "" undoes it.
-func SetGoplusTestRuntimeFunc(name string) {
-	if name == "" {
+// SetGoplusTestRuntimeFunc has the stack limit treat the functions whose
+// symbol names start with prefix as runtime functions compiled code calls;
+// "" undoes it.
+func SetGoplusTestRuntimeFunc(prefix string) {
+	if prefix == "" {
 		goplusTestRuntimeFunc.Store(nil)
 		return
 	}
 	p := new(string)
-	*p = name
+	*p = prefix
 	goplusTestRuntimeFunc.Store(p)
 }
 
@@ -60,3 +61,8 @@ func GoplusLateRefusalOnStack() bool {
 	s := gp.goplusHijack.slot
 	return s != 0 && gp.stack.lo <= s && s < gp.stack.hi
 }
+
+var (
+	GoplusOrdinaryName   = goplusOrdinaryName
+	GoplusOrdinaryCallee = goplusOrdinaryCallee
+)

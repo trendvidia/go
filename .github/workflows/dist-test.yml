@@ -198,6 +198,11 @@ jobs:
           ..\bin\go.exe test -short -count=1 errors fmt strings strconv bytes sort math encoding/json regexp sync context internal/buildcfg goplus goplus/internal/execmem cmd/cgo/internal/testfastleaf || exit /b 1
           ..\bin\go.exe test -short -count=1 -v -run TestScript/build_toolid_contentid cmd/go || exit /b 1
           ..\bin\go.exe test -short -count=1 cmd/internal/objabi || exit /b 1
+          rem The stack limit on a syscall.NewCallback recursion (#105). The run
+          rem above shows only "ok goplus", so require the test's own PASS line.
+          ..\bin\go.exe test -short -count=1 -v -run "^TestMaxStackNewCallback$" goplus > newcallback.log 2>&1
+          type newcallback.log
+          findstr /c:"--- PASS: TestMaxStackNewCallback" newcallback.log || exit /b 1
 
       # Confirm the toolchain we just built is the fork, not stock Go.
       - name: Assert the built toolchain is go-plus (Unix)

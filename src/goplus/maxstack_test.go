@@ -10,9 +10,12 @@ import (
 	"goplus"
 	"io"
 	"iter"
+	"reflect"
 	"runtime"
 	"runtime/debug"
+	"sync"
 	"testing"
+	"time"
 )
 
 // deepFrame is the stack each level of deep uses, roughly: the frame is
@@ -206,4 +209,168 @@ func TestMaxStackPull(t *testing.T) {
 		next()
 	})
 	wantMaxStack(t, p)
+}
+
+// callbackFrame is the stack each level of the callback recursions below
+// uses: more than the code that calls the callback, so each growth comes
+// at the callback's own entry, whose caller is sync or the runtime.
+const callbackFrame = 16 << 10
+
+var rangeMap sync.Map
+
+// rangeDeep recurses through sync.Map.Range: its callback is called by
+// internal/sync.
+//
+//go:noinline
+func rangeDeep(n int) {
+	rangeMap.Range(func(k, v any) bool {
+		var buf [callbackFrame - 64]byte
+		buf[n%len(buf)] = byte(n)
+		deepest = n
+		rangeDeep(n + 1)
+		return buf[(n+1)%len(buf)] == 0
+	})
+}
+
+// reflectDeep recurses through reflect.Value.Call, whose callee is called
+// by the runtime's reflectcall.
+//
+//go:noinline
+func reflectDeep(n int) int {
+	var buf [callbackFrame - 64]byte
+	buf[n%len(buf)] = byte(n)
+	deepest = n
+	reflect.ValueOf(reflectDeep).Call([]reflect.Value{reflect.ValueOf(n + 1)})
+	return int(buf[(n+1)%len(buf)])
+}
+
+// deferDeep recurses through deferred functions that runtime.deferreturn
+// calls: a defer in a loop is not open-coded, so the function's return
+// runs it from deferreturn.
+//
+//go:noinline
+func deferDeep(n int) {
+	for range 1 {
+		defer func() {
+			var buf [callbackFrame - 64]byte
+			buf[n%len(buf)] = byte(n)
+			deepest = n
+			deferDeep(n + 1)
+			callbackSink = buf[(n+1)%len(buf)]
+		}()
+	}
+}
+
+// panicDeep recurses through deferred functions that a panic runs: each
+// level panics, and runtime.gopanic calls its deferred function.
+//
+//go:noinline
+func panicDeep(n int) {
+	defer func() {
+		var buf [callbackFrame - 64]byte
+		buf[n%len(buf)] = byte(n)
+		deepest = n
+		panicDeep(n + 1)
+		callbackSink = buf[(n+1)%len(buf)]
+	}()
+	panic(n)
+}
+
+// onces holds the sync.Once of each level of onceDeep, so the test can
+// check that each is still usable after the refusal.
+var onces []*sync.Once
+
+// onceDeep recurses through sync.Once.Do: its function is called by
+// sync.(*Once).doSlow, which holds the Once's mutex meanwhile.
+//
+//go:noinline
+func onceDeep(n int) {
+	o := new(sync.Once)
+	onces = append(onces, o)
+	o.Do(func() {
+		var buf [callbackFrame - 64]byte
+		buf[n%len(buf)] = byte(n)
+		deepest = n
+		onceDeep(n + 1)
+		callbackSink = buf[(n+1)%len(buf)]
+	})
+}
+
+// poolDeep recurses through a sync.Pool's New, which sync.(*Pool).Get
+// calls.
+//
+//go:noinline
+func poolDeep(n int) {
+	p := &sync.Pool{New: func() any {
+		var buf [callbackFrame - 64]byte
+		buf[n%len(buf)] = byte(n)
+		deepest = n
+		poolDeep(n + 1)
+		return buf[(n+1)%len(buf)]
+	}}
+	p.Get()
+}
+
+var callbackSink byte
+
+// TestMaxStackCallbacks checks recursions whose every growth comes at the
+// entry of a function that sync or the runtime called back
+// (trendvidia/go#100): before, they were never refused and ran on to the
+// process-wide maximum. sync.Map must stay usable after the refusal, and
+// no sync.Once may be left locked.
+func TestMaxStackCallbacks(t *testing.T) {
+	needMaxStack(t)
+	const limit = 1 << 20
+	limitProcessStack(t, 16<<20)
+	rangeMap.Store("k", 1)
+	for _, tc := range []struct {
+		name string
+		f    func()
+	}{
+		{"sync.Map.Range", func() { rangeDeep(0) }},
+		{"reflect.Value.Call", func() { reflectDeep(0) }},
+		{"deferreturn", func() { deferDeep(0) }},
+		{"gopanic", func() { panicDeep(0) }},
+		{"sync.Once.Do", func() { onceDeep(0) }},
+		{"sync.Pool.New", func() { poolDeep(0) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deepest = 0
+			d := goplus.NewAllocDomain()
+			d.SetMaxStack(limit)
+			wantMaxStack(t, runRefused(d, tc.f))
+			// The stack doubles, so the refusal comes between half the
+			// limit and the limit.
+			if used := deepest * callbackFrame; used < limit/2 || used > limit {
+				t.Errorf("recursion stopped at %d levels, about %d bytes of stack; want about %d to %d", deepest, used, limit/2, limit)
+			}
+		})
+	}
+	rangeMap.Store("after", 2)
+	n := 0
+	rangeMap.Range(func(k, v any) bool { n++; return true })
+	if n != 2 {
+		t.Errorf("sync.Map has %d entries after the refusal, want 2", n)
+	}
+	// Each Once's f panicked, the deepest one's at its entry, which Do
+	// takes as f returning: Do returns at once on every one, without
+	// calling f, and so it must, unless the panic left the Once's mutex
+	// locked, when Do hangs; hence the deadline.
+	ran := make(chan [2]int, 1)
+	go func() {
+		returned, called := 0, 0
+		for _, o := range onces {
+			o.Do(func() { called++ })
+			returned++
+		}
+		ran <- [2]int{returned, called}
+	}()
+	select {
+	case r := <-ran:
+		if r[0] != len(onces) || r[0] < 2 || r[1] != 0 {
+			t.Errorf("after the refusal, Do returned on %d of %d sync.Onces and called f %d times; want all, and none", r[0], len(onces), r[1])
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("Do on a sync.Once still hangs 30s after the refusal: its mutex was left locked")
+	}
 }

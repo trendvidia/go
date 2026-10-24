@@ -239,6 +239,46 @@ descriptors; it cannot protect a pointer into the image, a
 plugin-defined type, or an interface whose dynamic type lives there. See
 `Plugin.Close`'s "Upgrading a plugin" section.
 
+
+### Known limitations of goplus
+
+`goplus` is the fork's runtime API for embedders such as the govm JIT:
+allocation budgets and stack limits per `goplus.AllocDomain`. These hold
+as of `goplus.JIT` level 16; the package docs give the full rules.
+
+**The stack limit is enforced only on amd64 and arm64.** On other
+architectures `AllocDomain.SetMaxStack` records the limit and stacks grow
+as though there were none.
+
+**Some stack growths are not bounded by the limit.** A growth inside the
+runtime's own API (such as `runtime.LockOSThread`), inside package
+`sync`, inside a runtime call that returns holding a runtime lock, or
+inside generated code with no `goplus.RegisterCode` record is let
+through, because a panic there could leave the runtime or a lock in a
+state that later ends the process. A recursion each of whose growths
+falls in such code still runs on to the process-wide maximum and ends
+the process with a fatal stack overflow.
+The process-wide maximum (`runtime/debug.SetMaxStack`) must also be at
+least twice the domain's limit, since a refused growth still happens to
+give the panic room.
+
+**The allocation budget is approximate.** Small allocations are checked
+against the budget once per 64 KiB a domain allocates on each P, so a
+domain can pass its budget by up to 64 KiB times the number of Ps before
+an allocation is refused. Allocations the runtime cannot let panic (on a
+system stack, under a lock, or while a map is being assigned to) are let
+through and counted, and the next one that can panic is refused instead.
+
+**Only goroutines inside `AllocDomain.Run` are refused.** Goroutines that
+`Run`'s function starts are counted in the domain, but neither its budget
+nor its stack limit refuses them: nothing around them could recover the
+panic. A goroutine that should be bounded must call `Run` itself.
+
+**A refusal is a panic at an arbitrary call.** `ErrAllocBudget` and
+`ErrMaxStack` can strike code that does not expect a panic, part-way
+through updating a data structure or holding a lock. A goroutine that
+recovers one should treat the state it was changing as lost.
+
 ### Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Changes to Go itself, as opposed

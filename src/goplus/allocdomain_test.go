@@ -891,6 +891,49 @@ func TestAllocBudgetMapGrowth(t *testing.T) {
 	}
 }
 
+// TestAllocBudgetMapStructKey is TestAllocBudgetMapGrowth for a key type
+// the fast map routines do not handle, whose hash and equality functions
+// the compiler generates, and then clears the map in the same domain
+// (trendvidia/go#96). Today every allocation it makes over budget is a
+// growth under runtime.mapassign, which the check named before #96 too;
+// none lands under a generated function or under Clear, so the runtime's
+// TestGoplusInMapWrite is what pins the walk through those.
+func TestAllocBudgetMapStructKey(t *testing.T) {
+	type key struct {
+		s string
+		i any
+		n int64
+	}
+	type elem [120]byte
+	m := make(map[key]elem)
+	d := goplus.NewAllocDomain()
+	d.SetBudget(1)
+	keys := make([]key, 4096)
+	for i := range keys {
+		keys[i] = key{s: "k", i: i & 1, n: int64(i)}
+	}
+	r := runRefused(d, func() {
+		for _, k := range keys {
+			m[k] = elem{}
+		}
+		clear(m)
+		for _, k := range keys[:100] {
+			m[k] = elem{}
+		}
+	})
+	if r != nil {
+		t.Fatalf("map writes in a domain over budget panicked: %v", r)
+	}
+	if n := d.Allocated(); n < 4*budgetGranule {
+		t.Fatalf("domain counted %d bytes of map growth, want at least %d", n, 4*budgetGranule)
+	}
+	checkBudgetPanic(t, runRefused(d, func() { allocExact(0, 1, 1<<20) }))
+	m[key{n: -1}] = elem{}
+	if len(m) != 101 {
+		t.Fatalf("map has %d entries, want 101", len(m))
+	}
+}
+
 // BenchmarkAllocBudget measures an allocation in a domain with a budget
 // it does not reach. (math.MaxUint64 would be no budget at all.)
 func BenchmarkAllocBudget(b *testing.B) {

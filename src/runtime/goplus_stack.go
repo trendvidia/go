@@ -136,6 +136,13 @@ func goplusRuntimeOwned(name string) bool {
 			return false
 		}
 	}
+	return goplusRuntimeCode(name)
+}
+
+// goplusRuntimeCode reports whether the function with symbol name name is
+// runtime code as goplusRuntimeOwned counts it, the stateless helpers
+// included.
+func goplusRuntimeCode(name string) bool {
 	for _, prefix := range [...]string{
 		"runtime.",
 		"internal/runtime/",

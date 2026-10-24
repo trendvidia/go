@@ -42,8 +42,8 @@ type coro struct {
 func newcoro(f func(*coro)) *coro {
 	c := new(coro)
 	c.f = f
+	pc := sys.GetCallerPC()
 	gp := getg()
-	pc := goplusReturnAddress(gp, sys.GetCallerPC())
 	systemstack(func() {
 		mp := gp.m
 		start := corostart

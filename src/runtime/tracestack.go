@@ -266,12 +266,16 @@ func tracefpunwindoff() bool {
 // B, this will return a PC for only B.
 //
 // gp is the goroutine whose stack fp is on, or nil if it is not a
-// goroutine's (see goplusSlotReturnAddress).
+// goroutine's (see goplusHijackSlot).
 func fpTracebackPCs(gp *g, fp unsafe.Pointer, pcBuf []uintptr) (i int) {
+	hijackSlot, hijackPC := goplusHijackSlot(gp)
 	for i = 0; i < len(pcBuf) && fp != nil; i++ {
 		// return addr sits one word above the frame pointer
 		slot := uintptr(fp) + goarch.PtrSize
-		pcBuf[i] = goplusSlotReturnAddress(gp, slot, *(*uintptr)(unsafe.Pointer(slot)))
+		pcBuf[i] = *(*uintptr)(unsafe.Pointer(slot))
+		if slot == hijackSlot {
+			pcBuf[i] = hijackPC
+		}
 		// follow the frame pointer to the next one
 		fp = unsafe.Pointer(*(*uintptr)(fp))
 	}

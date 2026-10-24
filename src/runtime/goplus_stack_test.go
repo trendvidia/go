@@ -5,13 +5,16 @@
 package runtime_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"goplus"
+	"iter"
 	"reflect"
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"unsafe"
@@ -112,6 +115,10 @@ func TestGoplusLateRefusable(t *testing.T) {
 		{"runtime.GC", false},
 		{"sync.runtime_SemacquireMutex", false},
 		{"goplus.runtime_setAllocDomain", false},
+		// Called by name by iter.Pull (//go:linknamestd), which needs
+		// the coroutine it returns.
+		{"runtime.newcoro", false},
+		{"runtime.coroswitch", false},
 		{"internal/poll.runtime_pollOpen", false},
 		// Closures and methods are not called by compiled code directly.
 		{"runtime.newproc.func1", false},
@@ -137,7 +144,13 @@ func TestGoplusLateRefusable(t *testing.T) {
 //
 //go:noinline
 func lateHelper(n int) int {
+	if lateHold {
+		runtime.Acquirem()
+	}
 	r := lateLeaf(n)
+	if lateHold {
+		runtime.Releasem()
+	}
 	lateReturns++
 	if lateOwnPanic && runtime.GoplusLateRefusalPending() {
 		panic("own")
@@ -177,6 +190,7 @@ func lateRecurse(n int) int {
 var (
 	lateLevels, lateReturns int
 	lateOwnPanic            bool
+	lateHold                bool   // lateHelper holds the M's lock count up while lateLeaf runs
 	lateCheck               func() // run once in lateLeaf while a refusal is pending
 )
 
@@ -334,6 +348,28 @@ func TestGoplusMaxStackLateWalks(t *testing.T) {
 		if !slices.Contains(stack, "goplus.(*AllocDomain).Run") {
 			t.Errorf("walk %d stops short of Run; stack:\n%v", i, stack)
 		}
+	}
+}
+
+// TestGoplusMaxStackLateHeld checks a growth past the limit while the
+// runtime code that called it holds a lock, as getitab does under itabLock
+// and chansend under the channel's lock, and that releases it before it
+// returns. The growth cannot be refused in place, and the refusal waits
+// for the runtime to return as for any other runtime call: by then the
+// lock is released and the goroutine can take the panic.
+func TestGoplusMaxStackLateHeld(t *testing.T) {
+	needMaxStack(t)
+	lateHold = true
+	defer func() { lateHold = false }()
+	p, stack, late := runLate(t, 1<<20)
+	if err, ok := p.(error); !ok || !errors.Is(err, goplus.ErrMaxStack) {
+		t.Fatalf("Run panicked with %v (%T), want goplus.ErrMaxStack", p, p)
+	}
+	if late == 0 {
+		t.Fatalf("no refusal waited for a runtime call; the test does not test that")
+	}
+	if got := below(stack, "runtime.goplusPanicMaxStack"); got != "runtime_test.lateRecurse" {
+		t.Errorf("ErrMaxStack raised in %q, want runtime_test.lateRecurse; stack:\n%v", got, stack)
 	}
 }
 
@@ -562,5 +598,42 @@ func TestGoplusMaxStackLateMap(t *testing.T) {
 	t.Logf("%d refusals as a map assignment returned; %d refusals waited for a runtime call", marks, late)
 	if marks == 0 {
 		t.Fatalf("no refusal came as a map assignment returned; the scan does not test that")
+	}
+}
+
+// parkedCoroutines returns how many goroutines are coroutines waiting to
+// be switched to, as iter.Pull's is until its next or stop is called.
+func parkedCoroutines() int {
+	buf := make([]byte, 16<<20)
+	return bytes.Count(buf[:runtime.Stack(buf, true)], []byte(" [coroutine]:"))
+}
+
+// TestGoplusMaxStackLatePull checks that a refusal does not wait for
+// runtime.newcoro, which iter.Pull calls by name: raised as newcoro
+// returned, it would come before iter.Pull returned the next and stop
+// functions that alone can end the coroutine newcoro made, which would
+// stay parked forever.
+func TestGoplusMaxStackLatePull(t *testing.T) {
+	before := parkedCoroutines()
+	inPull := 0
+	scanLate(t, func() (refused, mark bool) {
+		defer func() {
+			if p := recover(); p != nil {
+				if strings.HasPrefix(below(callerNames(0), "runtime.goplusPanicMaxStack"), "iter.Pull[") {
+					inPull++
+				}
+				panic(p)
+			}
+		}()
+		next, stop := iter.Pull(func(yield func(int) bool) { yield(1) })
+		defer stop()
+		next()
+		return false, false
+	})
+	if inPull == 0 {
+		t.Fatalf("no refusal came in iter.Pull; the scan does not test that")
+	}
+	if n := parkedCoroutines() - before; n > 0 {
+		t.Errorf("%d coroutines left parked by %d refusals in iter.Pull", n, inPull)
 	}
 }

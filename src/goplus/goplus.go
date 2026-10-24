@@ -81,7 +81,9 @@ package goplus
 // Level 14: [AllocDomain.SetMaxStack], [ErrMaxStack].
 // Level 15: a growth past the stack limit inside runtime code that compiled
 // code called for an operation of the language, a type assertion or a map
-// assignment say, is refused as that code returns; before, it was let
+// assignment say, is refused as that code returns. Before, it was let
 // through, and a recursion that grew there ran on to the process-wide
-// maximum.
+// maximum; except in the race detector's pointer checks and in interface
+// assertions, switches and conversions, which were refused in place,
+// before their operation completed.
 const JIT = 15

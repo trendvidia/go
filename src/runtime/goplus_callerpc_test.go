@@ -25,7 +25,47 @@ import (
 var goplusCallerPCKept = []string{
 	"deferproc",      // d.pc, where recovery resumes (findfunc)
 	"deferrangefunc", // d.pc, likewise
-	"newcoro",        // the coroutine goroutine's gopc
+}
+
+// TestGoplusLinknamedStd checks that goplusLinknamedStd lists exactly the
+// runtime functions that //go:linknamestd lets other packages of the
+// standard library call by name, which a stack-limit refusal must not
+// wait for. A new one, as an upstream change or the fork can add, fails
+// here until it is listed.
+func TestGoplusLinknamedStd(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.ParseComments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, cg := range f.Comments {
+			for _, c := range cg.List {
+				if fields := strings.Fields(c.Text); len(fields) == 2 && fields[0] == "//go:linknamestd" {
+					found = append(found, fields[1])
+				}
+			}
+		}
+	}
+	found = slices.Compact(slices.Sorted(slices.Values(found)))
+	if len(found) == 0 {
+		t.Fatal("found no //go:linknamestd directive in the runtime; the test does not test that")
+	}
+	if want := slices.Sorted(slices.Values(runtime.GoplusLinknamedStd)); !slices.Equal(found, want) {
+		t.Errorf("//go:linknamestd functions %v, goplusLinknamedStd %v", found, want)
+	}
+	for _, name := range found {
+		if runtime.GoplusLateRefusable("runtime." + name) {
+			t.Errorf("goplusLateRefusable(runtime.%s) = true, want false", name)
+		}
+	}
 }
 
 // goplusCallerPCOther lists the other such readers, and why the address
@@ -46,7 +86,10 @@ var goplusCallerPCOther = map[string]string{
 	"slicerunetostring": "race",
 	// Read into gp.syscallpc or m.libcallpc, where tracebacks and the CPU
 	// profiler start; the unwinder's initAt passes it through
-	// goplusReturnAddress.
+	// goplusReturnAddress. The execution tracer reads gp.syscallpc raw,
+	// which is safe because each of these is nosplit and reads it before
+	// any call that could grow the stack, so no refusal can be pending on
+	// its frame yet.
 	"cgocallLeaf": "initAt",
 	"libcCall":    "initAt",
 	"stdcall":     "initAt",
@@ -140,12 +183,30 @@ func linknamePushed(f *ast.File) map[string]bool {
 // callerPCAfterCall reports whether body calls sys.GetCallerPC after a
 // call that is not one of a few that cannot grow the stack or never
 // return, and whether every such read is passed to goplusReturnAddress.
+// After means earlier in the source, or anywhere in a loop, or between a
+// label and a goto back to it, that holds the read too: the read runs
+// again after the call.
 func callerPCAfterCall(body *ast.BlockStmt) (late, wrapped bool) {
 	var calls []*ast.CallExpr
 	wrappedAt := map[token.Pos]bool{}
+	// The parts of body that can run more than once: loops, and the
+	// statements from a label to a goto after it.
+	type region struct{ from, to token.Pos }
+	var repeats []region
+	labels := map[string]token.Pos{}
+	var gotos []*ast.BranchStmt
 	ast.Inspect(body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
+		switch n := n.(type) {
+		case *ast.FuncLit:
 			return false
+		case *ast.ForStmt, *ast.RangeStmt:
+			repeats = append(repeats, region{n.Pos(), n.End()})
+		case *ast.LabeledStmt:
+			labels[n.Label.Name] = n.Pos()
+		case *ast.BranchStmt:
+			if n.Tok == token.GOTO {
+				gotos = append(gotos, n)
+			}
 		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -161,13 +222,27 @@ func callerPCAfterCall(body *ast.BlockStmt) (late, wrapped bool) {
 		}
 		return true
 	})
+	for _, g := range gotos {
+		if at, ok := labels[g.Label.Name]; ok && at < g.Pos() {
+			repeats = append(repeats, region{at, g.End()})
+		}
+	}
+	// repeated reports whether a and b are both in one part that repeats.
+	repeated := func(a, b ast.Node) bool {
+		for _, r := range repeats {
+			if r.from <= a.Pos() && a.End() <= r.to && r.from <= b.Pos() && b.End() <= r.to {
+				return true
+			}
+		}
+		return false
+	}
 	wrapped = true
 	for _, read := range calls {
 		if callName(read) != "sys.GetCallerPC" {
 			continue
 		}
 		for _, c := range calls {
-			if c.End() <= read.Pos() && !harmlessCall(callName(c)) {
+			if (c.End() <= read.Pos() || repeated(c, read)) && c != read && !harmlessCall(callName(c)) {
 				late = true
 				wrapped = wrapped && wrappedAt[read.Pos()]
 				break
@@ -205,4 +280,37 @@ func harmlessCall(name string) bool {
 		return true
 	}
 	return false
+}
+
+// TestGoplusCallerPCAfterCall checks the audit TestGoplusCallerPCReaders
+// runs on each function, on bodies written to be caught or let pass.
+func TestGoplusCallerPCAfterCall(t *testing.T) {
+	for _, tc := range []struct {
+		body          string
+		late, wrapped bool
+	}{
+		{"pc := sys.GetCallerPC(); f(); _ = pc", false, false},
+		{"f(); pc := sys.GetCallerPC(); _ = pc", true, false},
+		{"f(); pc := goplusReturnAddress(gp, sys.GetCallerPC()); _ = pc", true, true},
+		{"throw(\"x\"); pc := sys.GetCallerPC(); _ = pc", false, false},
+		// The read runs again after the call.
+		{"for { pc := sys.GetCallerPC(); f(); _ = pc }", true, false},
+		{"for range n { pc := sys.GetCallerPC(); _ = pc; f() }", true, false},
+		{"again: pc := sys.GetCallerPC(); if f() { goto again }; _ = pc", true, false},
+		// A loop, or a goto forward, that holds only one of the two.
+		{"for { f() }; pc := sys.GetCallerPC(); _ = pc", true, false},
+		{"pc := sys.GetCallerPC(); for { f() }; _ = pc", false, false},
+		{"pc := sys.GetCallerPC(); goto out; out: f(); _ = pc", false, false},
+		// A closure reads its own caller.
+		{"g := func() { f(); _ = sys.GetCallerPC() }; _ = g", false, false},
+	} {
+		f, err := parser.ParseFile(token.NewFileSet(), "x.go", "package p\nfunc x() {\n"+tc.body+"\n}\n", 0)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.body, err)
+		}
+		body := f.Decls[0].(*ast.FuncDecl).Body
+		if late, wrapped := callerPCAfterCall(body); late != tc.late || wrapped != tc.wrapped {
+			t.Errorf("callerPCAfterCall(%s) = %v, %v; want %v, %v", tc.body, late, wrapped, tc.late, tc.wrapped)
+		}
+	}
 }

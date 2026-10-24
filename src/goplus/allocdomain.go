@@ -160,7 +160,10 @@ var ErrMaxStack error = runtime_maxStackError()
 // the operation completes and the panic is raised as it returns, at the
 // statement that called it: a map then holds the key being assigned,
 // with the zero value, and a value received from a channel is lost.
-// (Before [JIT] level 15, the growth was let through.) Other growths
+// (Before [JIT] level 15, the growth was let through, except in the
+// pointer checks of the race detector and in interface assertions,
+// switches and conversions, which were refused in place: their operation
+// did not complete.) Other growths
 // that cannot be refused are let through, and the goroutine's next growth
 // is considered again: those inside the runtime's API, such as
 // [runtime.LockOSThread], whose caller may release what it acquires in a

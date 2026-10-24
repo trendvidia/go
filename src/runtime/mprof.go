@@ -583,10 +583,14 @@ func fpTracebackPartialExpand(gp *g, skip int, fp unsafe.Pointer, pcBuf []uintpt
 		}
 		return n < len(pcBuf)
 	}
+	hijackSlot, hijackPC := goplusHijackSlot(gp)
 	for n < len(pcBuf) && fp != nil {
 		// return addr sits one word above the frame pointer
 		slot := uintptr(fp) + goarch.PtrSize
-		pc := goplusSlotReturnAddress(gp, slot, *(*uintptr)(unsafe.Pointer(slot)))
+		pc := *(*uintptr)(unsafe.Pointer(slot))
+		if slot == hijackSlot {
+			pc = hijackPC
+		}
 
 		if skip > 0 {
 			callPC := pc - 1

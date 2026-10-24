@@ -5,6 +5,7 @@
 package goplus_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"goplus"
@@ -338,6 +339,13 @@ func BenchmarkAllocDomain(b *testing.B) {
 // are checked against the budget each time a P's count crosses a
 // multiple of it.
 const budgetGranule = 64 << 10
+
+// parkedCoroutines returns how many goroutines are coroutines waiting to
+// be switched to, as iter.Pull's is until its next or stop is called.
+func parkedCoroutines() int {
+	buf := make([]byte, 16<<20)
+	return bytes.Count(buf[:runtime.Stack(buf, true)], []byte(" [coroutine]:"))
+}
 
 // runRefused runs f in d and returns the value it panicked with, or nil.
 func runRefused(d *goplus.AllocDomain, f func()) (r any) {
@@ -771,20 +779,30 @@ func TestAllocBudgetPull(t *testing.T) {
 		// 16-byte objects short of the first granule, so across the
 		// sweep the granule is crossed at each of the allocations the
 		// first next makes, in the caller and in the body.
+		//
+		// Each pull allocates its wrapper of next before calling iter.Pull,
+		// so that nothing is allocated between iter.Pull's return and the
+		// caller's: a refusal there would leave the coroutine parked by the
+		// test's own doing.
 		pulls := map[string]func() (started *bool, next func() bool, stop func()){
 			"Pull": func() (*bool, func() bool, func()) {
 				started := new(bool)
+				var next func() (int, bool)
+				wrapped := func() bool { _, ok := next(); return ok }
 				next, stop := iter.Pull(func(yield func(int) bool) { *started = true; yield(1) })
-				return started, func() bool { _, ok := next(); return ok }, stop
+				return started, wrapped, stop
 			},
 			"Pull2": func() (*bool, func() bool, func()) {
 				started := new(bool)
+				var next func() (int, int, bool)
+				wrapped := func() bool { _, _, ok := next(); return ok }
 				next, stop := iter.Pull2(func(yield func(int, int) bool) { *started = true; yield(1, 2) })
-				return started, func() bool { _, _, ok := next(); return ok }, stop
+				return started, wrapped, stop
 			},
 		}
 		for name, pull := range pulls {
 			refused := 0
+			parked := parkedCoroutines()
 			for j := 1; j <= 256; j++ {
 				d := goplus.NewAllocDomain()
 				d.SetBudget(0)
@@ -809,6 +827,11 @@ func TestAllocBudgetPull(t *testing.T) {
 			// Positive marker: the sweep did reach the granule.
 			if refused == 0 {
 				t.Fatalf("%s: no attempt crossed the granule", name)
+			}
+			// A refusal after the coroutine is made and before next and
+			// stop reach the caller would leave it parked (#106).
+			if n := parkedCoroutines() - parked; n > 0 {
+				t.Errorf("%s: %d coroutines left parked by %d refusals", name, n, refused)
 			}
 		}
 	})

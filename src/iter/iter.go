@@ -275,45 +275,12 @@ func Pull[V any](seq Seq[V]) (next func() (V, bool), stop func()) {
 		racer      int
 		panicValue any
 	}
-	c := newcoro(func(c *coro) {
-		race.Acquire(unsafe.Pointer(&pull.racer))
-		if pull.done {
-			race.Release(unsafe.Pointer(&pull.racer))
-			return
-		}
-		yield := func(v1 V) bool {
-			if pull.done {
-				return false
-			}
-			if !pull.yieldNext {
-				panic("iter.Pull: yield called again before next")
-			}
-			pull.yieldNext = false
-			pull.v, pull.ok = v1, true
-			race.Release(unsafe.Pointer(&pull.racer))
-			coroswitch(c)
-			race.Acquire(unsafe.Pointer(&pull.racer))
-			return !pull.done
-		}
-		// Recover and propagate panics from seq.
-		defer func() {
-			goplusCoroRecovers(nil)
-			if p := recover(); p != nil {
-				pull.panicValue = p
-			} else if !pull.seqDone {
-				pull.panicValue = goexitPanicValue
-			}
-			pull.done = true // Invalidate iterator
-			race.Release(unsafe.Pointer(&pull.racer))
-		}()
-		// Only from here on does a panic reach the caller of next or
-		// stop, so only from here may the goplus budget refuse the body.
-		goplusCoroRecovers(c)
-		seq(yield)
-		var v0 V
-		pull.v, pull.ok = v0, false
-		pull.seqDone = true
-	})
+	// The coroutine is made last: next and stop alone can end it, so
+	// nothing that can panic may come between newcoro and the return of
+	// next and stop to the caller. Allocating their closures after newcoro
+	// would let the goplus stack limit or allocation budget refuse one
+	// there and leave the coroutine parked forever.
+	var c *coro
 	next = func() (v1 V, ok1 bool) {
 		race.Write(unsafe.Pointer(&pull.racer)) // detect races
 
@@ -359,6 +326,45 @@ func Pull[V any](seq Seq[V]) (next func() (V, bool), stop func()) {
 			}
 		}
 	}
+	c = newcoro(func(c *coro) {
+		race.Acquire(unsafe.Pointer(&pull.racer))
+		if pull.done {
+			race.Release(unsafe.Pointer(&pull.racer))
+			return
+		}
+		yield := func(v1 V) bool {
+			if pull.done {
+				return false
+			}
+			if !pull.yieldNext {
+				panic("iter.Pull: yield called again before next")
+			}
+			pull.yieldNext = false
+			pull.v, pull.ok = v1, true
+			race.Release(unsafe.Pointer(&pull.racer))
+			coroswitch(c)
+			race.Acquire(unsafe.Pointer(&pull.racer))
+			return !pull.done
+		}
+		// Recover and propagate panics from seq.
+		defer func() {
+			goplusCoroRecovers(nil)
+			if p := recover(); p != nil {
+				pull.panicValue = p
+			} else if !pull.seqDone {
+				pull.panicValue = goexitPanicValue
+			}
+			pull.done = true // Invalidate iterator
+			race.Release(unsafe.Pointer(&pull.racer))
+		}()
+		// Only from here on does a panic reach the caller of next or
+		// stop, so only from here may the goplus budget refuse the body.
+		goplusCoroRecovers(c)
+		seq(yield)
+		var v0 V
+		pull.v, pull.ok = v0, false
+		pull.seqDone = true
+	})
 	return next, stop
 }
 
@@ -395,46 +401,12 @@ func Pull2[K, V any](seq Seq2[K, V]) (next func() (K, V, bool), stop func()) {
 		racer      int
 		panicValue any
 	}
-	c := newcoro(func(c *coro) {
-		race.Acquire(unsafe.Pointer(&pull.racer))
-		if pull.done {
-			race.Release(unsafe.Pointer(&pull.racer))
-			return
-		}
-		yield := func(k1 K, v1 V) bool {
-			if pull.done {
-				return false
-			}
-			if !pull.yieldNext {
-				panic("iter.Pull2: yield called again before next")
-			}
-			pull.yieldNext = false
-			pull.k, pull.v, pull.ok = k1, v1, true
-			race.Release(unsafe.Pointer(&pull.racer))
-			coroswitch(c)
-			race.Acquire(unsafe.Pointer(&pull.racer))
-			return !pull.done
-		}
-		// Recover and propagate panics from seq.
-		defer func() {
-			goplusCoroRecovers(nil)
-			if p := recover(); p != nil {
-				pull.panicValue = p
-			} else if !pull.seqDone {
-				pull.panicValue = goexitPanicValue
-			}
-			pull.done = true // Invalidate iterator.
-			race.Release(unsafe.Pointer(&pull.racer))
-		}()
-		// Only from here on does a panic reach the caller of next or
-		// stop, so only from here may the goplus budget refuse the body.
-		goplusCoroRecovers(c)
-		seq(yield)
-		var k0 K
-		var v0 V
-		pull.k, pull.v, pull.ok = k0, v0, false
-		pull.seqDone = true
-	})
+	// The coroutine is made last: next and stop alone can end it, so
+	// nothing that can panic may come between newcoro and the return of
+	// next and stop to the caller. Allocating their closures after newcoro
+	// would let the goplus stack limit or allocation budget refuse one
+	// there and leave the coroutine parked forever.
+	var c *coro
 	next = func() (k1 K, v1 V, ok1 bool) {
 		race.Write(unsafe.Pointer(&pull.racer)) // detect races
 
@@ -480,6 +452,46 @@ func Pull2[K, V any](seq Seq2[K, V]) (next func() (K, V, bool), stop func()) {
 			}
 		}
 	}
+	c = newcoro(func(c *coro) {
+		race.Acquire(unsafe.Pointer(&pull.racer))
+		if pull.done {
+			race.Release(unsafe.Pointer(&pull.racer))
+			return
+		}
+		yield := func(k1 K, v1 V) bool {
+			if pull.done {
+				return false
+			}
+			if !pull.yieldNext {
+				panic("iter.Pull2: yield called again before next")
+			}
+			pull.yieldNext = false
+			pull.k, pull.v, pull.ok = k1, v1, true
+			race.Release(unsafe.Pointer(&pull.racer))
+			coroswitch(c)
+			race.Acquire(unsafe.Pointer(&pull.racer))
+			return !pull.done
+		}
+		// Recover and propagate panics from seq.
+		defer func() {
+			goplusCoroRecovers(nil)
+			if p := recover(); p != nil {
+				pull.panicValue = p
+			} else if !pull.seqDone {
+				pull.panicValue = goexitPanicValue
+			}
+			pull.done = true // Invalidate iterator.
+			race.Release(unsafe.Pointer(&pull.racer))
+		}()
+		// Only from here on does a panic reach the caller of next or
+		// stop, so only from here may the goplus budget refuse the body.
+		goplusCoroRecovers(c)
+		seq(yield)
+		var k0 K
+		var v0 V
+		pull.k, pull.v, pull.ok = k0, v0, false
+		pull.seqDone = true
+	})
 	return next, stop
 }
 

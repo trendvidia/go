@@ -314,3 +314,78 @@ func TestGoplusCallerPCAfterCall(t *testing.T) {
 		}
 	}
 }
+
+// TestGoplusPullCoroLast checks that iter.Pull and iter.Pull2 make their
+// coroutine last, after the next and stop functions they return: the
+// coroutine is ended only through those, so a refusal by the stack limit
+// or the allocation budget between newcoro and the return would leave it
+// parked forever. Allocating next's and stop's closures after newcoro, as
+// upstream does, is such a place.
+func TestGoplusPullCoroLast(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join("..", "iter", "iter.go"), nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || fn.Name.Name != "Pull" && fn.Name.Name != "Pull2" {
+			continue
+		}
+		checked++
+		at := -1
+		assigned := map[string]bool{}
+		for i, stmt := range fn.Body.List {
+			if at < 0 && callsNamed(stmt, "newcoro") {
+				at = i
+				continue
+			}
+			if as, ok := stmt.(*ast.AssignStmt); ok && at < 0 {
+				for _, lhs := range as.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						assigned[id.Name] = true
+					}
+				}
+			}
+		}
+		if at < 0 {
+			t.Errorf("%s: no call to newcoro", fn.Name.Name)
+			continue
+		}
+		if !assigned["next"] || !assigned["stop"] {
+			t.Errorf("%s: next and stop are not both assigned before newcoro", fn.Name.Name)
+		}
+		rest := fn.Body.List[at+1:]
+		if len(rest) != 1 {
+			t.Errorf("%s: %d statements follow newcoro, want only the return", fn.Name.Name, len(rest))
+			continue
+		}
+		ret, ok := rest[0].(*ast.ReturnStmt)
+		if !ok {
+			t.Errorf("%s: newcoro is followed by %T, want the return", fn.Name.Name, rest[0])
+			continue
+		}
+		for _, r := range ret.Results {
+			if _, ok := r.(*ast.Ident); !ok {
+				t.Errorf("%s: the return after newcoro computes a result", fn.Name.Name)
+			}
+		}
+	}
+	if checked != 2 {
+		t.Fatalf("checked %d of iter.Pull and iter.Pull2; the test does not test them", checked)
+	}
+}
+
+// callsNamed reports whether n contains a call to a function named name.
+func callsNamed(n ast.Node, name string) bool {
+	found := false
+	ast.Inspect(n, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == name {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}

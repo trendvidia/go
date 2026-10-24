@@ -633,48 +633,39 @@ func parkedCoroutines() int {
 // runtime.newcoro, which iter.Pull calls by name: raised as newcoro
 // returned, it would come before iter.Pull returned the next and stop
 // functions that alone can end the coroutine newcoro made, which would
-// stay parked forever.
-//
-// A refusal at one of the allocations iter.Pull makes after newcoro
-// returns leaks the coroutine too (#106). That is not what this test
-// checks, so a scan that saw one is run again.
+// stay parked forever. For the same reason iter.Pull makes nothing after
+// newcoro that a refusal could come at (#106): a refusal in iter.Pull
+// after newcoro's line fails the test.
 func TestGoplusMaxStackLatePull(t *testing.T) {
 	last := newcoroLine(t)
-	for attempt := 1; ; attempt++ {
-		before := parkedCoroutines()
-		inPull, after := 0, 0
-		scanLate(t, func() (refused, mark bool) {
-			defer func() {
-				if p := recover(); p != nil {
-					if fn, line := frameBelow("runtime.goplusPanicMaxStack"); strings.HasPrefix(fn, "iter.Pull[") {
-						if line > last {
-							after++
-						} else {
-							inPull++
-						}
+	before := parkedCoroutines()
+	inPull, after := 0, 0
+	scanLate(t, func() (refused, mark bool) {
+		defer func() {
+			if p := recover(); p != nil {
+				if fn, line := frameBelow("runtime.goplusPanicMaxStack"); strings.HasPrefix(fn, "iter.Pull[") {
+					if line > last {
+						after++
+					} else {
+						inPull++
 					}
-					panic(p)
 				}
-			}()
-			next, stop := iter.Pull(func(yield func(int) bool) { yield(1) })
-			defer stop()
-			next()
-			return false, false
-		})
-		if after > 0 {
-			t.Logf("%d refusals came after newcoro returned (#106)", after)
-			if attempt == 5 {
-				t.Fatalf("each of %d scans had a refusal after newcoro returned", attempt)
+				panic(p)
 			}
-			continue
-		}
-		if inPull == 0 {
-			t.Fatalf("no refusal came in iter.Pull; the scan does not test that")
-		}
-		if n := parkedCoroutines() - before; n > 0 {
-			t.Errorf("%d coroutines left parked by %d refusals in iter.Pull", n, inPull)
-		}
-		return
+		}()
+		next, stop := iter.Pull(func(yield func(int) bool) { yield(1) })
+		defer stop()
+		next()
+		return false, false
+	})
+	if after > 0 {
+		t.Errorf("%d refusals came in iter.Pull after newcoro returned (#106)", after)
+	}
+	if inPull == 0 {
+		t.Fatalf("no refusal came in iter.Pull; the scan does not test that")
+	}
+	if n := parkedCoroutines() - before; n > 0 {
+		t.Errorf("%d coroutines left parked by %d refusals in iter.Pull", n, inPull+after)
 	}
 }
 

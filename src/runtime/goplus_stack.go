@@ -76,13 +76,55 @@ func goplusRefuseStack(gp *g, newsize, callerpc uintptr) (refuse, late bool) {
 //
 // Not ordinary: the runtime's own code (goplusRuntimeOwned), and the std
 // packages the runtime and sync call directly, trusting them not to panic
-// (internal/..., sync/atomic).
+// (internal/..., sync/atomic). A function counts as the runtime's or
+// sync's by its source file too (goplusRuntimeFile): the runtime defines
+// functions under other packages' names by linkname, such as maps.clone
+// (runtime.mapclone) or reflect.typedmemmove, and those are its code
+// whatever they are called (trendvidia/go#105).
 func goplusOrdinaryCallee(pc, callerpc uintptr) bool {
 	f := findfunc(pc)
 	if !f.valid() || !findfunc(callerpc-1).valid() {
 		return false
 	}
-	return goplusOrdinaryName(funcname(f))
+	if !goplusOrdinaryName(funcname(f)) {
+		return false
+	}
+	file, _ := funcline1(f, f.entry(), false)
+	return !goplusRuntimeFile(file)
+}
+
+// goplusRuntimeFile reports whether file, a source file name from the
+// binary's line tables, is a file of the runtime or of sync: one in the
+// directory of package runtime, sync, internal/sync, or a package under
+// internal/runtime. Where the standard library's files are is read from
+// this function's own file, so it holds with -trimpath or without, and
+// in a plugin's copy of the runtime. A _test.go file does not count: an
+// external test package's functions are ordinary, and the runtime's own
+// test exports are named runtime.X, which goplusRuntimeOwned already
+// counts.
+func goplusRuntimeFile(file string) bool {
+	if stringslite.HasSuffix(file, "_test.go") {
+		return false
+	}
+	self, _ := funcline1(findfunc(abi.FuncPCABIInternal(goplusRuntimeFile)), abi.FuncPCABIInternal(goplusRuntimeFile), false)
+	src, ok := stringslite.CutSuffix(self, "runtime/goplus_stack.go")
+	if !ok {
+		return false
+	}
+	rest, ok := stringslite.CutPrefix(file, src)
+	if !ok {
+		return false
+	}
+	if stringslite.HasPrefix(rest, "internal/runtime/") {
+		return true
+	}
+	for _, dir := range [...]string{"runtime/", "sync/", "internal/sync/"} {
+		// Directly in dir: runtime/pprof or sync/atomic is another package.
+		if name, ok := stringslite.CutPrefix(rest, dir); ok && stringslite.IndexByte(name, '/') < 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // goplusOrdinaryName reports whether the function with symbol name name is

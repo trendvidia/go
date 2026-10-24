@@ -1,0 +1,49 @@
+# TEMPORARY, DO NOT MERGE: measure how often TestMaxStackRepeated fails
+# under -race (seen once on PR #111's dist-test linux/amd64).
+name: stress-maxstack
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  stress:
+    name: stress ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runs-on: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: make.bash
+        working-directory: src
+        run: |
+          GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          export GOROOT_BOOTSTRAP
+          env -u CGO_ENABLED ./make.bash
+      - name: build test binaries
+        working-directory: src
+        run: |
+          ../bin/go test -c -race -o "$RUNNER_TEMP/gp-race.test" goplus
+          ../bin/go test -c -o "$RUNNER_TEMP/gp.test" goplus
+      - name: stress
+        working-directory: src/goplus
+        run: |
+          set +e
+          tally() { # name, then the command
+            name=$1; shift
+            out=$("$@" 2>&1)
+            pass=$(printf '%s\n' "$out" | grep -c -- '--- PASS: TestMaxStackRepeated ')
+            fail=$(printf '%s\n' "$out" | grep -c -- '--- FAIL: TestMaxStackRepeated ')
+            crash=$(printf '%s\n' "$out" | grep -c 'fatal error: stack overflow')
+            echo "$name: pass=$pass fail=$fail crash=$crash"
+            if [ "$crash$fail" != "00" ]; then printf '%s\n' "$out" | grep -m3 -B2 -A12 -E 'fatal error|--- FAIL' ; fi
+          }
+          for i in $(seq 1 20); do tally "race whole-package run $i" "$RUNNER_TEMP/gp-race.test" -test.count=1 -test.v; done
+          for cpu in 1 2 4; do for i in 1 2 3; do tally "race targeted cpu=$cpu run $i" "$RUNNER_TEMP/gp-race.test" -test.run 'TestMaxStackRepeated$' -test.cpu=$cpu -test.count=200 -test.v; done; done
+          for cpu in 1 2 4; do tally "norace targeted cpu=$cpu" "$RUNNER_TEMP/gp.test" -test.run 'TestMaxStackRepeated$' -test.cpu=$cpu -test.count=600 -test.v; done

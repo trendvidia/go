@@ -12,7 +12,7 @@ Each release tracks an upstream Go release and keeps its version number.
 `go version` names both:
 
 ```
-go version go1.27.3 windows/amd64 (plus v1.27.3)
+go version go1.27.4 windows/amd64 (plus v1.27.4)
 ```
 
 ### What the fork adds
@@ -90,8 +90,8 @@ GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -buildmode=plugin \
 ### Building this fork
 
 This is the trendvidia "plus" fork of Go (`go version` reports
-`… (plus <fork release>)`, e.g. `go version go1.27.3 darwin/arm64 (plus
-v1.27.3)` — the leading version stays canonical upstream Go).
+`… (plus <fork release>)`, e.g. `go version go1.27.4 darwin/arm64 (plus
+v1.27.4)` — the leading version stays canonical upstream Go).
 
 A binary built with this fork records the fork release as the build
 setting `goplus` (`goplus=<fork release>`), and the Git commit the
@@ -101,7 +101,7 @@ built from a source archive; `+dirty` when built from modified sources).
 `debug.ReadBuildInfo().Settings` without build tags or importing
 `goplus`; a program that imports it can call `goplus.Release()` and
 `goplus.Revision()`. `runtime.Version()` stays the upstream form
-(`go1.27.3`), so a program that checks only that cannot tell a go-plus
+(`go1.27.4`), so a program that checks only that cannot tell a go-plus
 build from a stock one. Releases up to and including v1.27.3b do not record it.
 
 When building the toolchain from source, run `make.bash`

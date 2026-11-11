@@ -1725,11 +1725,14 @@ func (ctxt *Link) hostlink() {
 	}
 
 	if *flagInterpreter != "" {
+		if strings.Contains(*flagInterpreter, ",") {
+			Exitf("invalid dynamic linker path %q", *flagInterpreter)
+		}
 		// Many linkers support both -I and the --dynamic-linker flags
 		// to set the ELF interpreter, but lld only supports
 		// --dynamic-linker so prefer that (ld on very old Solaris only
 		// supports -I but that seems less important).
-		argv = append(argv, fmt.Sprintf("-Wl,--dynamic-linker,%s", *flagInterpreter))
+		argv = append(argv, fmt.Sprintf("-Wl,--dynamic-linker=%s", *flagInterpreter))
 	}
 
 	// Force global symbols to be exported for dlopen, etc. Per-format
@@ -1819,7 +1822,7 @@ func (ctxt *Link) hostlink() {
 	checkStatic := func(arg string) {
 		if ctxt.IsELF && arg == "-static" {
 			for i := range argv {
-				if argv[i] == "-rdynamic" || strings.HasPrefix(argv[i], "-Wl,--dynamic-linker,") {
+				if argv[i] == "-rdynamic" || strings.HasPrefix(argv[i], "-Wl,--dynamic-linker=") {
 					argv[i] = "-static"
 				}
 			}
@@ -2299,6 +2302,16 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 
 	if c1 == 0x01 && (c2 == 0xD7 || c2 == 0xF7) {
 		return ldhostobj(ldxcoff, ctxt.HeadType, f, pkg, length, pn, file)
+	}
+
+	// .syso files are copied directly into package archives without being
+	// compiled. Reject .syso files that do not match a recognized host
+	// object format above so they cannot be parsed below as Go object files
+	// (which could inject untrusted cgo directives) or fall through to
+	// unknownObjFormat (which would force external linking).
+	if strings.HasSuffix(file, ".syso") || strings.HasSuffix(pn, ".syso") || strings.HasSuffix(pn, ".syso)") {
+		Errorf("%s: unsupported object format in .syso file", pn)
+		return nil
 	}
 
 	if c1 != 'g' || c2 != 'o' || c3 != ' ' || c4 != 'o' {

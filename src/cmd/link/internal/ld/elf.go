@@ -48,7 +48,11 @@ func elfExportArgs(ctxt *Link, st *hostlinkState) {
 	}
 	var exports []string
 	ctxt.loader.ForAllCgoExportDynamic(func(s loader.Sym) {
-		exports = append(exports, "-Wl,--export-dynamic-symbol="+ctxt.loader.SymExtname(s))
+		extname := ctxt.loader.SymExtname(s)
+		if strings.Contains(extname, ",") {
+			Exitf("invalid exported symbol name %q", extname)
+		}
+		exports = append(exports, "-Wl,--export-dynamic-symbol="+extname)
 	})
 	slices.Sort(exports)
 	st.argv = append(st.argv, exports...)
